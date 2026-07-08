@@ -48,6 +48,14 @@ const BDT_DATE_TIME = new Intl.DateTimeFormat("en-BD", {
   hour12: true,
 });
 
+const BDT_TIME = new Intl.DateTimeFormat("en-BD", {
+  timeZone: "Asia/Dhaka",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hour12: false,
+});
+
 function numberValue(value: unknown) {
   const numeric = Number(value || 0);
   return Number.isFinite(numeric) ? numeric : 0;
@@ -70,6 +78,13 @@ function formatBdtDateTime(value?: string | Date | null) {
     return "N/A";
   }
   return BDT_DATE_TIME.format(new Date(value));
+}
+
+function formatBdtTime(value?: string | Date | null) {
+  if (!value) {
+    return "--:--:--";
+  }
+  return BDT_TIME.format(new Date(value));
 }
 
 function resolveRealizedPnl(wallet: Record<string, unknown>, tradeHistory: TradeHistoryEntry[]) {

@@ -308,10 +308,7 @@ export default function App() {
             authToken={authToken}
             readiness={readiness}
             botStatus={botStatus}
-            exchangeStatus={exchangeStatus}
             account={account}
-            metrics={metrics}
-            portfolio={portfolio}
             activeTrades={activeTrades}
             signals={signals}
             tradeHistory={tradeHistory}
