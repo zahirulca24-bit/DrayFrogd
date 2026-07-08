@@ -34,6 +34,7 @@ from app.symbols import get_symbol_metadata, refresh_symbol_metadata
 
 app = FastAPI(title=settings.app_name)
 _background_task: asyncio.Task | None = None
+_scanner_task: asyncio.Task | None = None
 
 app.add_middleware(AuthMiddleware)
 app.add_middleware(
@@ -160,12 +161,24 @@ def readiness() -> dict:
     return get_readiness_status()
 
 
+async def _run_scanner_job(mode: str) -> None:
+    client = get_exchange_client(mode)
+    try:
+        result = await asyncio.to_thread(run_scan, client)
+        log_bot_event("scanner_run", "Scanner executed manually", metadata={"mode": mode, "result": result})
+    except Exception as exc:
+        log_bot_event("scanner_run", "Scanner execution failed", level="error", metadata={"mode": mode, "error": str(exc)})
+
+
 @app.post("/scanner/run")
-def scanner_run(_: dict = Depends(require_authenticated)) -> dict:
-    client = get_exchange_client(get_execution_mode())
-    result = run_scan(client)
-    log_bot_event("scanner_run", "Scanner executed manually", metadata={"mode": get_execution_mode(), "result": result})
-    return result
+async def scanner_run(_: dict = Depends(require_authenticated)) -> dict:
+    global _scanner_task
+
+    mode = get_execution_mode()
+    if _scanner_task is None or _scanner_task.done():
+        _scanner_task = asyncio.create_task(_run_scanner_job(mode))
+
+    return {"ok": True, "queued": True, "mode": mode}
 
 
 @app.get("/scanner/results")

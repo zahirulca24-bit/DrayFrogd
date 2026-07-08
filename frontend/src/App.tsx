@@ -223,6 +223,9 @@ export default function App() {
 
     try {
       await action();
+      if (name === "scanner") {
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+      }
       await fetchAllData(true);
     } catch (err: any) {
       if (err instanceof ApiError && err.status === 401) {
