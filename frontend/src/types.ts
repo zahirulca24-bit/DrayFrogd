@@ -124,7 +124,7 @@ export interface AIReview {
 
 export type ScannerStatus = 'DISABLED' | 'IDLE' | 'SCANNING' | 'COMPLETED' | 'COMPLETED_WITH_ERRORS' | 'ERROR' | 'DATA_UNAVAILABLE';
 export type ScanResultStatus = 'ACCEPTED' | 'REJECTED' | 'DATA_ERROR' | 'EXPIRED';
-export type SignalExecutionStatus = 'NEW' | 'VALIDATED' | 'BLOCKED' | 'READY' | 'EXECUTING' | 'EXECUTED' | 'FAILED' | 'EXPIRED';
+export type SignalExecutionStatus = 'NEW' | 'VALIDATED' | 'BLOCKED' | 'READY' | 'NEAR_SETUP' | 'EXECUTING' | 'EXECUTED' | 'FAILED' | 'EXPIRED';
 
 export interface ScanResult {
   symbol: string;

@@ -9,11 +9,13 @@ from typing import Any
 EMA_BIAS_PERIOD = 200
 EMA_PULLBACK_PERIOD = 20
 RSI_PERIOD = 14
-EXPIRY_CANDLES = 3
-EXPIRY_MINUTES = 10
+EXPIRY_CANDLES = 5
+EXPIRY_MINUTES = 15
+TRIGGER_WINDOW_CANDLES = 5
 SWING_LOOKBACK = 5
 STOP_BUFFER_RATIO = 0.001
 TARGET_R_MULTIPLE = 2.0
+EMA_PULLBACK_TOLERANCE_RATIO = 0.0015
 
 
 @dataclass(frozen=True)
@@ -61,14 +63,26 @@ def evaluate_ema_pullback_strategy(
 
     pullback_index = _find_latest_pullback(normalized_1m, bias)
     if pullback_index is None:
-        return _rejected_signal(symbol, "rejected", "pullback_not_detected")
+        return _rejected_signal(symbol, "blocked", "pullback_not_detected")
 
     trigger_index = _find_trigger_index(normalized_1m, bias, pullback_index)
     if trigger_index is None:
+        if _pullback_is_expired(normalized_1m, pullback_index, timeframe_now):
+            return _rejected_signal(symbol, "blocked", "signal_expired")
+        near_signal = _build_near_setup_signal(symbol, bias, normalized_1m, pullback_index)
+        if near_signal is None:
+            return _rejected_signal(symbol, "rejected", "invalid_trade_levels")
         return _rejected_signal(
-            symbol,
-            "expired" if _pullback_is_expired(normalized_1m, pullback_index, timeframe_now) else "rejected",
-            "signal_expired" if _pullback_is_expired(normalized_1m, pullback_index, timeframe_now) else "entry_trigger_missing",
+            near_signal.symbol,
+            "near_setup",
+            "waiting_for_trigger",
+            direction=near_signal.direction,
+            entry=near_signal.entry,
+            stop_loss=near_signal.stop_loss,
+            take_profit=near_signal.take_profit,
+            risk_reward=near_signal.risk_reward,
+            detected_at=near_signal.detected_at,
+            confidence_score=_signal_confidence(near_signal.risk_reward, "near_setup"),
         )
 
     signal = _build_signal(symbol, bias, normalized_1m, pullback_index, trigger_index)
@@ -77,7 +91,7 @@ def evaluate_ema_pullback_strategy(
 
     expiry_time = min(
         normalized_1m[trigger_index].timestamp + timedelta(minutes=EXPIRY_MINUTES),
-        normalized_1m[min(trigger_index + EXPIRY_CANDLES, len(normalized_1m) - 1)].timestamp,
+        normalized_1m[min(trigger_index + TRIGGER_WINDOW_CANDLES, len(normalized_1m) - 1)].timestamp,
     )
     status = "expired" if timeframe_now > expiry_time else "active"
 
@@ -90,7 +104,7 @@ def evaluate_ema_pullback_strategy(
         risk_reward=signal.risk_reward,
         detected_at=signal.detected_at,
         status=status,
-        confidence_score=_signal_confidence(signal.risk_reward),
+        confidence_score=_signal_confidence(signal.risk_reward, status),
     ).to_dict()
 
 
@@ -134,7 +148,7 @@ def _find_trigger_index(candles: list[Candle], direction: str, pullback_index: i
     if ema20 is None:
         return None
 
-    max_index = min(pullback_index + EXPIRY_CANDLES, len(candles) - 1)
+    max_index = min(pullback_index + TRIGGER_WINDOW_CANDLES, len(candles) - 1)
     for index in range(pullback_index + 1, max_index + 1):
         previous = candles[index - 1]
         current = candles[index]
@@ -178,7 +192,44 @@ def _build_signal(
         risk_reward=round(risk_reward, 4),
         detected_at=trigger_candle.timestamp.isoformat(),
         status="active",
-        confidence_score=_signal_confidence(risk_reward),
+        confidence_score=_signal_confidence(risk_reward, "active"),
+    )
+
+
+def _build_near_setup_signal(
+    symbol: str,
+    direction: str,
+    candles: list[Candle],
+    pullback_index: int,
+) -> StrategySignal | None:
+    latest_index = min(len(candles) - 1, pullback_index + TRIGGER_WINDOW_CANDLES - 1)
+    latest_candle = candles[latest_index]
+    reference_candle = candles[max(pullback_index, latest_index - 1)]
+    trigger_level = reference_candle.high if direction == "long" else reference_candle.low
+    entry = trigger_level * (1 + STOP_BUFFER_RATIO) if direction == "long" else trigger_level * (1 - STOP_BUFFER_RATIO)
+    stop_loss = _calculate_stop_loss(candles, direction, pullback_index, latest_index)
+    if stop_loss is None:
+        return None
+
+    risk = entry - stop_loss if direction == "long" else stop_loss - entry
+    if not _is_valid_number(entry, stop_loss, risk) or risk <= 0:
+        return None
+
+    take_profit = entry + (risk * TARGET_R_MULTIPLE) if direction == "long" else entry - (risk * TARGET_R_MULTIPLE)
+    risk_reward = abs((take_profit - entry) / risk) if risk else 0.0
+    if not _is_valid_number(take_profit, risk_reward) or risk_reward < TARGET_R_MULTIPLE:
+        return None
+
+    return StrategySignal(
+        symbol=symbol,
+        direction=direction,
+        entry=round(entry, 8),
+        stop_loss=round(stop_loss, 8),
+        take_profit=round(take_profit, 8),
+        risk_reward=round(risk_reward, 4),
+        detected_at=latest_candle.timestamp.isoformat(),
+        status="near_setup",
+        confidence_score=_signal_confidence(risk_reward, "near_setup"),
     )
 
 
@@ -198,13 +249,14 @@ def _calculate_stop_loss(candles: list[Candle], direction: str, pullback_index: 
 
 def _pullback_is_expired(candles: list[Candle], pullback_index: int, now: datetime) -> bool:
     pullback_time = candles[pullback_index].timestamp
-    candle_expired = len(candles) - 1 >= pullback_index + EXPIRY_CANDLES
+    candle_expired = len(candles) - 1 >= pullback_index + TRIGGER_WINDOW_CANDLES
     time_expired = now > pullback_time + timedelta(minutes=EXPIRY_MINUTES)
     return candle_expired or time_expired
 
 
 def _touches_ema(candle: Candle, ema_value: float) -> bool:
-    return candle.low <= ema_value <= candle.high
+    tolerance = ema_value * EMA_PULLBACK_TOLERANCE_RATIO
+    return candle.low - tolerance <= ema_value <= candle.high + tolerance
 
 
 def _normalize_candles(raw_candles: list[dict[str, Any] | Candle]) -> list[Candle]:
@@ -305,23 +357,37 @@ def _normalize_now(now: datetime | None, candles: list[Candle]) -> datetime:
     return now.astimezone(UTC) if now.tzinfo else now.replace(tzinfo=UTC)
 
 
-def _rejected_signal(symbol: str, status: str, reason: str) -> dict[str, Any]:
+def _rejected_signal(
+    symbol: str,
+    status: str,
+    reason: str,
+    *,
+    direction: str | None = None,
+    entry: float | None = None,
+    stop_loss: float | None = None,
+    take_profit: float | None = None,
+    risk_reward: float | None = None,
+    detected_at: str | None = None,
+    confidence_score: int | None = 0,
+) -> dict[str, Any]:
     return StrategySignal(
         symbol=symbol,
-        direction=None,
-        entry=None,
-        stop_loss=None,
-        take_profit=None,
-        risk_reward=None,
-        detected_at=None,
+        direction=direction,
+        entry=entry,
+        stop_loss=stop_loss,
+        take_profit=take_profit,
+        risk_reward=risk_reward,
+        detected_at=detected_at,
         status=status,
-        confidence_score=0,
+        confidence_score=confidence_score,
         rejection_reason=reason,
     ).to_dict()
 
 
-def _signal_confidence(risk_reward: float | None) -> int:
+def _signal_confidence(risk_reward: float | None, status: str) -> int:
     rr = risk_reward or 0.0
+    if status == "near_setup":
+        return 76 if rr >= 2.0 else 68
     if rr >= 2.5:
         return 90
     if rr >= 2.0:

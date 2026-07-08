@@ -5,7 +5,7 @@ from app.exchange import BybitDemoClient
 from app.strategy import evaluate_ema_pullback_strategy
 
 
-SCANNER_SYMBOLS = [
+DEFAULT_SCANNER_SYMBOLS = [
     "BTCUSDT",
     "ETHUSDT",
     "SOLUSDT",
@@ -15,6 +15,8 @@ SCANNER_SYMBOLS = [
     "ADAUSDT",
     "LINKUSDT",
 ]
+SCANNER_SYMBOLS = DEFAULT_SCANNER_SYMBOLS
+UNIVERSE_LIMIT = 20
 BIAS_CANDLE_LIMIT = 250
 TRIGGER_CANDLE_LIMIT = 50
 
@@ -24,11 +26,12 @@ _latest_scan_results: list[dict[str, Any]] = []
 
 
 def run_scan(client: BybitDemoClient) -> dict[str, Any]:
+    universe = _resolve_scan_universe(client)
     signals: list[dict[str, Any]] = []
     scan_results: list[dict[str, Any]] = []
     skipped: list[dict[str, str]] = []
 
-    for symbol in SCANNER_SYMBOLS:
+    for symbol in universe:
         ok_5m, candles_5m, error_5m = client.safe_fetch_recent_candles(symbol=symbol, interval="5", limit=BIAS_CANDLE_LIMIT)
         if not ok_5m:
             skipped.append({"symbol": symbol, "reason": error_5m or "Failed to fetch 5m candles"})
@@ -64,7 +67,8 @@ def run_scan(client: BybitDemoClient) -> dict[str, Any]:
 
     return {
         "ok": True,
-        "symbols_scanned": len(SCANNER_SYMBOLS),
+        "symbols_scanned": len(universe),
+        "universe": universe,
         "signals_found": len(signals),
         "signals": list(signals),
         "results": list(scan_results),
@@ -80,3 +84,35 @@ def get_latest_signals() -> list[dict[str, Any]]:
 def get_active_signals() -> list[dict[str, Any]]:
     with _signals_lock:
         return [signal for signal in _latest_signals if signal.get("status") == "active"]
+
+
+def _resolve_scan_universe(client: BybitDemoClient) -> list[str]:
+    ok, tickers, _ = client.safe_fetch_market_tickers()
+    if not ok or not tickers:
+        return list(DEFAULT_SCANNER_SYMBOLS)
+
+    normalized = [item for item in tickers if str(item.get("symbol", "")).upper().endswith("USDT")]
+    top_liquid = sorted(normalized, key=lambda item: _to_float(item.get("turnover24h")), reverse=True)[:10]
+    top_gainers = sorted(normalized, key=lambda item: _to_float(item.get("price24hPcnt")), reverse=True)[:10]
+
+    universe: list[str] = []
+    for item in [*top_liquid, *top_gainers]:
+        symbol = str(item.get("symbol", "")).upper()
+        if symbol and symbol not in universe:
+            universe.append(symbol)
+
+    if len(universe) < UNIVERSE_LIMIT:
+        for symbol in DEFAULT_SCANNER_SYMBOLS:
+            if symbol not in universe:
+                universe.append(symbol)
+            if len(universe) >= UNIVERSE_LIMIT:
+                break
+
+    return universe[:UNIVERSE_LIMIT]
+
+
+def _to_float(value: Any) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0

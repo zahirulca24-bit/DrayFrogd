@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, ArrowRight, Clock3, Play, RefreshCw, ShieldCheck, TrendingDown, TrendingUp } from "lucide-react";
+import { AlertTriangle, Play, RefreshCw } from "lucide-react";
 import { api } from "../api";
-import { ExecutableSignal, MarketCandle, MarketTicker, PositionSizeResponse } from "../types";
+import { ExecutableSignal, MarketTicker } from "../types";
 
 interface SignalEngineProps {
   authToken: string | null;
@@ -53,6 +53,45 @@ function numberValue(value: unknown) {
   return Number.isFinite(numeric) ? numeric : 0;
 }
 
+function statusLabel(signal: ExecutableSignal) {
+  if (signal.executionStatus === "READY") {
+    return "Executable";
+  }
+  if (signal.executionStatus === "NEAR_SETUP") {
+    return "Near Setup";
+  }
+  return "Blocked";
+}
+
+function statusTone(signal: ExecutableSignal) {
+  if (signal.executionStatus === "READY") {
+    return "text-emerald-300 border-emerald-500/20 bg-emerald-500/10";
+  }
+  if (signal.executionStatus === "NEAR_SETUP") {
+    return "text-amber-300 border-amber-500/20 bg-amber-500/10";
+  }
+  return "text-rose-300 border-rose-500/20 bg-rose-500/10";
+}
+
+function trendLabel(ticker?: MarketTicker, direction?: string) {
+  if (!ticker) {
+    return direction || "N/A";
+  }
+  const change = numberValue(ticker.price24hPcnt) * 100;
+  return `${change >= 0 ? "UP" : "DOWN"} ${Math.abs(change).toFixed(2)}%`;
+}
+
+function normalizeSignals(signals: ExecutableSignal[]) {
+  const priority = { READY: 0, NEAR_SETUP: 1, BLOCKED: 2, EXPIRED: 3 } as Record<string, number>;
+  return [...signals].sort((a, b) => {
+    const delta = (priority[a.executionStatus] ?? 9) - (priority[b.executionStatus] ?? 9);
+    if (delta !== 0) {
+      return delta;
+    }
+    return b.score - a.score;
+  });
+}
+
 export default function SignalEngine({
   authToken,
   signals,
@@ -63,8 +102,9 @@ export default function SignalEngine({
   onExecuteSignal,
 }: SignalEngineProps) {
   const [overview, setOverview] = useState<{ top_gainers: MarketTicker[]; watchlist: MarketTicker[] }>({ top_gainers: [], watchlist: [] });
-  const [selectedSignalId, setSelectedSignalId] = useState<string | null>(null);
   const [marketError, setMarketError] = useState<string | null>(null);
+  const [selectedSignalId, setSelectedSignalId] = useState<string | null>(null);
+  const [autoTradeArmed, setAutoTradeArmed] = useState<Record<string, boolean>>({});
   const bdtDayRef = useRef(new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Dhaka" }));
 
   useEffect(() => {
@@ -73,7 +113,6 @@ export default function SignalEngine({
     }
 
     let cancelled = false;
-
     const loadOverview = async () => {
       try {
         const response = await api.getMarketOverview(authToken);
@@ -113,38 +152,32 @@ export default function SignalEngine({
     return map;
   }, [overview]);
 
+  const allSignals = useMemo(() => normalizeSignals(scanResults), [scanResults]);
+
   const selectedSignal = useMemo(() => {
-    const list = signals.length > 0 ? signals : scanResults;
-    if (!list.length) {
+    if (!allSignals.length) {
       return null;
     }
-    const match = list.find((signal) => signal.id === selectedSignalId);
-    return match || list[0];
-  }, [scanResults, selectedSignalId, signals]);
+    return allSignals.find((signal) => signal.id === selectedSignalId) || allSignals[0];
+  }, [allSignals, selectedSignalId]);
 
   useEffect(() => {
-    if (!selectedSignal && (signals.length > 0 || scanResults.length > 0)) {
-      const first = (signals.length > 0 ? signals : scanResults)[0];
-      setSelectedSignalId(first.id);
+    if (!selectedSignal && allSignals.length > 0) {
+      setSelectedSignalId(allSignals[0].id);
     }
-  }, [scanResults, selectedSignal, signals]);
+  }, [allSignals, selectedSignal]);
+
+  const executableCount = allSignals.filter((signal) => signal.executionStatus === "READY").length;
+  const nearSetupCount = allSignals.filter((signal) => signal.executionStatus === "NEAR_SETUP").length;
+  const blockedCount = allSignals.filter((signal) => !["READY", "NEAR_SETUP"].includes(signal.executionStatus)).length;
 
   return (
-    <div className="space-y-6" id="signal-engine-root">
-      <div className="bg-bento-card border border-slate-800 rounded-2xl p-6 shadow-md" id="scanner-banner">
-        <div className="flex flex-col xl:flex-row justify-between items-start xl:items-center gap-6">
-          <div className="flex items-center space-x-4">
-            <div className="p-4 rounded-xl bg-rose-500/10 text-rose-400">
-              <Clock3 className={`w-6 h-6 ${loading ? "animate-pulse" : ""}`} />
-            </div>
-            <div>
-              <h3 className="text-lg font-bold text-white tracking-tight font-sans">Signal Engine</h3>
-              <div className="flex flex-wrap gap-4 mt-2 text-xs font-mono text-slate-400">
-                <span>Scanner Results: {scanResults.length}</span>
-                <span>Active Signals: {signals.length}</span>
-                <span>BDT {formatBdtDateTime(new Date())}</span>
-              </div>
-            </div>
+    <div className="space-y-5" id="signal-engine-root">
+      <div className="bg-bento-card border border-slate-800 rounded-2xl p-5 shadow-md" id="scanner-banner">
+        <div className="flex flex-col xl:flex-row justify-between items-start xl:items-center gap-5">
+          <div>
+            <h3 className="text-lg font-bold text-white tracking-tight font-sans">Signal Engine</h3>
+            <p className="mt-2 text-xs text-slate-500">Scanner results on the left, executable signal cards on the right. No chart noise, only decision flow.</p>
           </div>
 
           <div className="flex items-center gap-3 shrink-0">
@@ -164,6 +197,13 @@ export default function SignalEngine({
             </button>
           </div>
         </div>
+
+        <div className="grid grid-cols-2 xl:grid-cols-4 gap-3 mt-5">
+          <SummaryBadge label="Executable" value={executableCount} tone="good" />
+          <SummaryBadge label="Near Setup" value={nearSetupCount} tone="warn" />
+          <SummaryBadge label="Blocked" value={blockedCount} tone="bad" />
+          <SummaryBadge label="Total" value={allSignals.length} tone="neutral" />
+        </div>
       </div>
 
       {marketError && (
@@ -172,74 +212,110 @@ export default function SignalEngine({
         </div>
       )}
 
-      <div className="grid grid-cols-1 xl:grid-cols-[0.45fr_0.55fr] gap-6">
-        <div className="bg-bento-card border border-slate-800 rounded-2xl p-6 shadow-md">
-          <div className="flex items-center justify-between mb-5">
+      <div className="grid grid-cols-1 xl:grid-cols-[0.45fr_0.55fr] gap-5">
+        <div className="bg-bento-card border border-slate-800 rounded-2xl p-5 shadow-md">
+          <div className="flex items-center justify-between mb-4">
             <div>
               <h3 className="text-sm font-semibold text-white tracking-tight font-sans">Scanner Results</h3>
-              <p className="text-xs text-slate-500 mt-1">Real scanner rows enriched with backend market price and volume.</p>
+              <p className="text-xs text-slate-500 mt-1">Price and volume are enriched from live backend market data.</p>
             </div>
-            <span className="text-[10px] font-mono text-slate-500">{scanResults.length} rows</span>
+            <span className="text-[10px] font-mono text-slate-500">{allSignals.length} rows</span>
           </div>
 
-          <div className="space-y-3 max-h-[980px] overflow-y-auto pr-1">
-            {scanResults.map((signal) => (
-              <ScannerRow
-                key={signal.id}
-                signal={signal}
-                ticker={tickerMap.get(signal.pair)}
-                active={selectedSignal?.id === signal.id}
-                onSelect={() => setSelectedSignalId(signal.id)}
-              />
-            ))}
-            {scanResults.length === 0 && (
-              <div className="p-12 text-center text-slate-600 font-mono text-xs">
-                <AlertTriangle className="w-8 h-8 mx-auto mb-3 text-slate-700" />
-                <span>No scanner results available.</span>
-              </div>
-            )}
+          <div className="overflow-hidden rounded-2xl border border-slate-800 bg-[#0A0B0E]">
+            <div className="grid grid-cols-[1.15fr_1fr_1fr_1fr_0.8fr_1fr_1.6fr] gap-3 px-4 py-3 text-[10px] font-mono uppercase tracking-wider text-slate-500 border-b border-slate-800">
+              <span>Symbol</span>
+              <span>Price</span>
+              <span>Volume</span>
+              <span>Trend</span>
+              <span>Score</span>
+              <span>Status</span>
+              <span>Block / Reject</span>
+            </div>
+
+            <div className="max-h-[720px] overflow-y-auto">
+              {allSignals.map((signal) => (
+                <ScannerTableRow
+                  key={signal.id}
+                  signal={signal}
+                  ticker={tickerMap.get(signal.pair)}
+                  active={selectedSignal?.id === signal.id}
+                  onSelect={() => setSelectedSignalId(signal.id)}
+                />
+              ))}
+              {allSignals.length === 0 && (
+                <div className="p-12 text-center text-slate-600 font-mono text-xs">
+                  <AlertTriangle className="w-8 h-8 mx-auto mb-3 text-slate-700" />
+                  <span>No scanner results available.</span>
+                </div>
+              )}
+            </div>
           </div>
         </div>
 
-        <div className="space-y-4">
-          {selectedSignal ? (
-            <SignalCard
-              key={selectedSignal.id}
-              authToken={authToken}
-              signal={selectedSignal}
-              ticker={tickerMap.get(selectedSignal.pair)}
-              onExecute={onExecuteSignal}
-            />
-          ) : (
-            <div className="bg-bento-card border border-slate-800 rounded-2xl p-12 text-center text-slate-600 font-mono text-xs">
-              Select a scanner result to inspect the live signal card.
+        <div className="bg-bento-card border border-slate-800 rounded-2xl p-5 shadow-md">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h3 className="text-sm font-semibold text-white tracking-tight font-sans">Signals</h3>
+              <p className="text-xs text-slate-500 mt-1">Executable cards first, near setups second, blocked setups last.</p>
             </div>
-          )}
+            <span className="text-[10px] font-mono text-slate-500">{signals.length} executable live</span>
+          </div>
 
-          {signals.length > 1 && (
-            <div className="grid grid-cols-1 2xl:grid-cols-2 gap-4">
-              {signals
-                .filter((signal) => signal.id !== selectedSignal?.id)
-                .slice(0, 3)
-                .map((signal) => (
-                  <SignalCard
-                    key={signal.id}
-                    authToken={authToken}
-                    signal={signal}
-                    ticker={tickerMap.get(signal.pair)}
-                    onExecute={onExecuteSignal}
-                    compact
-                  />
-                ))}
-            </div>
-          )}
+          <div className="space-y-4 max-h-[720px] overflow-y-auto pr-1">
+            {allSignals.map((signal) => (
+              <SignalCard
+                key={signal.id}
+                signal={signal}
+                ticker={tickerMap.get(signal.pair)}
+                selected={selectedSignal?.id === signal.id}
+                autoTradeEnabled={Boolean(autoTradeArmed[signal.id])}
+                onToggleAutoTrade={() =>
+                  setAutoTradeArmed((current) => ({
+                    ...current,
+                    [signal.id]: !current[signal.id],
+                  }))
+                }
+                onSelect={() => setSelectedSignalId(signal.id)}
+                onExecute={() =>
+                  onExecuteSignal({
+                    symbol: signal.pair,
+                    direction: signal.direction.toLowerCase(),
+                    entry: signal.entryPrice,
+                    stop_loss: signal.stopLoss,
+                    take_profit: signal.takeProfit,
+                    risk_reward: signal.rr,
+                    detected_at: signal.timestamp,
+                    status: "active",
+                  })
+                }
+              />
+            ))}
+          </div>
         </div>
       </div>
     </div>
   );
 }
 
-function ScannerRow({
+function SummaryBadge({ label, value, tone }: { label: string; value: number; tone: "good" | "warn" | "bad" | "neutral" }) {
+  const toneClass =
+    tone === "good"
+      ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-300"
+      : tone === "warn"
+      ? "border-amber-500/20 bg-amber-500/10 text-amber-300"
+      : tone === "bad"
+      ? "border-rose-500/20 bg-rose-500/10 text-rose-300"
+      : "border-slate-800 bg-[#0A0B0E] text-slate-300";
+  return (
+    <div className={`rounded-xl border px-4 py-3 ${toneClass}`}>
+      <div className="text-[10px] font-mono uppercase tracking-wider">{label}</div>
+      <div className="mt-2 text-lg font-semibold">{value}</div>
+    </div>
+  );
+}
+
+function ScannerTableRow({
   signal,
   ticker,
   active,
@@ -250,266 +326,117 @@ function ScannerRow({
   active: boolean;
   onSelect: () => void;
 }) {
-  const trendUp = numberValue(ticker?.price24hPcnt) >= 0;
-  const reason = signal.rejectionReason || (signal.executionStatus === "READY" ? "No block reason" : "Strategy filtered");
-
   return (
     <button
       onClick={onSelect}
-      className={`w-full text-left p-4 rounded-2xl border transition-colors cursor-pointer ${
-        active ? "bg-emerald-500/10 border-emerald-500/20" : "bg-[#0A0B0E] border-slate-800 hover:border-slate-700"
+      className={`grid w-full grid-cols-[1.15fr_1fr_1fr_1fr_0.8fr_1fr_1.6fr] gap-3 px-4 py-3 text-left text-xs border-b border-slate-900 transition-colors cursor-pointer ${
+        active ? "bg-emerald-500/10" : "hover:bg-slate-900/60"
       }`}
     >
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <div className="text-sm font-semibold text-white">{signal.pair}</div>
-          <div className="mt-1 text-[10px] font-mono text-slate-500">
-            {ticker ? formatMoney(numberValue(ticker.lastPrice)) : formatMoney(numberValue(signal.price))}
-          </div>
-        </div>
-        <span className={`px-2 py-1 rounded-full text-[10px] font-mono ${
-          signal.executionStatus === "READY" ? "bg-emerald-500/10 text-emerald-300" : "bg-amber-500/10 text-amber-300"
-        }`}>
-          {signal.executionStatus}
-        </span>
-      </div>
-
-      <div className="grid grid-cols-2 gap-3 mt-4 text-[10px] font-mono">
-        <Meta label="Volume" value={ticker ? formatCompact(numberValue(ticker.volume24h)) : "N/A"} />
-        <Meta label="Score" value={String(signal.score)} />
-        <Meta
-          label="Trend"
-          value={ticker ? `${trendUp ? "UP" : "DOWN"} ${Math.abs(numberValue(ticker.price24hPcnt) * 100).toFixed(2)}%` : signal.direction}
-          good={ticker ? trendUp : signal.direction === "LONG"}
-        />
-        <Meta label="Status" value={signal.status} />
-      </div>
-
-      <div className="mt-4 rounded-xl border border-slate-800 bg-slate-950/60 px-3 py-2 text-[10px] font-mono text-slate-500">
-        <span className="text-slate-400">Block / Reject:</span> {reason}
-      </div>
+      <span className="font-semibold text-white">{signal.pair}</span>
+      <span className="text-slate-300">{formatMoney(ticker ? numberValue(ticker.lastPrice) : signal.price)}</span>
+      <span className="text-slate-400">{ticker ? formatCompact(numberValue(ticker.volume24h)) : "N/A"}</span>
+      <span className={ticker && numberValue(ticker.price24hPcnt) < 0 ? "text-rose-400" : "text-emerald-400"}>{trendLabel(ticker, signal.direction)}</span>
+      <span className="text-slate-300">{signal.score}%</span>
+      <span className={signal.executionStatus === "READY" ? "text-emerald-300" : signal.executionStatus === "NEAR_SETUP" ? "text-amber-300" : "text-rose-300"}>
+        {statusLabel(signal)}
+      </span>
+      <span className="text-slate-500">{signal.rejectionReason || "None"}</span>
     </button>
   );
 }
 
 function SignalCard({
-  authToken,
   signal,
   ticker,
+  selected,
+  autoTradeEnabled,
+  onToggleAutoTrade,
+  onSelect,
   onExecute,
-  compact = false,
 }: {
-  authToken: string | null;
   signal: ExecutableSignal;
   ticker?: MarketTicker;
-  onExecute: (signal: {
-    symbol: string;
-    direction: string;
-    entry: number;
-    stop_loss: number;
-    take_profit: number;
-    risk_reward: number;
-    detected_at?: string | null;
-    status: string;
-  }) => Promise<void>;
-  compact?: boolean;
+  selected: boolean;
+  autoTradeEnabled: boolean;
+  onToggleAutoTrade: () => void;
+  onSelect: () => void;
+  onExecute: () => Promise<void>;
 }) {
-  const [candles, setCandles] = useState<MarketCandle[]>([]);
-  const [sizing, setSizing] = useState<PositionSizeResponse | null>(null);
-  const [loadingChart, setLoadingChart] = useState(false);
-
-  useEffect(() => {
-    if (!authToken) {
-      return;
-    }
-
-    let cancelled = false;
-    const loadChart = async () => {
-      setLoadingChart(true);
-      try {
-        const response = await api.getMarketCandles(authToken, signal.pair, "1", compact ? 24 : 48);
-        if (!cancelled) {
-          setCandles((response.candles || []).map((item) => ({
-            ...item,
-            open: numberValue(item.open),
-            high: numberValue(item.high),
-            low: numberValue(item.low),
-            close: numberValue(item.close),
-          })));
-        }
-      } finally {
-        if (!cancelled) {
-          setLoadingChart(false);
-        }
-      }
-    };
-
-    loadChart();
-    return () => {
-      cancelled = true;
-    };
-  }, [authToken, compact, signal.id, signal.pair]);
-
-  const confidence = signal.score;
-  const canExecute = signal.executionStatus === "READY" && signal.status === "PENDING";
-  const payload = {
-    symbol: signal.pair,
-    direction: signal.direction.toLowerCase(),
-    entry: signal.entryPrice,
-    stop_loss: signal.stopLoss,
-    take_profit: signal.takeProfit,
-    risk_reward: signal.rr,
-    detected_at: signal.timestamp,
-    status: "active",
-  };
-
-  useEffect(() => {
-    if (!authToken || signal.executionStatus !== "READY") {
-      setSizing(null);
-      return;
-    }
-
-    let cancelled = false;
-    const loadSizing = async () => {
-      try {
-        const response = await api.calculatePositionSize(authToken, payload);
-        if (!cancelled) {
-          setSizing(response);
-        }
-      } catch {
-        if (!cancelled) {
-          setSizing(null);
-        }
-      }
-    };
-
-    loadSizing();
-    return () => {
-      cancelled = true;
-    };
-  }, [authToken, signal.id, signal.executionStatus]);
-
+  const executable = signal.executionStatus === "READY";
   return (
-    <div className="bg-bento-card border border-slate-800 rounded-2xl p-6 shadow-md">
-      <div className="flex flex-col lg:flex-row justify-between gap-4">
-        <div>
+    <div
+      className={`rounded-2xl border p-5 shadow-md transition-colors ${
+        selected ? "border-emerald-500/20 bg-emerald-500/5" : "border-slate-800 bg-[#0A0B0E]"
+      }`}
+      onClick={onSelect}
+    >
+      <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
+        <div className="space-y-3">
           <div className="flex items-center gap-3 flex-wrap">
-            <h3 className="text-sm font-semibold text-white tracking-tight font-sans">{signal.pair}</h3>
+            <span className={`px-3 py-1.5 rounded-xl border text-[10px] font-mono ${statusTone(signal)}`}>{statusLabel(signal)}</span>
+            <span className="text-sm font-semibold text-white">{signal.score}%</span>
             <span className={`px-2 py-1 rounded-full text-[10px] font-mono ${signal.direction === "LONG" ? "bg-emerald-500/10 text-emerald-300" : "bg-rose-500/10 text-rose-300"}`}>
               {signal.direction}
             </span>
-            <span className="px-2 py-1 rounded-full text-[10px] font-mono bg-slate-900 text-slate-300">{signal.timeframe}</span>
           </div>
-          <p className="text-xs text-slate-500 mt-2">
-            {signal.indicator} | Confidence {confidence}% | BDT {formatBdtDateTime(signal.timestamp)}
-          </p>
+
+          <div>
+            <div className="text-lg font-bold text-white">{signal.pair}</div>
+            <div className="mt-1 text-xs text-slate-500">{signal.indicator}</div>
+          </div>
         </div>
+
         <div className="flex items-center gap-3">
-          <span className={`px-3 py-1.5 rounded-xl border text-[10px] font-mono ${
-            canExecute ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-300" : "bg-amber-500/10 border-amber-500/20 text-amber-300"
-          }`}>
-            {signal.executionStatus}
-          </span>
+          <label className="flex items-center gap-2 text-xs text-slate-400">
+            <input
+              type="checkbox"
+              checked={autoTradeEnabled}
+              onChange={onToggleAutoTrade}
+              onClick={(event) => event.stopPropagation()}
+              className="rounded border-slate-700 bg-slate-950"
+            />
+            Auto Trade
+          </label>
           <button
-            onClick={() => onExecute(payload)}
-            disabled={!canExecute}
+            onClick={(event) => {
+              event.stopPropagation();
+              void onExecute();
+            }}
+            disabled={!executable}
             className="px-4 py-2 rounded-xl border border-emerald-500/20 bg-emerald-500/10 text-emerald-300 text-xs font-semibold cursor-pointer disabled:opacity-50"
           >
-            Execute
+            Demo Execute
           </button>
         </div>
       </div>
 
-      <div className={`grid ${compact ? "grid-cols-2" : "grid-cols-2 xl:grid-cols-4"} gap-3 mt-5`}>
+      <div className="grid grid-cols-2 xl:grid-cols-4 gap-3 mt-5">
         <MetricCard label="Entry" value={formatMoney(signal.entryPrice)} />
-        <MetricCard label="SL" value={formatMoney(signal.stopLoss)} />
-        <MetricCard label="TP" value={formatMoney(signal.takeProfit)} />
-        <MetricCard label="RR" value={`${signal.rr.toFixed(2)}R`} />
-        <MetricCard label="Strategy" value={signal.indicator} />
-        <MetricCard label="Trend" value={ticker ? `${numberValue(ticker.price24hPcnt) >= 0 ? "Bullish" : "Bearish"}` : signal.direction} />
-        <MetricCard label="Confidence" value={`${confidence}%`} />
-        <MetricCard label="Status" value={signal.status} />
-        <MetricCard label="Backend Qty" value={sizing?.quantity || "N/A"} />
-        <MetricCard label="Risk $" value={sizing?.risk_amount !== undefined ? formatMoney(sizing.risk_amount) : "N/A"} />
+        <MetricCard label="Stop Loss" value={formatMoney(signal.stopLoss)} />
+        <MetricCard label="Target" value={formatMoney(signal.takeProfit)} />
+        <MetricCard label="Received" value={formatBdtDateTime(signal.timestamp)} />
       </div>
 
-      <div className="mt-5 rounded-2xl border border-slate-800 bg-[#0A0B0E] p-4">
-        <div className="flex items-center justify-between mb-3 text-[10px] font-mono text-slate-500">
-          <span>Live backend chart</span>
-          <span>{loadingChart ? "Updating..." : `${candles.length} candles`}</span>
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-3 mt-4">
+        <MetricCard label="Setup Details" value={`${signal.timeframe} | ${signal.grade} | ${signal.rr.toFixed(2)}R`} />
+        <MetricCard label="Trend / Volume" value={`${trendLabel(ticker, signal.direction)} | ${ticker ? formatCompact(numberValue(ticker.volume24h)) : "N/A"}`} />
+      </div>
+
+      {signal.rejectionReason && (
+        <div className="mt-4 rounded-xl border border-slate-800 bg-slate-950/60 px-4 py-3 text-[11px] text-slate-400">
+          <span className="text-slate-300">Reason:</span> {signal.rejectionReason}
         </div>
-        <MiniCandlesChart candles={candles} />
-      </div>
-
-      <div className="mt-4 flex flex-wrap gap-4 text-[10px] font-mono text-slate-500">
-        <span>Last Price: <span className="text-slate-300">{ticker ? formatMoney(numberValue(ticker.lastPrice)) : formatMoney(signal.price)}</span></span>
-        <span className={numberValue(ticker?.price24hPcnt) >= 0 ? "text-emerald-400" : "text-rose-400"}>
-          24h: {ticker ? `${(numberValue(ticker.price24hPcnt) * 100).toFixed(2)}%` : "N/A"}
-        </span>
-        {signal.rejectionReason && <span>Reason: {signal.rejectionReason}</span>}
-      </div>
-    </div>
-  );
-}
-
-function MiniCandlesChart({ candles }: { candles: MarketCandle[] }) {
-  const width = 640;
-  const height = 160;
-  const padding = 10;
-
-  if (!candles.length) {
-    return <div className="py-10 text-center text-xs font-mono text-slate-500">No live candles available.</div>;
-  }
-
-  const high = Math.max(...candles.map((item) => item.high));
-  const low = Math.min(...candles.map((item) => item.low));
-  const range = Math.max(high - low, 1);
-  const plotWidth = width - padding * 2;
-  const plotHeight = height - padding * 2;
-  const candleWidth = Math.max(plotWidth / candles.length - 2, 2);
-  const getY = (value: number) => padding + ((high - value) / range) * plotHeight;
-
-  return (
-    <svg viewBox={`0 0 ${width} ${height}`} className="w-full">
-      {candles.map((candle, index) => {
-        const x = padding + index * (plotWidth / candles.length);
-        const openY = getY(candle.open);
-        const closeY = getY(candle.close);
-        const highY = getY(candle.high);
-        const lowY = getY(candle.low);
-        const isBull = candle.close >= candle.open;
-        return (
-          <g key={`${candle.timestamp}-${index}`}>
-            <line x1={x + candleWidth / 2} x2={x + candleWidth / 2} y1={highY} y2={lowY} stroke={isBull ? "#10b981" : "#f43f5e"} strokeWidth="1.1" />
-            <rect
-              x={x}
-              y={Math.min(openY, closeY)}
-              width={candleWidth}
-              height={Math.max(Math.abs(closeY - openY), 1.5)}
-              rx="1"
-              fill={isBull ? "#10b981" : "#f43f5e"}
-            />
-          </g>
-        );
-      })}
-    </svg>
-  );
-}
-
-function Meta({ label, value, good }: { label: string; value: string; good?: boolean }) {
-  return (
-    <div>
-      <div className="text-slate-500">{label}</div>
-      <div className={`mt-1 text-slate-200 ${good === undefined ? "" : good ? "text-emerald-400" : "text-rose-400"}`}>{value}</div>
+      )}
     </div>
   );
 }
 
 function MetricCard({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-xl border border-slate-800 bg-[#0A0B0E] p-3">
+    <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-3">
       <div className="text-[10px] font-mono uppercase tracking-wider text-slate-500">{label}</div>
-      <div className="mt-2 text-sm font-semibold text-white">{value}</div>
+      <div className="mt-2 text-sm font-semibold text-white break-words">{value}</div>
     </div>
   );
 }

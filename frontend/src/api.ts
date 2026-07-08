@@ -110,6 +110,16 @@ function toUiSignal(item: BackendSignal, index: number): ExecutableSignal {
   const direction = item.direction?.toUpperCase() === "SHORT" ? "SHORT" : "LONG";
   const rr = Number(item.risk_reward || 0);
   const confidence = Number(item.confidence_score || 0);
+  const backendStatus = String(item.status || "").toLowerCase();
+  const executionStatus =
+    backendStatus === "active"
+      ? "READY"
+      : backendStatus === "near_setup"
+      ? "NEAR_SETUP"
+      : backendStatus === "expired"
+      ? "EXPIRED"
+      : "BLOCKED";
+  const grade = executionStatus === "READY" ? "A" : executionStatus === "NEAR_SETUP" ? "B+" : "REJECT";
 
   return {
     id: `${item.symbol}-${item.detected_at || index}`,
@@ -118,16 +128,16 @@ function toUiSignal(item: BackendSignal, index: number): ExecutableSignal {
     direction,
     indicator: "EMA Pullback",
     price: Number(item.entry || 0),
-    strength: confidence >= 85 ? "STRONG" : rr >= 2 ? "MEDIUM" : "WEAK",
+    strength: executionStatus === "READY" ? "STRONG" : executionStatus === "NEAR_SETUP" ? "MEDIUM" : "WEAK",
     timestamp: item.detected_at || new Date().toISOString(),
-    grade: confidence >= 90 ? "A+" : rr >= 2 ? "A" : "REJECT",
-    score: confidence || (rr >= 2 ? 80 : 40),
+    grade,
+    score: confidence || (executionStatus === "READY" ? 80 : executionStatus === "NEAR_SETUP" ? 72 : 35),
     entryPrice: Number(item.entry || 0),
     stopLoss: Number(item.stop_loss || 0),
     takeProfit: Number(item.take_profit || 0),
     rr,
-    status: item.status === "active" ? "PENDING" : "REJECTED",
-    executionStatus: item.status === "active" ? "READY" : item.status === "expired" ? "EXPIRED" : "BLOCKED",
+    status: executionStatus === "BLOCKED" || executionStatus === "EXPIRED" ? "REJECTED" : "PENDING",
+    executionStatus,
     ageMs: item.detected_at ? Math.max(0, Date.now() - new Date(item.detected_at).getTime()) : 0,
     rejectionReason: item.rejection_reason || (!item.direction ? "Signal unavailable" : undefined),
   };
