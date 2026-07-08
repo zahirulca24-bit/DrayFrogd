@@ -27,7 +27,18 @@ async def auto_trading_loop() -> None:
             client = get_exchange_client(get_execution_mode())
             result = await asyncio.to_thread(run_scan, client)
             if not result.get("ok"):
-                log_bot_event("scan_failed", result.get("error", "Scanner failed"), level="warning", metadata=result)
+                log_bot_event(
+                    "scan_failed",
+                    result.get("error", "Scanner failed"),
+                    level="warning",
+                    metadata={
+                        **result,
+                        "endpoint": "/scanner/results",
+                        "affected_module": "scanner",
+                        "error_code": "SCAN_FAILED",
+                        "retry_count": 1,
+                    },
+                )
                 await asyncio.sleep(settings.bot_scan_interval_seconds)
                 continue
 
@@ -45,6 +56,17 @@ async def auto_trading_loop() -> None:
             raise
         except Exception as exc:  # pragma: no cover - defensive background task guard
             logger.exception("Auto trading loop crashed")
-            log_bot_event("auto_loop_error", str(exc), level="error")
+            log_bot_event(
+                "auto_loop_error",
+                str(exc),
+                level="error",
+                metadata={
+                    "endpoint": "background:auto_trading_loop",
+                    "affected_module": "worker",
+                    "error_code": "AUTO_LOOP_ERROR",
+                    "retry_count": 1,
+                    "error": str(exc),
+                },
+            )
 
         await asyncio.sleep(settings.bot_scan_interval_seconds)

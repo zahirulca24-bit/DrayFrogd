@@ -82,6 +82,17 @@ class BybitClient:
         except ExchangeError as exc:
             return False, [], str(exc)
 
+    def safe_fetch_orderbook(
+        self,
+        symbol: str,
+        category: str = "linear",
+        limit: int = 25,
+    ) -> tuple[bool, dict[str, list[dict[str, Any]]] | None, str | None]:
+        try:
+            return True, self.fetch_orderbook(symbol=symbol, category=category, limit=limit), None
+        except ExchangeError as exc:
+            return False, None, str(exc)
+
     def safe_fetch_recent_candles(
         self,
         symbol: str,
@@ -167,6 +178,25 @@ class BybitClient:
     def fetch_market_tickers(self, category: str = "linear") -> list[dict[str, Any]]:
         payload = self._public_get("/v5/market/tickers", {"category": category})
         return payload.get("list", [])
+
+    def fetch_orderbook(
+        self,
+        symbol: str,
+        category: str = "linear",
+        limit: int = 25,
+    ) -> dict[str, list[dict[str, Any]]]:
+        payload = self._public_get(
+            "/v5/market/orderbook",
+            {
+                "category": category,
+                "symbol": symbol,
+                "limit": str(limit),
+            },
+        )
+        return {
+            "bids": [{"price": item[0], "size": item[1]} for item in payload.get("b", [])],
+            "asks": [{"price": item[0], "size": item[1]} for item in payload.get("a", [])],
+        }
 
     def place_market_order(
         self,

@@ -1,6 +1,6 @@
 {
-  "name": "Remix: Remix: Crypto Scalping Bot",
-  "description": "An aggressive crypto scalping auto-trading bot with password protection, control panel, portfolio tracker, signal engine, active trades, AI review, logs, and configuration settings.",
+  "name": "DayFrogd-ScalpingEngin",
+  "description": "DayFrogd-ScalpingEngin frontend for the FastAPI intraday trading bot control room.",
   "requestFramePermissions": [],
   "majorCapabilities": [
     "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"

@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Lock, Eye, EyeOff, ShieldAlert, ArrowRight, Bot, User } from "lucide-react";
 
 
@@ -13,6 +13,10 @@ export default function LockScreen({ onUnlock }: LockScreenProps) {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    document.title = "DayFrogd-ScalpingEngin | Login";
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -42,8 +46,8 @@ export default function LockScreen({ onUnlock }: LockScreenProps) {
           <div className="inline-flex items-center justify-center p-3 rounded-2xl bg-slate-900 border border-slate-800 shadow-xl mb-4" id="lock-logo-container">
             <Bot className="w-10 h-10 text-rose-500 animate-pulse" />
           </div>
-          <h1 className="text-2xl font-bold tracking-tight text-white font-sans">CRYPTO SCALPER</h1>
-          <p className="text-xs text-slate-500 mt-1 font-mono uppercase tracking-widest">Execution Terminal v1.0</p>
+          <h1 className="text-2xl font-bold tracking-tight text-white font-sans">DayFrogd-ScalpingEngin</h1>
+          <p className="text-xs text-slate-500 mt-1 font-mono uppercase tracking-widest">FastAPI Demo Control Terminal</p>
         </div>
 
         <div className="bg-slate-900/60 backdrop-blur-xl border border-slate-800 rounded-2xl p-6 shadow-2xl relative overflow-hidden" id="lock-card">
@@ -126,7 +130,7 @@ export default function LockScreen({ onUnlock }: LockScreenProps) {
           </div>
         </div>
 
-        <p className="text-center text-[10px] text-slate-600 mt-8 font-mono">FASTAPI BACKEND SESSION AUTH</p>
+        <p className="text-center text-[10px] text-slate-600 mt-8 font-mono">DAYFROGD-SCALPINGENGIN SESSION AUTH</p>
       </div>
     </div>
   );

@@ -303,3 +303,132 @@ export interface AccountResponse {
     error: string | null;
   };
 }
+
+export interface MarketCandle {
+  timestamp: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+}
+
+export interface MarketTicker {
+  symbol: string;
+  lastPrice: number;
+  price24hPcnt: number;
+  volume24h: number;
+  turnover24h: number;
+  highPrice24h: number;
+  lowPrice24h: number;
+}
+
+export interface OrderBookLevel {
+  price: number;
+  size: number;
+}
+
+export interface MarketOverviewResponse {
+  ok: boolean;
+  server_time: string | null;
+  top_gainers: MarketTicker[];
+  watchlist: MarketTicker[];
+  error: string | null;
+}
+
+export interface MarketCandlesResponse {
+  ok: boolean;
+  symbol: string;
+  interval: string;
+  candles: MarketCandle[];
+  error: string | null;
+}
+
+export interface OrderBookResponse {
+  ok: boolean;
+  symbol: string;
+  orderbook: {
+    bids: OrderBookLevel[];
+    asks: OrderBookLevel[];
+  };
+  error: string | null;
+}
+
+export interface RiskValidationResponse {
+  allowed: boolean;
+  reason: string;
+  risk_per_trade?: number;
+}
+
+export interface RiskStateResponse {
+  risk_per_trade: number;
+  max_open_trades: number;
+  max_trades_per_day: number;
+  min_risk_reward: number;
+  active_symbols: string[];
+  trades_today: number;
+  cooldown_until: string | null;
+}
+
+export interface JournalTradeEntry {
+  journal_id: string;
+  symbol: string;
+  direction: string;
+  execution_mode: 'demo' | 'live';
+  entry: number;
+  stop_loss: number;
+  take_profit: number;
+  quantity: number | null;
+  status: string;
+  result: string | null;
+  sl_hit_reason: string | null;
+  order_id: string | null;
+  detected_at: string | null;
+  opened_at: string | null;
+  closed_at: string | null;
+  exchange_metadata: Record<string, unknown>;
+}
+
+export interface BotEventEntry {
+  id: number;
+  event_type: string;
+  level: string;
+  message: string;
+  metadata: Record<string, unknown>;
+  created_at: string | null;
+}
+
+export interface WatchdogModuleStatus {
+  module: string;
+  status: string;
+  reason: string;
+  endpoint: string | null;
+  error_code: string;
+}
+
+export interface WatchdogIncident {
+  id: number;
+  timestamp: string | null;
+  error_code: string;
+  endpoint: string | null;
+  retry_count: number;
+  affected_module: string;
+  level: string;
+  message: string;
+  technical_evidence: unknown;
+  recovery_status: string;
+  root_cause: string;
+}
+
+export interface WatchdogSnapshot {
+  generated_at: string;
+  mode: 'demo' | 'live';
+  admin_auth_configured: boolean;
+  modules: WatchdogModuleStatus[];
+  incidents: WatchdogIncident[];
+  summary: {
+    overall_status: string;
+    open_incidents: number;
+    total_incidents: number;
+    affected_modules: string[];
+  };
+}

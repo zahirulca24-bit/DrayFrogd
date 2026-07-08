@@ -97,6 +97,15 @@ def get_closed_trade_history(limit: int = 100) -> list[dict[str, Any]]:
         db.close()
 
 
+def get_bot_events(limit: int = 100) -> list[dict[str, Any]]:
+    db = SessionLocal()
+    try:
+        rows = db.query(BotEvent).order_by(desc(BotEvent.id)).limit(limit).all()
+        return [serialize_bot_event(row) for row in rows]
+    finally:
+        db.close()
+
+
 def log_bot_event(event_type: str, message: str, level: str = "info", metadata: dict[str, Any] | None = None) -> None:
     payload = {
         "event_type": event_type,
@@ -141,6 +150,24 @@ def serialize_trade_entry(row: TradeJournal) -> dict[str, Any]:
         "opened_at": row.opened_at,
         "closed_at": row.closed_at,
         "exchange_metadata": metadata,
+    }
+
+
+def serialize_bot_event(row: BotEvent) -> dict[str, Any]:
+    metadata: dict[str, Any] = {}
+    if row.event_metadata:
+        try:
+            metadata = json.loads(row.event_metadata)
+        except json.JSONDecodeError:
+            metadata = {}
+
+    return {
+        "id": row.id,
+        "event_type": row.event_type,
+        "level": row.level,
+        "message": row.message,
+        "metadata": metadata,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
     }
 
 

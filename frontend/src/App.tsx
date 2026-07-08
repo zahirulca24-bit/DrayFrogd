@@ -4,22 +4,27 @@ import { api, ApiError } from "./api";
 import {
   AccountResponse,
   BotControlState,
+  BotEventEntry,
   ExchangeStatusResponse,
   ExecutableSignal,
   MetricsResponse,
   PortfolioSummary,
+  RiskStateResponse,
   SystemReadiness,
   Trade,
   TradeHistoryEntry,
+  WatchdogSnapshot,
 } from "./types";
 import Sidebar from "./components/Sidebar";
 import LockScreen from "./components/LockScreen";
 import DashboardView from "./components/DashboardView";
 import ControlPanel from "./components/ControlPanel";
-import Portfolio from "./components/Portfolio";
 import SignalEngine from "./components/SignalEngine";
 import ActiveTrades from "./components/ActiveTrades";
 import TradeHistory from "./components/TradeHistory";
+import PerformanceStrategy from "./components/PerformanceStrategy";
+import PageShell from "./components/PageShell";
+import Watchdog from "./components/Watchdog";
 
 
 const emptyReadiness: SystemReadiness = {
@@ -80,6 +85,30 @@ const emptyBotStatus: BotControlState = {
   live_mode_available: false,
 };
 
+const emptyRiskState: RiskStateResponse = {
+  risk_per_trade: 0.01,
+  max_open_trades: 3,
+  max_trades_per_day: 8,
+  min_risk_reward: 2,
+  active_symbols: [],
+  trades_today: 0,
+  cooldown_until: null,
+};
+
+const emptyWatchdog: WatchdogSnapshot = {
+  generated_at: new Date(0).toISOString(),
+  mode: "demo",
+  admin_auth_configured: false,
+  modules: [],
+  incidents: [],
+  summary: {
+    overall_status: "DEGRADED",
+    open_incidents: 0,
+    total_incidents: 0,
+    affected_modules: [],
+  },
+};
+
 
 export default function App() {
   const [authToken, setAuthToken] = useState<string | null>(localStorage.getItem("scalp_token"));
@@ -94,6 +123,9 @@ export default function App() {
   const [account, setAccount] = useState<AccountResponse>(emptyAccount);
   const [metrics, setMetrics] = useState<MetricsResponse>(emptyMetrics);
   const [portfolio, setPortfolio] = useState<PortfolioSummary>(emptyPortfolio);
+  const [riskState, setRiskState] = useState<RiskStateResponse>(emptyRiskState);
+  const [botEvents, setBotEvents] = useState<BotEventEntry[]>([]);
+  const [watchdog, setWatchdog] = useState<WatchdogSnapshot>(emptyWatchdog);
   const [botStatus, setBotStatus] = useState<BotControlState>(emptyBotStatus);
   const [healthStatus, setHealthStatus] = useState<"ONLINE" | "OFFLINE">("OFFLINE");
   const [loading, setLoading] = useState(false);
@@ -102,6 +134,21 @@ export default function App() {
   const [lastSync, setLastSync] = useState<Date | null>(null);
   const [isStale, setIsStale] = useState(false);
   const isFetchingRef = useRef(false);
+
+  useEffect(() => {
+    const pageNameMap: Record<string, string> = {
+      dashboard: "Dashboard",
+      "signal-engine": "Signal Engine",
+      "active-trades": "Active Trades",
+      journal: "Journal / Trade History",
+      "performance-strategy": "Performance & Strategy",
+      "control-panel": "Control Panel",
+      watchdog: "Watchdog",
+      settings: "Settings",
+    };
+
+    document.title = `DayFrogd-ScalpingEngin | ${pageNameMap[activeTab] || "Terminal"}`;
+  }, [activeTab]);
 
   const logout = () => {
     localStorage.removeItem("scalp_token");
@@ -115,6 +162,9 @@ export default function App() {
     setAccount(emptyAccount);
     setMetrics(emptyMetrics);
     setPortfolio(emptyPortfolio);
+    setRiskState(emptyRiskState);
+    setBotEvents([]);
+    setWatchdog(emptyWatchdog);
     setBotStatus(emptyBotStatus);
   };
 
@@ -156,10 +206,13 @@ export default function App() {
         accountRes,
         metricsRes,
         portfolioRes,
+        riskRes,
         tradesRes,
         historyRes,
         signalsRes,
         scannerRes,
+        botEventsRes,
+        watchdogRes,
         botRes,
       ] = await Promise.all([
         safe(api.getHealth(), { status: "offline" }),
@@ -168,10 +221,13 @@ export default function App() {
         safe(api.getAccount(authToken), emptyAccount),
         safe(api.getMetrics(authToken), emptyMetrics),
         safe(api.getPortfolio(authToken), emptyPortfolio),
+        safe(api.getRiskState(authToken), emptyRiskState),
         safe(api.getActiveTrades(authToken), [] as Trade[]),
         safe(api.getTradeHistory(authToken), [] as TradeHistoryEntry[]),
         safe(api.getSignals(authToken), [] as ExecutableSignal[]),
         safe(api.getScannerResults(authToken), [] as ExecutableSignal[]),
+        safe(api.getBotEvents(authToken), { events: [] as BotEventEntry[] }),
+        safe(api.getWatchdogStatus(authToken), emptyWatchdog),
         safe(api.getBotStatus(authToken), emptyBotStatus),
       ]);
 
@@ -181,10 +237,13 @@ export default function App() {
       setAccount(accountRes);
       setMetrics(metricsRes);
       setPortfolio(portfolioRes);
+      setRiskState(riskRes);
       setActiveTrades(tradesRes);
       setTradeHistory(historyRes);
       setSignals(signalsRes);
       setScannerResults(scannerRes);
+      setBotEvents(botEventsRes.events || []);
+      setWatchdog(watchdogRes);
       setBotStatus(botRes);
       setLastSync(new Date());
       setIsStale(false);
@@ -244,6 +303,7 @@ export default function App() {
       case "dashboard":
         return (
           <DashboardView
+            authToken={authToken}
             readiness={readiness}
             botStatus={botStatus}
             exchangeStatus={exchangeStatus}
@@ -255,42 +315,61 @@ export default function App() {
             tradeHistory={tradeHistory}
             lastSync={lastSync}
             isStale={isStale}
+            onRefreshAll={() => fetchAllData()}
           />
         );
       case "signal-engine":
         return (
           <SignalEngine
+            authToken={authToken}
             signals={signals}
             scanResults={scannerResults}
             loading={loading || actionLoading === "scanner"}
             onRunScan={() => authToken ? runAction("scanner", () => api.runScanner(authToken)) : Promise.resolve()}
             onRefresh={() => fetchAllData()}
+            onExecuteSignal={(signal) => authToken ? runAction("execute-signal", () => api.executeTrade(authToken, signal)) : Promise.resolve()}
           />
         );
       case "active-trades":
         return (
           <div className="space-y-6">
-            <ActiveTrades trades={activeTrades} />
-            <TradeHistory history={tradeHistory} />
+            <ActiveTrades
+              authToken={authToken}
+              trades={activeTrades}
+              tradeHistory={tradeHistory}
+              account={account}
+              onRefresh={() => fetchAllData()}
+            />
           </div>
         );
-      case "portfolio":
+      case "journal":
         return (
-          <Portfolio
-            account={account}
-            metrics={metrics}
-            portfolio={portfolio}
-            activeTrades={activeTrades}
-            tradeHistory={tradeHistory}
-            loading={loading}
+          <TradeHistory
+            authToken={authToken}
+            history={tradeHistory}
+          />
+        );
+      case "performance-strategy":
+        return (
+          <PerformanceStrategy
+            authToken={authToken}
+            history={tradeHistory}
+          />
+        );
+      case "watchdog":
+        return (
+          <Watchdog
+            watchdog={watchdog}
+            botEvents={botEvents}
             onRefresh={() => fetchAllData()}
           />
         );
-      case "ai-review":
+      case "settings":
         return (
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 text-slate-400 text-sm">
-            AI review endpoint is not available in the current FastAPI backend.
-          </div>
+          <PageShell
+            title="Settings"
+            subtitle="Administrative settings, session controls, and future platform preferences will appear here once the backend exposes them."
+          />
         );
       case "control-panel":
         return (
@@ -298,6 +377,16 @@ export default function App() {
             botStatus={botStatus}
             readiness={readiness}
             exchangeStatus={exchangeStatus}
+            account={account}
+            metrics={metrics}
+            portfolio={portfolio}
+            riskState={riskState}
+            signals={signals}
+            scannerResults={scannerResults}
+            activeTrades={activeTrades}
+            tradeHistory={tradeHistory}
+            botEvents={botEvents}
+            watchdog={watchdog}
             healthStatus={healthStatus}
             loading={loading}
             actionLoading={actionLoading}
@@ -313,9 +402,10 @@ export default function App() {
         );
       default:
         return (
-          <div className="p-8 text-center text-slate-400 font-mono">
-            Tab section '{activeTab}' is unavailable in the current API integration.
-          </div>
+          <PageShell
+            title="Unavailable Section"
+            subtitle={`Tab section '${activeTab}' is not available in the current API integration.`}
+          />
         );
     }
   };

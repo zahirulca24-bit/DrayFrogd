@@ -1,4 +1,5 @@
 import asyncio
+from datetime import UTC, datetime
 
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -20,16 +21,17 @@ from app.database import Base, SessionLocal, engine
 from app.dependencies import require_authenticated
 from app.execution import execute_signal, get_active_trades, get_closed_trades
 from app.exchange import get_exchange_client
-from app.journal import get_closed_trade_history, get_trade_history, log_bot_event
+from app.journal import get_bot_events, get_closed_trade_history, get_trade_history, log_bot_event
 from app.metrics import get_metrics, get_portfolio_summary
 from app.middleware import AuthMiddleware
 from app.models import UserSession
 from app.readiness import get_readiness_status
 from app.reconciliation import reconcile_state
 from app.risk import get_risk_state, validate_trade
-from app.scanner import get_active_signals, get_latest_signals, run_scan
+from app.scanner import SCANNER_SYMBOLS, get_active_signals, get_latest_signals, run_scan
 from app.schemas import BotConfigRequest, ExecuteSignalRequest, LoginRequest, RiskSignalRequest, SessionVerifyResponse, TokenResponse
 from app.symbols import get_symbol_metadata, refresh_symbol_metadata
+from app.watchdog import get_watchdog_snapshot
 
 
 app = FastAPI(title=settings.app_name)
@@ -156,6 +158,69 @@ def symbols(category: str = "linear", symbol: str | None = None) -> dict:
     }
 
 
+@app.get("/market/candles")
+def market_candles(
+    symbol: str = "BTCUSDT",
+    interval: str = "1",
+    limit: int = 120,
+    _: dict = Depends(require_authenticated),
+) -> dict:
+    client = get_exchange_client(get_execution_mode())
+    ok, candles, error = client.safe_fetch_recent_candles(symbol=symbol.upper(), interval=interval, limit=max(20, min(limit, 300)))
+    return {
+        "ok": ok,
+        "symbol": symbol.upper(),
+        "interval": interval,
+        "candles": candles if ok else [],
+        "error": error,
+    }
+
+
+@app.get("/market/orderbook")
+def market_orderbook(
+    symbol: str = "BTCUSDT",
+    limit: int = 20,
+    _: dict = Depends(require_authenticated),
+) -> dict:
+    client = get_exchange_client(get_execution_mode())
+    ok, orderbook, error = client.safe_fetch_orderbook(symbol=symbol.upper(), limit=max(5, min(limit, 50)))
+    return {
+        "ok": ok,
+        "symbol": symbol.upper(),
+        "orderbook": orderbook or {"bids": [], "asks": []},
+        "error": error,
+    }
+
+
+@app.get("/market/overview")
+def market_overview(_: dict = Depends(require_authenticated)) -> dict:
+    client = get_exchange_client(get_execution_mode())
+    ok, tickers, error = client.safe_fetch_market_tickers()
+    if not ok:
+        return {
+            "ok": False,
+            "server_time": None,
+            "top_gainers": [],
+            "watchlist": [],
+            "error": error,
+        }
+
+    normalized = [_normalize_ticker(item) for item in tickers]
+    filtered = [item for item in normalized if item["symbol"].endswith("USDT")]
+    top_gainers = sorted(filtered, key=lambda item: item["price24hPcnt"], reverse=True)[:20]
+    watchlist_symbols = set(SCANNER_SYMBOLS)
+    watchlist = [item for item in filtered if item["symbol"] in watchlist_symbols]
+    watchlist.sort(key=lambda item: SCANNER_SYMBOLS.index(item["symbol"]) if item["symbol"] in SCANNER_SYMBOLS else 999)
+
+    return {
+        "ok": True,
+        "server_time": _utc_now_iso(),
+        "top_gainers": top_gainers,
+        "watchlist": watchlist,
+        "error": None,
+    }
+
+
 @app.get("/readiness")
 def readiness() -> dict:
     return get_readiness_status()
@@ -167,7 +232,19 @@ async def _run_scanner_job(mode: str) -> None:
         result = await asyncio.to_thread(run_scan, client)
         log_bot_event("scanner_run", "Scanner executed manually", metadata={"mode": mode, "result": result})
     except Exception as exc:
-        log_bot_event("scanner_run", "Scanner execution failed", level="error", metadata={"mode": mode, "error": str(exc)})
+        log_bot_event(
+            "scanner_run",
+            "Scanner execution failed",
+            level="error",
+            metadata={
+                "mode": mode,
+                "error": str(exc),
+                "endpoint": "/scanner/run",
+                "affected_module": "scanner",
+                "error_code": "SCANNER_RUN_FAILED",
+                "retry_count": 0,
+            },
+        )
 
 
 @app.post("/scanner/run")
@@ -203,7 +280,22 @@ def risk_state(_: dict = Depends(require_authenticated)) -> dict:
 
 @app.post("/execute")
 def execute(payload: ExecuteSignalRequest, _: dict = Depends(require_authenticated)) -> dict:
-    return execute_signal(get_exchange_client(get_execution_mode()), payload.model_dump())
+    result = execute_signal(get_exchange_client(get_execution_mode()), payload.model_dump())
+    if not result.get("ok"):
+        log_bot_event(
+            "execution_failed",
+            str(result.get("error") or "Execution failed"),
+            level="warning",
+            metadata={
+                "endpoint": "/execute",
+                "affected_module": "execution",
+                "error_code": "EXECUTION_FAILED",
+                "retry_count": 0,
+                "error": result.get("error"),
+                "symbol": payload.symbol,
+            },
+        )
+    return result
 
 
 @app.get("/active-trades")
@@ -220,6 +312,18 @@ def trade_history(_: dict = Depends(require_authenticated)) -> dict:
 @app.get("/journal/trades")
 def journal_trades(_: dict = Depends(require_authenticated)) -> dict:
     return {"trades": get_trade_history()}
+
+
+@app.get("/bot/events")
+def bot_events(_: dict = Depends(require_authenticated), limit: int = 100) -> dict:
+    return {"events": get_bot_events(limit=max(10, min(limit, 300)))}
+
+
+@app.get("/watchdog/status")
+def watchdog_status(_: dict = Depends(require_authenticated)) -> dict:
+    global _background_task
+    worker_running = _background_task is not None and not _background_task.done()
+    return get_watchdog_snapshot(worker_running=worker_running)
 
 
 @app.post("/reconcile")
@@ -284,3 +388,26 @@ def bot_resume(_: dict = Depends(require_authenticated)) -> dict:
     state = resume_bot()
     log_bot_event("bot_resume", "Bot resumed", metadata=state)
     return state
+
+
+def _normalize_ticker(item: dict) -> dict:
+    return {
+        "symbol": str(item.get("symbol", "")).upper(),
+        "lastPrice": _to_float(item.get("lastPrice")),
+        "price24hPcnt": _to_float(item.get("price24hPcnt")),
+        "volume24h": _to_float(item.get("volume24h")),
+        "turnover24h": _to_float(item.get("turnover24h")),
+        "highPrice24h": _to_float(item.get("highPrice24h")),
+        "lowPrice24h": _to_float(item.get("lowPrice24h")),
+    }
+
+
+def _to_float(value) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(UTC).isoformat()

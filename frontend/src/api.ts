@@ -1,14 +1,22 @@
 import {
   AccountResponse,
   BotControlState,
+  BotEventEntry,
   ExchangeStatusResponse,
   ExecutableSignal,
   HealthResponse,
+  JournalTradeEntry,
+  MarketCandlesResponse,
+  MarketOverviewResponse,
   MetricsResponse,
+  OrderBookResponse,
   PortfolioSummary,
+  RiskValidationResponse,
+  RiskStateResponse,
   SystemReadiness,
   Trade,
   TradeHistoryEntry,
+  WatchdogSnapshot,
 } from "./types";
 
 
@@ -83,6 +91,17 @@ type BackendTrade = {
   execution_mode?: "demo" | "live";
   journal_id?: string;
   exit_price?: number | null;
+};
+
+type RiskPayload = {
+  symbol: string;
+  direction: string;
+  entry: number;
+  stop_loss: number;
+  take_profit: number;
+  risk_reward: number;
+  detected_at?: string | null;
+  status: string;
 };
 
 
@@ -195,6 +214,16 @@ export const api = {
   },
   getMetrics: (token: string) => request<MetricsResponse>("/metrics", {}, token),
   getPortfolio: (token: string) => request<PortfolioSummary>("/portfolio", {}, token),
+  getRiskState: (token: string) => request<RiskStateResponse>("/risk/state", {}, token),
+  getMarketOverview: (token: string) => request<MarketOverviewResponse>("/market/overview", {}, token),
+  getMarketCandles: (token: string, symbol: string, interval = "1", limit = 120) =>
+    request<MarketCandlesResponse>(`/market/candles?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}&limit=${limit}`, {}, token),
+  getOrderBook: (token: string, symbol: string, limit = 20) =>
+    request<OrderBookResponse>(`/market/orderbook?symbol=${encodeURIComponent(symbol)}&limit=${limit}`, {}, token),
+  validateRisk: (token: string, payload: RiskPayload) =>
+    request<RiskValidationResponse>("/risk/validate", { method: "POST", body: JSON.stringify(payload) }, token),
+  executeTrade: (token: string, payload: RiskPayload) =>
+    request("/execute", { method: "POST", body: JSON.stringify(payload) }, token),
   getActiveTrades: async (token: string) => {
     const response = await request<{ trades: BackendTrade[] }>("/active-trades", {}, token);
     return response.trades.map(toUiTrade);
@@ -203,6 +232,9 @@ export const api = {
     const response = await request<{ trades: BackendTrade[] }>("/trade-history", {}, token);
     return response.trades.map((item, index) => toTradeHistoryEntry(toUiTrade(item, index)));
   },
+  getJournalTrades: (token: string) => request<{ trades: JournalTradeEntry[] }>("/journal/trades", {}, token),
+  getBotEvents: (token: string, limit = 100) => request<{ events: BotEventEntry[] }>(`/bot/events?limit=${limit}`, {}, token),
+  getWatchdogStatus: (token: string) => request<WatchdogSnapshot>("/watchdog/status", {}, token),
   getBotStatus: (token: string) => request<BotControlState>("/bot/status", {}, token),
   startBot: (token: string) => request<BotControlState>("/bot/start", { method: "POST" }, token),
   stopBot: (token: string) => request<BotControlState>("/bot/stop", { method: "POST" }, token),
