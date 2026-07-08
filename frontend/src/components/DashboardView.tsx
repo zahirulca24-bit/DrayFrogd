@@ -9,6 +9,7 @@ import {
   MarketTicker,
   MetricsResponse,
   OrderBookLevel,
+  PositionSizeResponse,
   PortfolioSummary,
   RiskValidationResponse,
   SystemReadiness,
@@ -49,8 +50,6 @@ type ManualTradeState = {
   symbol: string;
   side: "Buy" | "Sell";
   orderType: "Market" | "Limit";
-  quantity: string;
-  leverage: string;
   limitPrice: string;
   stopLoss: string;
   takeProfit: string;
@@ -178,12 +177,11 @@ export default function DashboardView({
   const [marketLoading, setMarketLoading] = useState(false);
   const [manualLoading, setManualLoading] = useState(false);
   const [manualResult, setManualResult] = useState<RiskValidationResponse | { ok?: boolean; error?: string; warning?: string } | null>(null);
+  const [manualSizing, setManualSizing] = useState<PositionSizeResponse | null>(null);
   const [manualTrade, setManualTrade] = useState<ManualTradeState>({
     symbol: "BTCUSDT",
     side: "Buy",
     orderType: "Market",
-    quantity: "0.001",
-    leverage: "5",
     limitPrice: "",
     stopLoss: "",
     takeProfit: "",
@@ -293,6 +291,7 @@ export default function DashboardView({
 
     setManualLoading(true);
     setManualResult(null);
+    setManualSizing(null);
 
     try {
       const payload = {
@@ -307,8 +306,15 @@ export default function DashboardView({
       };
 
       const validation = await api.validateRisk(authToken, payload);
-      if (!executeAfterValidation || !validation.allowed) {
+      if (!validation.allowed) {
         setManualResult(validation);
+        return;
+      }
+
+      const sizing = await api.calculatePositionSize(authToken, payload);
+      setManualSizing(sizing);
+      if (!executeAfterValidation || !sizing.allowed) {
+        setManualResult(sizing.allowed ? validation : { allowed: false, reason: sizing.reason });
         return;
       }
 
@@ -431,7 +437,7 @@ export default function DashboardView({
             <div className="flex items-center justify-between mb-5">
               <div>
                 <h2 className="text-sm font-semibold text-white tracking-tight font-sans">Manual Trade</h2>
-                <p className="text-xs text-slate-500 mt-1">Market execution uses backend risk sizing and validation only.</p>
+                <p className="text-xs text-slate-500 mt-1">Quantity is calculated only by the backend position sizing engine.</p>
               </div>
               <button
                 onClick={onRefreshAll}
@@ -473,20 +479,6 @@ export default function DashboardView({
                   <option>Limit</option>
                 </select>
               </Field>
-              <Field label="Quantity">
-                <input
-                  value={manualTrade.quantity}
-                  onChange={(event) => setManualTrade((current) => ({ ...current, quantity: event.target.value }))}
-                  className="dashboard-input"
-                />
-              </Field>
-              <Field label="Leverage">
-                <input
-                  value={manualTrade.leverage}
-                  onChange={(event) => setManualTrade((current) => ({ ...current, leverage: event.target.value }))}
-                  className="dashboard-input"
-                />
-              </Field>
               <Field label={manualTrade.orderType === "Limit" ? "Limit Price" : "Reference Price"}>
                 <input
                   value={manualTrade.orderType === "Limit" ? manualTrade.limitPrice : String(selectedTicker?.lastPrice || "")}
@@ -518,13 +510,22 @@ export default function DashboardView({
               </span>
             </div>
 
+            <div className="mt-4 grid grid-cols-2 gap-3">
+              <SizingMetric label="Backend Quantity" value={manualSizing?.quantity || "Calculate first"} good={manualSizing?.allowed} />
+              <SizingMetric label="Risk Amount" value={manualSizing?.risk_amount !== undefined ? formatMoney(manualSizing.risk_amount) : "N/A"} good={manualSizing?.allowed} />
+              <SizingMetric label="Notional" value={manualSizing?.notional !== undefined ? formatMoney(manualSizing.notional) : "N/A"} />
+              <SizingMetric label="Required Margin" value={manualSizing?.required_margin !== undefined ? formatMoney(manualSizing.required_margin) : "N/A"} />
+              <SizingMetric label="Equity" value={manualSizing?.equity !== undefined ? formatMoney(manualSizing.equity) : "N/A"} />
+              <SizingMetric label="Leverage Cap" value={manualSizing?.leverage_cap !== undefined ? `${manualSizing.leverage_cap}x` : "N/A"} />
+            </div>
+
             <div className="mt-4 flex gap-3">
               <button
                 onClick={() => submitRiskValidation(false)}
                 disabled={manualLoading}
                 className="flex-1 px-4 py-2 rounded-xl border border-amber-500/20 bg-amber-500/10 text-amber-300 text-xs font-semibold cursor-pointer disabled:opacity-50"
               >
-                {manualLoading ? "Checking..." : "Validate Risk"}
+                {manualLoading ? "Checking..." : "Calculate Size"}
               </button>
               <button
                 onClick={() => submitRiskValidation(true)}
@@ -550,7 +551,7 @@ export default function DashboardView({
                   : "bg-rose-500/10 border-rose-500/20 text-rose-300"
               }`}>
                 {"allowed" in manualResult ? (
-                  <span>{manualResult.allowed ? "Risk validation passed." : manualResult.reason || "Risk validation failed."}</span>
+                  <span>{manualResult.allowed ? "Risk and sizing validation passed." : manualResult.reason || "Risk validation failed."}</span>
                 ) : (
                   <span>{manualResult.error || manualResult.warning || "Trade request completed."}</span>
                 )}
@@ -761,5 +762,16 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
       <span className="text-[10px] font-mono uppercase tracking-wider text-slate-500">{label}</span>
       {children}
     </label>
+  );
+}
+
+function SizingMetric({ label, value, good }: { label: string; value: string; good?: boolean }) {
+  return (
+    <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-3">
+      <div className="text-[10px] font-mono uppercase tracking-wider text-slate-500">{label}</div>
+      <div className={`mt-2 text-xs font-semibold ${good === undefined ? "text-white" : good ? "text-emerald-300" : "text-amber-300"}`}>
+        {value}
+      </div>
+    </div>
   );
 }

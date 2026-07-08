@@ -87,6 +87,8 @@ const emptyBotStatus: BotControlState = {
 
 const emptyRiskState: RiskStateResponse = {
   risk_per_trade: 0.01,
+  leverage_cap: 5,
+  exposure_cap: 0.3,
   max_open_trades: 3,
   max_trades_per_day: 8,
   min_risk_reward: 2,
@@ -398,6 +400,7 @@ export default function App() {
             onRefresh={() => fetchAllData()}
             onModeChange={(mode) => authToken ? runAction("bot-config-mode", () => api.updateBotConfig(authToken, { execution_mode: mode })) : Promise.resolve()}
             onAutoTradingToggle={(enabled) => authToken ? runAction("bot-config-auto", () => api.updateBotConfig(authToken, { auto_trading_enabled: enabled })) : Promise.resolve()}
+            onRiskSettingsChange={(settings) => authToken ? runAction("bot-config-risk", () => api.updateBotConfig(authToken, settings)) : Promise.resolve()}
           />
         );
       default:

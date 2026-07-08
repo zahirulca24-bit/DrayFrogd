@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, ArrowRight, Clock3, Play, RefreshCw, ShieldCheck, TrendingDown, TrendingUp } from "lucide-react";
 import { api } from "../api";
-import { ExecutableSignal, MarketCandle, MarketTicker } from "../types";
+import { ExecutableSignal, MarketCandle, MarketTicker, PositionSizeResponse } from "../types";
 
 interface SignalEngineProps {
   authToken: string | null;
@@ -315,6 +315,7 @@ function SignalCard({
   compact?: boolean;
 }) {
   const [candles, setCandles] = useState<MarketCandle[]>([]);
+  const [sizing, setSizing] = useState<PositionSizeResponse | null>(null);
   const [loadingChart, setLoadingChart] = useState(false);
 
   useEffect(() => {
@@ -362,6 +363,32 @@ function SignalCard({
     status: "active",
   };
 
+  useEffect(() => {
+    if (!authToken || signal.executionStatus !== "READY") {
+      setSizing(null);
+      return;
+    }
+
+    let cancelled = false;
+    const loadSizing = async () => {
+      try {
+        const response = await api.calculatePositionSize(authToken, payload);
+        if (!cancelled) {
+          setSizing(response);
+        }
+      } catch {
+        if (!cancelled) {
+          setSizing(null);
+        }
+      }
+    };
+
+    loadSizing();
+    return () => {
+      cancelled = true;
+    };
+  }, [authToken, signal.id, signal.executionStatus]);
+
   return (
     <div className="bg-bento-card border border-slate-800 rounded-2xl p-6 shadow-md">
       <div className="flex flex-col lg:flex-row justify-between gap-4">
@@ -402,6 +429,8 @@ function SignalCard({
         <MetricCard label="Trend" value={ticker ? `${numberValue(ticker.price24hPcnt) >= 0 ? "Bullish" : "Bearish"}` : signal.direction} />
         <MetricCard label="Confidence" value={`${confidence}%`} />
         <MetricCard label="Status" value={signal.status} />
+        <MetricCard label="Backend Qty" value={sizing?.quantity || "N/A"} />
+        <MetricCard label="Risk $" value={sizing?.risk_amount !== undefined ? formatMoney(sizing.risk_amount) : "N/A"} />
       </div>
 
       <div className="mt-5 rounded-2xl border border-slate-800 bg-[#0A0B0E] p-4">

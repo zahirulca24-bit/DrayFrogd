@@ -141,6 +141,7 @@ class BybitClient:
                     "tickSize": price_filter.get("tickSize"),
                     "qtyStep": lot_size_filter.get("qtyStep"),
                     "minOrderQty": lot_size_filter.get("minOrderQty"),
+                    "minNotionalValue": lot_size_filter.get("minNotionalValue"),
                 }
             )
         return results
@@ -215,6 +216,27 @@ class BybitClient:
                 "qty": qty,
                 "positionIdx": 0,
                 "orderLinkId": f"demo-{symbol.lower()}-{secrets.token_hex(6)}",
+            },
+        )
+
+    def close_position_market(
+        self,
+        symbol: str,
+        side: str,
+        qty: str,
+        category: str = "linear",
+    ) -> dict[str, Any]:
+        return self._private_post(
+            "/v5/order/create",
+            {
+                "category": category,
+                "symbol": symbol,
+                "side": side,
+                "orderType": "Market",
+                "qty": qty,
+                "reduceOnly": True,
+                "positionIdx": 0,
+                "orderLinkId": f"close-{symbol.lower()}-{secrets.token_hex(6)}",
             },
         )
 

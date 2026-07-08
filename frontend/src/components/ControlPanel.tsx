@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import {
   Activity,
   AlertTriangle,
@@ -53,6 +53,13 @@ interface ControlPanelProps {
   onRefresh: () => Promise<void>;
   onModeChange: (mode: "demo" | "live") => Promise<void>;
   onAutoTradingToggle: (enabled: boolean) => Promise<void>;
+  onRiskSettingsChange: (settings: {
+    risk_per_trade?: number;
+    leverage_cap?: number;
+    exposure_cap?: number;
+    max_open_trades?: number;
+    max_daily_trades?: number;
+  }) => Promise<void>;
 }
 
 const BDT_DATE_TIME = new Intl.DateTimeFormat("en-BD", {
@@ -102,11 +109,29 @@ export default function ControlPanel({
   onRefresh,
   onModeChange,
   onAutoTradingToggle,
+  onRiskSettingsChange,
 }: ControlPanelProps) {
   const activityLogs = botEvents.slice(0, 10);
   const queueRows = scannerResults.slice(0, 8);
   const moduleCards = watchdog.modules;
   const latestIncident = watchdog.incidents[0];
+  const [riskForm, setRiskForm] = useState({
+    riskPercent: String((riskState.risk_per_trade * 100).toFixed(2)),
+    leverageCap: String(riskState.leverage_cap),
+    exposureCap: String((riskState.exposure_cap * 100).toFixed(0)),
+    maxOpenTrades: String(riskState.max_open_trades),
+    maxDailyTrades: String(riskState.max_trades_per_day),
+  });
+
+  useEffect(() => {
+    setRiskForm({
+      riskPercent: String((riskState.risk_per_trade * 100).toFixed(2)),
+      leverageCap: String(riskState.leverage_cap),
+      exposureCap: String((riskState.exposure_cap * 100).toFixed(0)),
+      maxOpenTrades: String(riskState.max_open_trades),
+      maxDailyTrades: String(riskState.max_trades_per_day),
+    });
+  }, [riskState]);
 
   return (
     <div className="space-y-6">
@@ -208,11 +233,33 @@ export default function ControlPanel({
         <PanelCard title="Risk Settings" icon={<ShieldAlert className="w-4 h-4 text-amber-400" />}>
           <div className="grid grid-cols-2 gap-3">
             <MiniMetric label="Risk / Trade" value={formatPercent(riskState.risk_per_trade)} />
+            <MiniMetric label="Leverage Cap" value={`${riskState.leverage_cap}x`} />
+            <MiniMetric label="Exposure Cap" value={formatPercent(riskState.exposure_cap)} />
             <MiniMetric label="Min RR" value={`${riskState.min_risk_reward.toFixed(1)}R`} />
             <MiniMetric label="Max Open Trades" value={String(riskState.max_open_trades)} />
             <MiniMetric label="Trades Today" value={`${riskState.trades_today} / ${riskState.max_trades_per_day}`} />
             <MiniMetric label="Active Symbols" value={riskState.active_symbols.length > 0 ? riskState.active_symbols.join(", ") : "None"} />
             <MiniMetric label="Cooldown" value={riskState.cooldown_until ? formatTime(riskState.cooldown_until) : "CLEAR"} />
+          </div>
+          <div className="mt-4 grid grid-cols-2 gap-3">
+            <RiskInput label="Risk %" value={riskForm.riskPercent} onChange={(value) => setRiskForm((current) => ({ ...current, riskPercent: value }))} />
+            <RiskInput label="Leverage Cap" value={riskForm.leverageCap} onChange={(value) => setRiskForm((current) => ({ ...current, leverageCap: value }))} />
+            <RiskInput label="Exposure %" value={riskForm.exposureCap} onChange={(value) => setRiskForm((current) => ({ ...current, exposureCap: value }))} />
+            <RiskInput label="Max Open" value={riskForm.maxOpenTrades} onChange={(value) => setRiskForm((current) => ({ ...current, maxOpenTrades: value }))} />
+            <RiskInput label="Max Daily" value={riskForm.maxDailyTrades} onChange={(value) => setRiskForm((current) => ({ ...current, maxDailyTrades: value }))} />
+            <button
+              onClick={() => onRiskSettingsChange({
+                risk_per_trade: Number(riskForm.riskPercent) / 100,
+                leverage_cap: Number(riskForm.leverageCap),
+                exposure_cap: Number(riskForm.exposureCap) / 100,
+                max_open_trades: Number(riskForm.maxOpenTrades),
+                max_daily_trades: Number(riskForm.maxDailyTrades),
+              })}
+              disabled={actionLoading === "bot-config-risk"}
+              className="rounded-xl border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-xs font-semibold text-emerald-300 cursor-pointer disabled:opacity-50"
+            >
+              {actionLoading === "bot-config-risk" ? "Saving..." : "Save Settings"}
+            </button>
           </div>
         </PanelCard>
       </div>
@@ -428,6 +475,19 @@ function MiniMetric({ label, value }: { label: string; value: string }) {
       <div className="text-[10px] font-mono uppercase tracking-wider text-slate-500">{label}</div>
       <div className="mt-2 text-xs font-semibold text-white break-words">{value}</div>
     </div>
+  );
+}
+
+function RiskInput({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
+  return (
+    <label className="space-y-2 block">
+      <span className="text-[10px] font-mono uppercase tracking-wider text-slate-500">{label}</span>
+      <input
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className="dashboard-input"
+      />
+    </label>
   );
 }
 

@@ -25,12 +25,14 @@ from app.journal import get_bot_events, get_closed_trade_history, get_trade_hist
 from app.metrics import get_metrics, get_portfolio_summary
 from app.middleware import AuthMiddleware
 from app.models import UserSession
+from app.position_sizing import calculate_position_size
 from app.readiness import get_readiness_status
 from app.reconciliation import reconcile_state
 from app.risk import get_risk_state, validate_trade
 from app.scanner import SCANNER_SYMBOLS, get_active_signals, get_latest_signals, run_scan
-from app.schemas import BotConfigRequest, ExecuteSignalRequest, LoginRequest, RiskSignalRequest, SessionVerifyResponse, TokenResponse
+from app.schemas import BotConfigRequest, ExecuteSignalRequest, LoginRequest, PositionSizeRequest, RiskSignalRequest, SessionVerifyResponse, TokenResponse
 from app.symbols import get_symbol_metadata, refresh_symbol_metadata
+from app.trade_management import manage_open_trades
 from app.watchdog import get_watchdog_snapshot
 
 
@@ -278,6 +280,38 @@ def risk_state(_: dict = Depends(require_authenticated)) -> dict:
     return get_risk_state()
 
 
+@app.post("/position-size/calculate")
+def position_size_calculate(payload: PositionSizeRequest, _: dict = Depends(require_authenticated)) -> dict:
+    client = get_exchange_client(get_execution_mode())
+    signal = payload.model_dump()
+
+    validation = validate_trade(signal)
+    if not validation.get("allowed"):
+        return {"allowed": False, "reason": validation.get("reason", "Risk validation failed"), "quantity": None}
+
+    ok_symbol, symbol_infos, symbol_error = client.safe_fetch_symbol_info(symbol=payload.symbol.upper())
+    if not ok_symbol or not symbol_infos:
+        return {"allowed": False, "reason": symbol_error or "Symbol info unavailable", "quantity": None}
+
+    ok_wallet, wallet, wallet_error = client.safe_fetch_wallet_balance()
+    if not ok_wallet or wallet is None:
+        return {"allowed": False, "reason": wallet_error or "Wallet balance unavailable", "quantity": None}
+
+    ok_positions, positions, positions_error = client.safe_fetch_positions()
+    if not ok_positions:
+        return {"allowed": False, "reason": positions_error or "Position data unavailable", "quantity": None}
+
+    return calculate_position_size(
+        signal=signal,
+        wallet=wallet,
+        symbol_info=symbol_infos[0],
+        active_trades=get_active_trades(),
+        positions=positions,
+        settings=validation,
+        client=client,
+    )
+
+
 @app.post("/execute")
 def execute(payload: ExecuteSignalRequest, _: dict = Depends(require_authenticated)) -> dict:
     result = execute_signal(get_exchange_client(get_execution_mode()), payload.model_dump())
@@ -331,6 +365,11 @@ def reconcile(_: dict = Depends(require_authenticated)) -> dict:
     return reconcile_state(get_exchange_client(get_execution_mode()))
 
 
+@app.post("/trade-management/run")
+def trade_management_run(_: dict = Depends(require_authenticated)) -> dict:
+    return manage_open_trades(get_exchange_client(get_execution_mode()))
+
+
 @app.get("/metrics")
 def metrics(_: dict = Depends(require_authenticated)) -> dict:
     return get_metrics()
@@ -368,6 +407,11 @@ def bot_config(payload: BotConfigRequest, _: dict = Depends(require_authenticate
         state = update_bot_config(
             execution_mode=payload.execution_mode,
             auto_trading_enabled=payload.auto_trading_enabled,
+            risk_per_trade=payload.risk_per_trade,
+            leverage_cap=payload.leverage_cap,
+            exposure_cap=payload.exposure_cap,
+            max_open_trades=payload.max_open_trades,
+            max_daily_trades=payload.max_daily_trades,
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc

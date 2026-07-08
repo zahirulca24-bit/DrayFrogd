@@ -1,19 +1,20 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from math import isfinite
 from threading import Lock
 from typing import Any
 
 from app.bot_controls import can_execute, get_execution_mode
 from app.exchange import BybitClient, ExchangeError
-from app.journal import create_trade_entry, update_trade_entry
+from app.journal import append_trade_event, create_trade_entry, log_bot_event, update_trade_entry
+from app.position_sizing import calculate_position_size
 from app.risk import register_active_trade, start_loss_cooldown, validate_trade
 
 
 SL_REASON_UNKNOWN = "unknown"
 SL_REASON_EXCHANGE_CLOSE = "exchange_close"
 SL_REASON_FORCED_RISK_CLOSE = "forced_risk_close"
+RESULT_PROTECTION_FAILED = "protection_failed"
 
 _execution_lock = Lock()
 _active_trades: list[dict[str, Any]] = []
@@ -42,20 +43,29 @@ def execute_signal(client: BybitClient, signal: dict[str, Any], auto_triggered: 
     if not ok_wallet or wallet is None:
         return {"ok": False, "error": wallet_error or "Wallet balance unavailable"}
 
+    ok_positions, positions, positions_error = client.safe_fetch_positions()
+    if not ok_positions:
+        return {"ok": False, "error": positions_error or "Position data unavailable"}
+
     symbol_info = symbol_infos[0]
-    quantity = _calculate_position_size(
+    sizing = calculate_position_size(
+        signal=normalized_signal,
         wallet=wallet,
-        entry=normalized_signal["entry"],
-        stop_loss=normalized_signal["stop_loss"],
-        qty_step=symbol_info.get("qtyStep"),
-        min_order_qty=symbol_info.get("minOrderQty"),
-        risk_per_trade=float(validation.get("risk_per_trade", 0.01)),
+        symbol_info=symbol_info,
+        active_trades=get_active_trades(),
+        positions=positions,
+        settings={
+            "risk_per_trade": float(validation.get("risk_per_trade", 0.01)),
+            "leverage_cap": validation.get("leverage_cap"),
+            "exposure_cap": validation.get("exposure_cap"),
+        },
         client=client,
     )
-    if quantity is None:
-        return {"ok": False, "error": "Unable to calculate valid position size"}
+    if not sizing.get("allowed"):
+        return {"ok": False, "error": sizing.get("reason", "Unsafe position sizing rejected"), "sizing": sizing}
 
-    take_profit = client.normalize_price(normalized_signal["take_profit"], symbol_info["tickSize"])
+    quantity = str(sizing["quantity"])
+
     stop_loss = client.normalize_price(normalized_signal["stop_loss"], symbol_info["tickSize"])
     side = "Buy" if normalized_signal["direction"] == "long" else "Sell"
     execution_mode = get_execution_mode()
@@ -70,12 +80,20 @@ def execute_signal(client: BybitClient, signal: dict[str, Any], auto_triggered: 
         return {"ok": False, "error": str(exc)}
 
     order_id = str(order_result.get("orderId") or order_result.get("orderLinkId") or "")
+    management = _build_management_state(
+        entry=normalized_signal["entry"],
+        stop_loss=float(stop_loss),
+        take_profit=normalized_signal["take_profit"],
+        quantity=quantity,
+        direction=normalized_signal["direction"],
+    )
+    take_profit = client.normalize_price(management["runner_target"], symbol_info["tickSize"])
     trade = {
         "symbol": normalized_signal["symbol"],
         "direction": normalized_signal["direction"],
         "entry": normalized_signal["entry"],
         "stop_loss": float(stop_loss),
-        "take_profit": float(take_profit),
+        "take_profit": normalized_signal["take_profit"],
         "quantity": quantity,
         "order_id": order_id,
         "status": "active",
@@ -84,26 +102,85 @@ def execute_signal(client: BybitClient, signal: dict[str, Any], auto_triggered: 
         "execution_mode": execution_mode,
         "result": None,
         "sl_hit_reason": None,
+        "remaining_quantity": quantity,
+        "management": management,
         "auto_triggered": auto_triggered,
         "exchange_metadata": {
             "mode": execution_mode,
             "order_response": order_result,
+            "position_sizing": sizing,
+            "management": management,
         },
     }
 
-    protection_error: str | None = None
-    try:
-        client.set_trading_stop(
-            symbol=normalized_signal["symbol"],
-            take_profit=take_profit,
-            stop_loss=stop_loss,
-        )
-    except ExchangeError as exc:
-        protection_error = str(exc)
-        trade["status"] = "protection_pending"
-
     journal = create_trade_entry(trade)
     trade["journal_id"] = journal["journal_id"]
+
+    protection_error = _attach_protection_with_retry(
+        client=client,
+        symbol=normalized_signal["symbol"],
+        take_profit=take_profit,
+        stop_loss=stop_loss,
+        journal_id=journal["journal_id"],
+    )
+    if protection_error:
+        close_side = "Sell" if normalized_signal["direction"] == "long" else "Buy"
+        close_error: str | None = None
+        close_result: dict[str, Any] = {}
+        try:
+            close_result = client.close_position_market(
+                symbol=normalized_signal["symbol"],
+                side=close_side,
+                qty=quantity,
+            )
+        except ExchangeError as exc:
+            close_error = str(exc)
+
+        trade.update(
+            {
+                "status": "closed",
+                "result": RESULT_PROTECTION_FAILED,
+                "close_reason": "PROTECTION_FAILED",
+                "closed_at": _utc_now_iso(),
+                "exchange_metadata": {
+                    **trade["exchange_metadata"],
+                    "protection_error": protection_error,
+                    "emergency_close_response": close_result,
+                    "emergency_close_error": close_error,
+                },
+            }
+        )
+        update_trade_entry(
+            journal["journal_id"],
+            {
+                "status": "closed",
+                "result": RESULT_PROTECTION_FAILED,
+                "closed_at": trade["closed_at"],
+                "exchange_metadata": trade["exchange_metadata"],
+            },
+        )
+        append_trade_event(
+            journal["journal_id"],
+            "PROTECTION_FAILED",
+            "Protection failed twice; position was closed immediately.",
+            {"symbol": normalized_signal["symbol"], "error": protection_error, "close_error": close_error},
+        )
+        log_bot_event(
+            "PROTECTION_FAILED",
+            f"Protection failed for {normalized_signal['symbol']}; immediate close requested.",
+            level="error",
+            metadata={
+                "endpoint": "/execute",
+                "affected_module": "execution",
+                "error_code": "PROTECTION_FAILED",
+                "symbol": normalized_signal["symbol"],
+                "error": protection_error,
+                "close_error": close_error,
+            },
+        )
+        with _execution_lock:
+            _closed_trades.append(trade)
+        return {"ok": False, "error": "PROTECTION_FAILED", "trade": trade, "sizing": sizing}
 
     with _execution_lock:
         _active_trades.append(trade)
@@ -115,7 +192,8 @@ def execute_signal(client: BybitClient, signal: dict[str, Any], auto_triggered: 
     return {
         "ok": True,
         "trade": trade,
-        "warning": protection_error,
+        "sizing": sizing,
+        "warning": None,
     }
 
 
@@ -135,6 +213,15 @@ def replace_active_trades(trades: list[dict[str, Any]]) -> None:
         _active_trades.extend(dict(trade) for trade in trades)
         _active_order_ids.clear()
         _active_order_ids.extend(str(trade.get("order_id")) for trade in trades if trade.get("order_id"))
+
+
+def update_active_trade(journal_id: str, updates: dict[str, Any]) -> dict[str, Any] | None:
+    with _execution_lock:
+        trade = next((item for item in _active_trades if item.get("journal_id") == journal_id), None)
+        if trade is None:
+            return None
+        trade.update(updates)
+        return dict(trade)
 
 
 def close_trade(
@@ -180,53 +267,6 @@ def add_closed_trades(trades: list[dict[str, Any]]) -> None:
             _closed_trades.append(dict(trade))
 
 
-def _calculate_position_size(
-    wallet: dict[str, Any],
-    entry: float,
-    stop_loss: float,
-    qty_step: str | None,
-    min_order_qty: str | None,
-    risk_per_trade: float,
-    client: BybitClient,
-) -> str | None:
-    if qty_step is None:
-        return None
-
-    account_balance = _extract_balance(wallet)
-    sl_distance = abs(entry - stop_loss)
-    if not _is_positive_number(account_balance, sl_distance, risk_per_trade):
-        return None
-
-    risk_amount = account_balance * risk_per_trade
-    raw_quantity = risk_amount / sl_distance
-    normalized = client.normalize_quantity(raw_quantity, qty_step)
-
-    try:
-        quantity_value = float(normalized)
-    except ValueError:
-        return None
-
-    if min_order_qty is not None and quantity_value < float(min_order_qty):
-        min_normalized = client.normalize_quantity(float(min_order_qty), qty_step)
-        if float(min_normalized) <= 0:
-            return None
-        return min_normalized
-
-    return normalized if quantity_value > 0 else None
-
-
-def _extract_balance(wallet: dict[str, Any]) -> float | None:
-    for key in ["totalAvailableBalance", "totalWalletBalance", "totalEquity"]:
-        value = wallet.get(key)
-        try:
-            numeric = float(value)
-        except (TypeError, ValueError):
-            continue
-        if isfinite(numeric) and numeric > 0:
-            return numeric
-    return None
-
-
 def _normalize_signal(signal: dict[str, Any]) -> dict[str, Any] | None:
     try:
         direction = str(signal.get("direction", "")).lower()
@@ -244,8 +284,72 @@ def _normalize_signal(signal: dict[str, Any]) -> dict[str, Any] | None:
         return None
 
 
-def _is_positive_number(*values: float | None) -> bool:
-    return all(value is not None and isfinite(value) and value > 0 for value in values)
+def _attach_protection_with_retry(
+    *,
+    client: BybitClient,
+    symbol: str,
+    take_profit: str,
+    stop_loss: str,
+    journal_id: str,
+) -> str | None:
+    last_error: str | None = None
+    for attempt in [1, 2]:
+        try:
+            client.set_trading_stop(symbol=symbol, take_profit=take_profit, stop_loss=stop_loss)
+            append_trade_event(
+                journal_id,
+                "PROTECTION_ATTACHED",
+                "Initial SL/TP protection attached.",
+                {"symbol": symbol, "attempt": attempt, "take_profit": take_profit, "stop_loss": stop_loss},
+            )
+            return None
+        except ExchangeError as exc:
+            last_error = str(exc)
+            append_trade_event(
+                journal_id,
+                "PROTECTION_RETRY" if attempt == 1 else "PROTECTION_FAILED",
+                "Protection attach failed.",
+                {"symbol": symbol, "attempt": attempt, "error": last_error},
+            )
+    return last_error
+
+
+def _build_management_state(entry: float, stop_loss: float, take_profit: float, quantity: str, direction: str) -> dict[str, Any]:
+    risk = abs(entry - stop_loss)
+    qty_value = _to_float(quantity, 0.0)
+    if direction == "long":
+        tp1 = entry + risk
+        tp2 = entry + risk * 2
+        runner_target = entry + risk * 3
+    else:
+        tp1 = entry - risk
+        tp2 = entry - risk * 2
+        runner_target = entry - risk * 3
+
+    return {
+        "tp1": tp1,
+        "tp2": tp2,
+        "strategy_take_profit": take_profit,
+        "runner_target": runner_target,
+        "tp1_fraction": 0.5,
+        "tp2_fraction": 0.25,
+        "runner_fraction": 0.25,
+        "initial_quantity": qty_value,
+        "remaining_quantity": qty_value,
+        "tp1_done": False,
+        "tp2_done": False,
+        "break_even_set": False,
+        "trailing_stop": None,
+        "last_momentum_check": None,
+        "last_state_change": _utc_now_iso(),
+    }
+
+
+def _to_float(value: Any, fallback: float) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return fallback
 
 
 def _utc_now_iso() -> str:

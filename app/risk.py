@@ -5,10 +5,9 @@ from math import isfinite
 from threading import Lock
 from typing import Any
 
+from app.bot_controls import get_risk_settings
 
-RISK_PER_TRADE = 0.01
-MAX_OPEN_TRADES = 3
-MAX_TRADES_PER_DAY = 8
+
 MIN_RISK_REWARD = 2.0
 LOSS_COOLDOWN_MINUTES = 15
 
@@ -43,6 +42,7 @@ def validate_trade(signal: dict[str, Any]) -> dict[str, Any]:
     if risk_reward < MIN_RISK_REWARD:
         return {"allowed": False, "reason": "Risk reward below minimum 2.0"}
 
+    settings = get_risk_settings()
     now = datetime.now(UTC)
     with _risk_lock:
         _reset_daily_state_if_needed(now)
@@ -53,27 +53,32 @@ def validate_trade(signal: dict[str, Any]) -> dict[str, Any]:
         if symbol in _active_symbols:
             return {"allowed": False, "reason": "Symbol already active"}
 
-        if len(_active_symbols) >= MAX_OPEN_TRADES:
+        if len(_active_symbols) >= settings["max_open_trades"]:
             return {"allowed": False, "reason": "Max open trades exceeded"}
 
-        if _trades_today >= MAX_TRADES_PER_DAY:
+        if _trades_today >= settings["max_daily_trades"]:
             return {"allowed": False, "reason": "Max trades per day exceeded"}
 
     return {
         "allowed": True,
         "reason": "",
-        "risk_per_trade": RISK_PER_TRADE,
+        "risk_per_trade": settings["risk_per_trade"],
+        "leverage_cap": settings["leverage_cap"],
+        "exposure_cap": settings["exposure_cap"],
     }
 
 
 def get_risk_state() -> dict[str, Any]:
     now = datetime.now(UTC)
+    settings = get_risk_settings()
     with _risk_lock:
         _reset_daily_state_if_needed(now)
         return {
-            "risk_per_trade": RISK_PER_TRADE,
-            "max_open_trades": MAX_OPEN_TRADES,
-            "max_trades_per_day": MAX_TRADES_PER_DAY,
+            "risk_per_trade": settings["risk_per_trade"],
+            "leverage_cap": settings["leverage_cap"],
+            "exposure_cap": settings["exposure_cap"],
+            "max_open_trades": settings["max_open_trades"],
+            "max_trades_per_day": settings["max_daily_trades"],
             "min_risk_reward": MIN_RISK_REWARD,
             "active_symbols": sorted(_active_symbols),
             "trades_today": _trades_today,

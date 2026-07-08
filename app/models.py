@@ -23,6 +23,11 @@ class BotRuntimeConfig(Base):
     emergency_stop: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     execution_mode: Mapped[str] = mapped_column(String(16), default="demo", nullable=False)
     auto_trading_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    risk_per_trade: Mapped[float] = mapped_column(Float, default=0.01, nullable=False)
+    leverage_cap: Mapped[float] = mapped_column(Float, default=5.0, nullable=False)
+    exposure_cap: Mapped[float] = mapped_column(Float, default=0.30, nullable=False)
+    max_open_trades: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
+    max_daily_trades: Mapped[int] = mapped_column(Integer, default=8, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

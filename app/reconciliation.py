@@ -5,6 +5,7 @@ from typing import Any
 
 from app.execution import SL_REASON_EXCHANGE_CLOSE, SL_REASON_UNKNOWN, close_trade, get_active_trades, replace_active_trades
 from app.exchange import BybitClient
+from app.journal import append_trade_event, update_trade_entry
 from app.risk import release_active_trade
 
 
@@ -26,6 +27,7 @@ def reconcile_state(client: BybitClient) -> dict[str, Any]:
         for order in open_orders
         if order.get("orderId")
     }
+    open_orders_by_symbol = _orders_by_symbol(open_orders)
     positions_by_symbol = {
         str(position.get("symbol")): position
         for position in positions
@@ -55,6 +57,7 @@ def reconcile_state(client: BybitClient) -> dict[str, Any]:
             closed_symbols.append(symbol)
             closed_trades.append(closed_trade)
             updates.append({"symbol": symbol, "status": "closed", "reason": close_result.get("close_reason", "Position not found on exchange")})
+            _persist_reconciliation_event(journal_id, "RECONCILED_CLOSED", "Exchange no longer reports this position.", close_result)
             continue
 
         if position is None and open_order is not None:
@@ -69,13 +72,16 @@ def reconcile_state(client: BybitClient) -> dict[str, Any]:
                 reconciled["status"] = "pending"
             updated_trades.append(reconciled)
             updates.append({"symbol": symbol, "status": reconciled["status"], "reason": "Position pending; kept from open order"})
+            _persist_reconciliation_event(journal_id, "RECONCILED_PENDING", "Open order exists but position is not open yet.", reconciled)
             continue
 
         reconciled = dict(trade)
         reconciled["quantity"] = position.get("size", trade.get("quantity"))
+        reconciled["remaining_quantity"] = position.get("size", trade.get("remaining_quantity", trade.get("quantity")))
         reconciled["entry"] = _coerce_float(position.get("avgPrice"), trade.get("entry"))
         reconciled["status"] = "active"
         reconciled["mark_price"] = _coerce_float(position.get("markPrice"), ticker_prices.get(symbol))
+        reconciled["sl_tp_orders"] = open_orders_by_symbol.get(symbol, [])
 
         if open_order is not None:
             order_qty = _coerce_float(open_order.get("qty"), None)
@@ -89,6 +95,7 @@ def reconcile_state(client: BybitClient) -> dict[str, Any]:
             updates.append({"symbol": symbol, "status": "active", "reason": "Open order not found; position kept as exchange truth"})
 
         updated_trades.append(reconciled)
+        _persist_reconciliation_event(journal_id, "RECONCILED_ACTIVE", "Local trade synchronized from exchange position and orders.", reconciled)
 
     replace_active_trades(updated_trades)
 
@@ -163,3 +170,19 @@ def _ticker_price_map(tickers: list[dict[str, Any]]) -> dict[str, float]:
         except (TypeError, ValueError):
             continue
     return prices
+
+
+def _orders_by_symbol(open_orders: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for order in open_orders:
+        grouped.setdefault(str(order.get("symbol", "")).upper(), []).append(order)
+    return grouped
+
+
+def _persist_reconciliation_event(journal_id: str, event_type: str, message: str, payload: dict[str, Any]) -> None:
+    if not journal_id:
+        return
+    status = payload.get("status")
+    if status:
+        update_trade_entry(journal_id, {"status": status})
+    append_trade_event(journal_id, event_type, message, payload)

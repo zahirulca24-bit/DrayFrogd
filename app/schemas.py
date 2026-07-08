@@ -38,6 +38,22 @@ class ExecuteSignalRequest(BaseModel):
     status: str
 
 
+class PositionSizeRequest(BaseModel):
+    symbol: str
+    direction: str
+    entry: float
+    stop_loss: float
+    take_profit: float
+    risk_reward: float
+    detected_at: str | None = None
+    status: str = "active"
+
+
 class BotConfigRequest(BaseModel):
     execution_mode: str | None = None
     auto_trading_enabled: bool | None = None
+    risk_per_trade: float | None = None
+    leverage_cap: float | None = None
+    exposure_cap: float | None = None
+    max_open_trades: int | None = None
+    max_daily_trades: int | None = None

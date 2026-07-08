@@ -10,6 +10,7 @@ import {
   MarketOverviewResponse,
   MetricsResponse,
   OrderBookResponse,
+  PositionSizeResponse,
   PortfolioSummary,
   RiskValidationResponse,
   RiskStateResponse,
@@ -222,6 +223,8 @@ export const api = {
     request<OrderBookResponse>(`/market/orderbook?symbol=${encodeURIComponent(symbol)}&limit=${limit}`, {}, token),
   validateRisk: (token: string, payload: RiskPayload) =>
     request<RiskValidationResponse>("/risk/validate", { method: "POST", body: JSON.stringify(payload) }, token),
+  calculatePositionSize: (token: string, payload: RiskPayload) =>
+    request<PositionSizeResponse>("/position-size/calculate", { method: "POST", body: JSON.stringify(payload) }, token),
   executeTrade: (token: string, payload: RiskPayload) =>
     request("/execute", { method: "POST", body: JSON.stringify(payload) }, token),
   getActiveTrades: async (token: string) => {
@@ -238,7 +241,15 @@ export const api = {
   getBotStatus: (token: string) => request<BotControlState>("/bot/status", {}, token),
   startBot: (token: string) => request<BotControlState>("/bot/start", { method: "POST" }, token),
   stopBot: (token: string) => request<BotControlState>("/bot/stop", { method: "POST" }, token),
-  updateBotConfig: (token: string, payload: { execution_mode?: "demo" | "live"; auto_trading_enabled?: boolean }) =>
+  updateBotConfig: (token: string, payload: {
+    execution_mode?: "demo" | "live";
+    auto_trading_enabled?: boolean;
+    risk_per_trade?: number;
+    leverage_cap?: number;
+    exposure_cap?: number;
+    max_open_trades?: number;
+    max_daily_trades?: number;
+  }) =>
     request<BotControlState>("/bot/config", { method: "POST", body: JSON.stringify(payload) }, token),
   emergencyStop: (token: string) => request<BotControlState>("/bot/emergency-stop", { method: "POST" }, token),
   resumeBot: (token: string) => request<BotControlState>("/bot/resume", { method: "POST" }, token),

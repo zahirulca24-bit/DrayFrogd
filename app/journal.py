@@ -61,7 +61,7 @@ def update_trade_entry(journal_id: str, updates: dict[str, Any]) -> dict[str, An
 
         for key, value in updates.items():
             if hasattr(row, key):
-                setattr(row, key, value)
+                setattr(row, key, json.dumps(value, separators=(",", ":")) if key == "exchange_metadata" and isinstance(value, dict) else value)
         db.commit()
 
         payload = serialize_trade_entry(row)
@@ -70,6 +70,53 @@ def update_trade_entry(journal_id: str, updates: dict[str, Any]) -> dict[str, An
 
     if payload is not None:
         _send_supabase("trade_journal", payload, upsert=True)
+    return payload
+
+
+def append_trade_event(journal_id: str, event_type: str, message: str, metadata: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    db = SessionLocal()
+    payload: dict[str, Any] | None = None
+    try:
+        row = db.query(TradeJournal).filter(TradeJournal.journal_id == journal_id).first()
+        if row is None:
+            return None
+
+        exchange_metadata: dict[str, Any] = {}
+        if row.exchange_metadata:
+            try:
+                exchange_metadata = json.loads(row.exchange_metadata)
+            except json.JSONDecodeError:
+                exchange_metadata = {}
+
+        events = list(exchange_metadata.get("trade_events") or [])
+        events.append(
+            {
+                "event_type": event_type,
+                "message": message,
+                "metadata": metadata or {},
+                "created_at": _utc_now_iso(),
+            }
+        )
+        exchange_metadata["trade_events"] = events
+        row.exchange_metadata = json.dumps(exchange_metadata, separators=(",", ":"))
+        db.commit()
+        payload = serialize_trade_entry(row)
+    finally:
+        db.close()
+
+    if payload is not None:
+        _send_supabase("trade_journal", payload, upsert=True)
+        log_bot_event(
+            event_type,
+            message,
+            level="warning" if event_type.lower().endswith("failed") else "info",
+            metadata={
+                "journal_id": journal_id,
+                "affected_module": "trade_management",
+                "endpoint": "/trade-management/run",
+                **(metadata or {}),
+            },
+        )
     return payload
 
 

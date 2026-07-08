@@ -9,6 +9,7 @@ from app.exchange import get_exchange_client
 from app.execution import execute_signal
 from app.journal import log_bot_event
 from app.scanner import get_active_signals, run_scan
+from app.trade_management import manage_open_trades
 
 
 logger = logging.getLogger(__name__)
@@ -17,6 +18,22 @@ logger = logging.getLogger(__name__)
 async def auto_trading_loop() -> None:
     while True:
         try:
+            client = get_exchange_client(get_execution_mode())
+            management_result = await asyncio.to_thread(manage_open_trades, client)
+            if not management_result.get("ok"):
+                log_bot_event(
+                    "trade_management_failed",
+                    management_result.get("error", "Trade management failed"),
+                    level="warning",
+                    metadata={
+                        "endpoint": "background:trade_management",
+                        "affected_module": "trade_management",
+                        "error_code": "TRADE_MANAGEMENT_FAILED",
+                        "retry_count": 1,
+                        "result": management_result,
+                    },
+                )
+
             allowed, reason = can_execute()
             if not allowed:
                 if reason:
@@ -24,7 +41,6 @@ async def auto_trading_loop() -> None:
                 await asyncio.sleep(settings.bot_scan_interval_seconds)
                 continue
 
-            client = get_exchange_client(get_execution_mode())
             result = await asyncio.to_thread(run_scan, client)
             if not result.get("ok"):
                 log_bot_event(

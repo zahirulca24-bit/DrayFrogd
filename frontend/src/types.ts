@@ -189,6 +189,11 @@ export interface BotControlState {
   execution_mode?: 'demo' | 'live';
   auto_trading_enabled?: boolean;
   live_mode_available?: boolean;
+  risk_per_trade?: number;
+  leverage_cap?: number;
+  exposure_cap?: number;
+  max_open_trades?: number;
+  max_daily_trades?: number;
   readiness?: SystemReadiness;
 }
 
@@ -357,16 +362,44 @@ export interface RiskValidationResponse {
   allowed: boolean;
   reason: string;
   risk_per_trade?: number;
+  leverage_cap?: number;
+  exposure_cap?: number;
 }
 
 export interface RiskStateResponse {
   risk_per_trade: number;
+  leverage_cap: number;
+  exposure_cap: number;
   max_open_trades: number;
   max_trades_per_day: number;
   min_risk_reward: number;
   active_symbols: string[];
   trades_today: number;
   cooldown_until: string | null;
+}
+
+export interface PositionSizeResponse {
+  allowed: boolean;
+  reason: string;
+  quantity: string | null;
+  quantity_value?: number;
+  entry?: number;
+  stop_loss?: number;
+  sl_distance?: number;
+  risk_percent?: number;
+  risk_amount?: number;
+  target_risk_amount?: number;
+  notional?: number;
+  required_margin?: number;
+  equity?: number;
+  available_balance?: number;
+  leverage_cap?: number;
+  exposure_cap?: number;
+  current_exposure?: number;
+  max_allowed_exposure?: number;
+  min_notional?: number;
+  qty_step?: string;
+  tick_size?: string;
 }
 
 export interface JournalTradeEntry {
