@@ -3,15 +3,9 @@ import { api } from "../api";
 import {
   AccountResponse,
   BotControlState,
-  ExchangeStatusResponse,
   ExecutableSignal,
   MarketCandle,
   MarketTicker,
-  MetricsResponse,
-  OrderBookLevel,
-  PositionSizeResponse,
-  PortfolioSummary,
-  RiskValidationResponse,
   SystemReadiness,
   Trade,
   TradeHistoryEntry,
@@ -34,10 +28,7 @@ interface DashboardViewProps {
   authToken: string | null;
   readiness: SystemReadiness;
   botStatus: BotControlState;
-  exchangeStatus: ExchangeStatusResponse;
   account: AccountResponse;
-  metrics: MetricsResponse;
-  portfolio: PortfolioSummary;
   activeTrades: Trade[];
   signals: ExecutableSignal[];
   tradeHistory: TradeHistoryEntry[];
@@ -45,15 +36,6 @@ interface DashboardViewProps {
   isStale?: boolean;
   onRefreshAll: () => void;
 }
-
-type ManualTradeState = {
-  symbol: string;
-  side: "Buy" | "Sell";
-  orderType: "Market" | "Limit";
-  limitPrice: string;
-  stopLoss: string;
-  takeProfit: string;
-};
 
 const BDT_DATE_TIME = new Intl.DateTimeFormat("en-BD", {
   timeZone: "Asia/Dhaka",
@@ -64,14 +46,6 @@ const BDT_DATE_TIME = new Intl.DateTimeFormat("en-BD", {
   minute: "2-digit",
   second: "2-digit",
   hour12: true,
-});
-
-const BDT_TIME = new Intl.DateTimeFormat("en-BD", {
-  timeZone: "Asia/Dhaka",
-  hour: "2-digit",
-  minute: "2-digit",
-  second: "2-digit",
-  hour12: false,
 });
 
 function numberValue(value: unknown) {
@@ -96,13 +70,6 @@ function formatBdtDateTime(value?: string | Date | null) {
     return "N/A";
   }
   return BDT_DATE_TIME.format(new Date(value));
-}
-
-function formatBdtTime(value?: string | Date | null) {
-  if (!value) {
-    return "--:--:--";
-  }
-  return BDT_TIME.format(new Date(value));
 }
 
 function resolveRealizedPnl(wallet: Record<string, unknown>, tradeHistory: TradeHistoryEntry[]) {
@@ -132,23 +99,11 @@ function resolveExposure(account: AccountResponse) {
   }, 0);
 }
 
-function buildRiskReward(entry: number, stopLoss: number, takeProfit: number) {
-  const risk = Math.abs(entry - stopLoss);
-  const reward = Math.abs(takeProfit - entry);
-  if (risk <= 0 || reward <= 0) {
-    return 0;
-  }
-  return reward / risk;
-}
-
 export default function DashboardView({
   authToken,
   readiness,
   botStatus,
-  exchangeStatus,
   account,
-  metrics,
-  portfolio,
   activeTrades,
   signals,
   tradeHistory,
@@ -172,29 +127,13 @@ export default function DashboardView({
     server_time: null,
   });
   const [candles, setCandles] = useState<MarketCandle[]>([]);
-  const [orderBook, setOrderBook] = useState<{ bids: OrderBookLevel[]; asks: OrderBookLevel[] }>({ bids: [], asks: [] });
   const [marketError, setMarketError] = useState<string | null>(null);
   const [marketLoading, setMarketLoading] = useState(false);
-  const [manualLoading, setManualLoading] = useState(false);
-  const [manualResult, setManualResult] = useState<RiskValidationResponse | { ok?: boolean; error?: string; warning?: string } | null>(null);
-  const [manualSizing, setManualSizing] = useState<PositionSizeResponse | null>(null);
-  const [manualTrade, setManualTrade] = useState<ManualTradeState>({
-    symbol: "BTCUSDT",
-    side: "Buy",
-    orderType: "Market",
-    limitPrice: "",
-    stopLoss: "",
-    takeProfit: "",
-  });
 
   const selectedTicker = useMemo(() => {
     const merged = [...overview.watchlist, ...overview.top_gainers];
     return merged.find((item) => item.symbol === selectedSymbol) || null;
   }, [overview, selectedSymbol]);
-
-  useEffect(() => {
-    setManualTrade((current) => ({ ...current, symbol: selectedSymbol }));
-  }, [selectedSymbol]);
 
   useEffect(() => {
     if (!authToken) {
@@ -243,10 +182,7 @@ export default function DashboardView({
     const loadMarketPanels = async () => {
       setMarketLoading(true);
       try {
-        const [candleResponse, orderBookResponse] = await Promise.all([
-          api.getMarketCandles(authToken, selectedSymbol, chartInterval, 120),
-          api.getOrderBook(authToken, selectedSymbol, 18),
-        ]);
+        const candleResponse = await api.getMarketCandles(authToken, selectedSymbol, chartInterval, 120);
         if (!cancelled) {
           setCandles((candleResponse.candles || []).map((item) => ({
             ...item,
@@ -255,8 +191,7 @@ export default function DashboardView({
             low: numberValue(item.low),
             close: numberValue(item.close),
           })));
-          setOrderBook(orderBookResponse.orderbook || { bids: [], asks: [] });
-          setMarketError(candleResponse.error || orderBookResponse.error || null);
+          setMarketError(candleResponse.error || null);
         }
       } catch (error: any) {
         if (!cancelled) {
@@ -278,64 +213,9 @@ export default function DashboardView({
     };
   }, [authToken, chartInterval, selectedSymbol]);
 
-  const submitRiskValidation = async (executeAfterValidation: boolean) => {
-    if (!authToken) {
-      return;
-    }
-
-    const entry = manualTrade.orderType === "Limit" ? numberValue(manualTrade.limitPrice) : numberValue(selectedTicker?.lastPrice);
-    const stopLoss = numberValue(manualTrade.stopLoss);
-    const takeProfit = numberValue(manualTrade.takeProfit);
-    const riskReward = buildRiskReward(entry, stopLoss, takeProfit);
-    const direction = manualTrade.side === "Buy" ? "long" : "short";
-
-    setManualLoading(true);
-    setManualResult(null);
-    setManualSizing(null);
-
-    try {
-      const payload = {
-        symbol: manualTrade.symbol,
-        direction,
-        entry,
-        stop_loss: stopLoss,
-        take_profit: takeProfit,
-        risk_reward: riskReward,
-        detected_at: new Date().toISOString(),
-        status: "active",
-      };
-
-      const validation = await api.validateRisk(authToken, payload);
-      if (!validation.allowed) {
-        setManualResult(validation);
-        return;
-      }
-
-      const sizing = await api.calculatePositionSize(authToken, payload);
-      setManualSizing(sizing);
-      if (!executeAfterValidation || !sizing.allowed) {
-        setManualResult(sizing.allowed ? validation : { allowed: false, reason: sizing.reason });
-        return;
-      }
-
-      if (manualTrade.orderType === "Limit") {
-        setManualResult({ allowed: false, reason: "Limit execution is not available in the backend yet" });
-        return;
-      }
-
-      const execution = await api.executeTrade(authToken, payload);
-      setManualResult({ ok: true, ...(execution as Record<string, unknown>) });
-      onRefreshAll();
-    } catch (error: any) {
-      setManualResult({ ok: false, error: error?.message || "Manual trade action failed" });
-    } finally {
-      setManualLoading(false);
-    }
-  };
-
   return (
-    <div className="space-y-6" id="dashboard-view-root">
-      <div className="bg-bento-card-sec/40 border border-slate-800/80 rounded-2xl p-6 flex flex-col xl:flex-row justify-between items-start xl:items-center gap-4 shadow-lg backdrop-blur-md" id="dashboard-banner">
+    <div className="space-y-4" id="dashboard-view-root">
+      <div className="bg-bento-card-sec/40 border border-slate-800/80 rounded-2xl p-5 flex flex-col xl:flex-row justify-between items-start xl:items-center gap-4 shadow-lg backdrop-blur-md" id="dashboard-banner">
         <div>
           <h1 className="text-xl font-bold text-white tracking-tight font-sans flex items-center gap-3">
             DayFrogd-ScalpingEngin
@@ -361,7 +241,7 @@ export default function DashboardView({
         </div>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4" id="dashboard-kpi-grid">
+      <div className="grid grid-cols-2 xl:grid-cols-4 gap-3" id="dashboard-kpi-grid">
         <KpiCard label="Total Equity" value={formatMoney(totalEquity)} icon={<Wallet className="w-4 h-4" />} tone="neutral" />
         <KpiCard label="Available Balance" value={formatMoney(availableBalance)} icon={<Coins className="w-4 h-4" />} tone="good" />
         <KpiCard label="Realized PnL" value={formatMoney(realizedPnl)} icon={realizedPnl >= 0 ? <ArrowUpRight className="w-4 h-4" /> : <ArrowDownRight className="w-4 h-4" />} tone={realizedPnl >= 0 ? "good" : "bad"} />
@@ -378,9 +258,8 @@ export default function DashboardView({
         </div>
       )}
 
-      <div className="grid grid-cols-1 xl:grid-cols-[1.8fr_1fr] gap-6" id="dashboard-main-panels">
-        <div className="space-y-6">
-          <div className="bg-bento-card border border-slate-800 rounded-2xl p-6 shadow-md">
+      <div className="space-y-4" id="dashboard-main-panels">
+          <div className="bg-bento-card border border-slate-800 rounded-2xl p-5 shadow-md">
             <div className="flex flex-col lg:flex-row justify-between gap-4 mb-5">
               <div>
                 <h2 className="text-sm font-semibold text-white tracking-tight font-sans">Market Structure</h2>
@@ -405,10 +284,10 @@ export default function DashboardView({
             <CandlesPanel candles={candles} loading={marketLoading} symbol={selectedSymbol} />
           </div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
             <TickerTable
-              title="Top 20 Gainers"
-              rows={overview.top_gainers}
+              title="Top 10 Gainers"
+              rows={overview.top_gainers.slice(0, 10)}
               selectedSymbol={selectedSymbol}
               onSelectSymbol={setSelectedSymbol}
             />
@@ -419,146 +298,6 @@ export default function DashboardView({
               onSelectSymbol={setSelectedSymbol}
             />
           </div>
-        </div>
-
-        <div className="space-y-6">
-          <div className="bg-bento-card border border-slate-800 rounded-2xl p-6 shadow-md">
-            <div className="flex items-center justify-between mb-5">
-              <div>
-                <h2 className="text-sm font-semibold text-white tracking-tight font-sans">Live Order Book</h2>
-                <p className="text-xs text-slate-500 mt-1">{selectedSymbol} depth snapshot via backend relay.</p>
-              </div>
-              <span className="text-[10px] font-mono text-slate-500">BDT {formatBdtTime(overview.server_time || lastSync || undefined)}</span>
-            </div>
-            <OrderBookPanel asks={orderBook.asks} bids={orderBook.bids} />
-          </div>
-
-          <div className="bg-bento-card border border-slate-800 rounded-2xl p-6 shadow-md">
-            <div className="flex items-center justify-between mb-5">
-              <div>
-                <h2 className="text-sm font-semibold text-white tracking-tight font-sans">Manual Trade</h2>
-                <p className="text-xs text-slate-500 mt-1">Quantity is calculated only by the backend position sizing engine.</p>
-              </div>
-              <button
-                onClick={onRefreshAll}
-                className="px-3 py-1.5 rounded-lg border border-slate-800 bg-[#0A0B0E] text-[10px] font-mono text-slate-400 hover:text-white cursor-pointer"
-              >
-                Refresh
-              </button>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <Field label="Symbol">
-                <input
-                  value={manualTrade.symbol}
-                  onChange={(event) => {
-                    const symbol = event.target.value.toUpperCase();
-                    setManualTrade((current) => ({ ...current, symbol }));
-                    setSelectedSymbol(symbol);
-                  }}
-                  className="dashboard-input"
-                />
-              </Field>
-              <Field label="Side">
-                <select
-                  value={manualTrade.side}
-                  onChange={(event) => setManualTrade((current) => ({ ...current, side: event.target.value as "Buy" | "Sell" }))}
-                  className="dashboard-input"
-                >
-                  <option>Buy</option>
-                  <option>Sell</option>
-                </select>
-              </Field>
-              <Field label="Order Type">
-                <select
-                  value={manualTrade.orderType}
-                  onChange={(event) => setManualTrade((current) => ({ ...current, orderType: event.target.value as "Market" | "Limit" }))}
-                  className="dashboard-input"
-                >
-                  <option>Market</option>
-                  <option>Limit</option>
-                </select>
-              </Field>
-              <Field label={manualTrade.orderType === "Limit" ? "Limit Price" : "Reference Price"}>
-                <input
-                  value={manualTrade.orderType === "Limit" ? manualTrade.limitPrice : String(selectedTicker?.lastPrice || "")}
-                  onChange={(event) => setManualTrade((current) => ({ ...current, limitPrice: event.target.value }))}
-                  disabled={manualTrade.orderType === "Market"}
-                  className="dashboard-input disabled:opacity-50"
-                />
-              </Field>
-              <Field label="Stop Loss">
-                <input
-                  value={manualTrade.stopLoss}
-                  onChange={(event) => setManualTrade((current) => ({ ...current, stopLoss: event.target.value }))}
-                  className="dashboard-input"
-                />
-              </Field>
-              <Field label="Take Profit">
-                <input
-                  value={manualTrade.takeProfit}
-                  onChange={(event) => setManualTrade((current) => ({ ...current, takeProfit: event.target.value }))}
-                  className="dashboard-input"
-                />
-              </Field>
-            </div>
-
-            <div className="mt-4 p-3 rounded-xl bg-[#0A0B0E] border border-slate-800 text-[10px] font-mono text-slate-500">
-              Selected last price: <span className="text-slate-200">{selectedTicker ? formatMoney(selectedTicker.lastPrice) : "N/A"}</span> | 24h change:{" "}
-              <span className={selectedTicker && selectedTicker.price24hPcnt >= 0 ? "text-emerald-400" : "text-rose-400"}>
-                {selectedTicker ? formatPercent(selectedTicker.price24hPcnt) : "N/A"}
-              </span>
-            </div>
-
-            <div className="mt-4 grid grid-cols-2 gap-3">
-              <SizingMetric label="Backend Quantity" value={manualSizing?.quantity || "Calculate first"} good={manualSizing?.allowed} />
-              <SizingMetric label="Risk Amount" value={manualSizing?.risk_amount !== undefined ? formatMoney(manualSizing.risk_amount) : "N/A"} good={manualSizing?.allowed} />
-              <SizingMetric label="Notional" value={manualSizing?.notional !== undefined ? formatMoney(manualSizing.notional) : "N/A"} />
-              <SizingMetric label="Required Margin" value={manualSizing?.required_margin !== undefined ? formatMoney(manualSizing.required_margin) : "N/A"} />
-              <SizingMetric label="Equity" value={manualSizing?.equity !== undefined ? formatMoney(manualSizing.equity) : "N/A"} />
-              <SizingMetric label="Leverage Cap" value={manualSizing?.leverage_cap !== undefined ? `${manualSizing.leverage_cap}x` : "N/A"} />
-            </div>
-
-            <div className="mt-4 flex gap-3">
-              <button
-                onClick={() => submitRiskValidation(false)}
-                disabled={manualLoading}
-                className="flex-1 px-4 py-2 rounded-xl border border-amber-500/20 bg-amber-500/10 text-amber-300 text-xs font-semibold cursor-pointer disabled:opacity-50"
-              >
-                {manualLoading ? "Checking..." : "Calculate Size"}
-              </button>
-              <button
-                onClick={() => submitRiskValidation(true)}
-                disabled={manualLoading || manualTrade.orderType === "Limit"}
-                className="flex-1 px-4 py-2 rounded-xl border border-emerald-500/20 bg-emerald-500/10 text-emerald-300 text-xs font-semibold cursor-pointer disabled:opacity-50"
-              >
-                {manualLoading ? "Processing..." : "Place Market Order"}
-              </button>
-            </div>
-
-            {manualTrade.orderType === "Limit" && (
-              <p className="mt-3 text-[10px] font-mono text-slate-500">Limit order execution is not exposed by the backend yet. Risk validation still works.</p>
-            )}
-
-            {manualResult && (
-              <div className={`mt-4 p-4 rounded-xl border text-xs font-mono ${
-                "allowed" in manualResult
-                  ? manualResult.allowed
-                    ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-300"
-                    : "bg-amber-500/10 border-amber-500/20 text-amber-300"
-                  : manualResult.ok
-                  ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-300"
-                  : "bg-rose-500/10 border-rose-500/20 text-rose-300"
-              }`}>
-                {"allowed" in manualResult ? (
-                  <span>{manualResult.allowed ? "Risk and sizing validation passed." : manualResult.reason || "Risk validation failed."}</span>
-                ) : (
-                  <span>{manualResult.error || manualResult.warning || "Trade request completed."}</span>
-                )}
-              </div>
-            )}
-          </div>
-        </div>
       </div>
     </div>
   );
@@ -607,12 +346,12 @@ function TickerTable({
   onSelectSymbol: (symbol: string) => void;
 }) {
   return (
-    <div className="bg-bento-card border border-slate-800 rounded-2xl p-6 shadow-md">
+    <div className="bg-bento-card border border-slate-800 rounded-2xl p-5 shadow-md">
       <div className="flex items-center justify-between mb-5">
         <h2 className="text-sm font-semibold text-white tracking-tight font-sans">{title}</h2>
         <span className="text-[10px] font-mono text-slate-500">{rows.length} symbols</span>
       </div>
-      <div className="space-y-2 max-h-[420px] overflow-y-auto pr-1">
+      <div className="space-y-2 max-h-[280px] overflow-y-auto pr-1">
         {rows.map((row) => (
           <button
             key={`${title}-${row.symbol}`}
@@ -639,41 +378,9 @@ function TickerTable({
   );
 }
 
-function OrderBookPanel({ asks, bids }: { asks: OrderBookLevel[]; bids: OrderBookLevel[] }) {
-  const askRows = [...asks].slice(0, 10).reverse();
-  const bidRows = [...bids].slice(0, 10);
-  return (
-    <div className="grid grid-cols-2 gap-3">
-      <div className="space-y-2">
-        <div className="text-[10px] font-mono text-rose-400 uppercase tracking-wider">Asks</div>
-        {askRows.map((row, index) => (
-          <DepthRow key={`ask-${index}`} level={row} side="ask" />
-        ))}
-      </div>
-      <div className="space-y-2">
-        <div className="text-[10px] font-mono text-emerald-400 uppercase tracking-wider">Bids</div>
-        {bidRows.map((row, index) => (
-          <DepthRow key={`bid-${index}`} level={row} side="bid" />
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function DepthRow({ level, side }: { level: OrderBookLevel; side: "bid" | "ask" }) {
-  return (
-    <div className={`grid grid-cols-2 gap-2 text-[10px] font-mono px-3 py-2 rounded-lg border ${
-      side === "bid" ? "bg-emerald-500/8 border-emerald-500/10 text-emerald-300" : "bg-rose-500/8 border-rose-500/10 text-rose-300"
-    }`}>
-      <span>{numberValue(level.price).toFixed(4)}</span>
-      <span className="text-right">{numberValue(level.size).toFixed(4)}</span>
-    </div>
-  );
-}
-
 function CandlesPanel({ candles, loading, symbol }: { candles: MarketCandle[]; loading: boolean; symbol: string }) {
   const width = 920;
-  const height = 340;
+  const height = 260;
   const paddingX = 16;
   const paddingTop = 20;
   const paddingBottom = 32;
@@ -751,26 +458,6 @@ function CandlesPanel({ candles, loading, symbol }: { candles: MarketCandle[]; l
           ))}
         </svg>
         {candles.length === 0 && <div className="py-16 text-center text-xs font-mono text-slate-500">No backend candles available for this symbol yet.</div>}
-      </div>
-    </div>
-  );
-}
-
-function Field({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <label className="space-y-2 block">
-      <span className="text-[10px] font-mono uppercase tracking-wider text-slate-500">{label}</span>
-      {children}
-    </label>
-  );
-}
-
-function SizingMetric({ label, value, good }: { label: string; value: string; good?: boolean }) {
-  return (
-    <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-3">
-      <div className="text-[10px] font-mono uppercase tracking-wider text-slate-500">{label}</div>
-      <div className={`mt-2 text-xs font-semibold ${good === undefined ? "text-white" : good ? "text-emerald-300" : "text-amber-300"}`}>
-        {value}
       </div>
     </div>
   );
