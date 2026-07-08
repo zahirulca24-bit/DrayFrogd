@@ -401,9 +401,13 @@ function CandlesPanel({ candles, loading, symbol }: { candles: MarketCandle[]; l
   const paddingBottom = 32;
   const plotHeight = height - paddingTop - paddingBottom;
   const plotWidth = width - paddingX * 2;
-
-  const high = Math.max(...candles.map((candle) => candle.high), 1);
-  const low = Math.min(...candles.map((candle) => candle.low), 0);
+  const candleHighs = candles.map((candle) => candle.high);
+  const candleLows = candles.map((candle) => candle.low);
+  const rawHigh = candleHighs.length > 0 ? Math.max(...candleHighs) : 1;
+  const rawLow = candleLows.length > 0 ? Math.min(...candleLows) : 0;
+  const pricePadding = Math.max((rawHigh - rawLow) * 0.12, 1);
+  const high = rawHigh + pricePadding;
+  const low = Math.max(rawLow - pricePadding, 0);
   const range = Math.max(high - low, 1);
   const candleWidth = candles.length > 0 ? Math.max(plotWidth / candles.length - 2, 2) : 4;
 
