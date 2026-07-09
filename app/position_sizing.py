@@ -86,9 +86,27 @@ def calculate_position_size(
         if notional < min_notional:
             return _reject("Minimum notional cannot be satisfied with symbol precision")
 
-    required_margin = notional / leverage_cap
-    if required_margin > available_balance:
-        return _reject("Required margin exceeds available balance")
+    margin_buffer = available_balance * 0.95
+    max_notional_by_margin = margin_buffer * leverage_cap
+
+    if notional > max_notional_by_margin:
+        capped_qty = max_notional_by_margin / entry
+        normalized_quantity = client.normalize_quantity(capped_qty, str(qty_step))
+        quantity = _positive_float(normalized_quantity)
+
+        if quantity is None:
+            return _reject("Available balance is too low after margin safety buffer")
+
+        notional = quantity * entry
+        required_margin = notional / leverage_cap
+
+        if min_order_qty is not None and quantity < min_order_qty:
+            return _reject("Available balance cannot satisfy minimum order quantity")
+
+        if notional < min_notional:
+            return _reject("Available balance cannot satisfy minimum notional")
+    else:
+        required_margin = notional / leverage_cap
 
     existing_exposure = _current_exposure(active_trades, positions)
     max_allowed_exposure = equity * exposure_cap
