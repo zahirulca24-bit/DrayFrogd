@@ -42,6 +42,15 @@ function formatPercent(value: number) {
   return `${value.toFixed(2)}%`;
 }
 
+function formatCompactMoney(value: number) {
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    notation: "compact",
+    maximumFractionDigits: 2,
+  }).format(value);
+}
+
 function isTodayInBdt(value?: string | null) {
   if (!value) {
     return false;
@@ -76,6 +85,7 @@ export default function ActiveTrades({ authToken, trades, tradeHistory, account,
   const todaysTpHit = todayClosedTrades.filter((trade) => trade.result === "PROFIT").length;
   const todaysRealized = todayClosedTrades.reduce((sum, trade) => sum + numberValue(trade.pnl), 0);
   const todaysUnrealized = (account.positions.data || []).reduce((sum, position) => sum + numberValue(position.unrealisedPnl), 0);
+  const totalExposure = trades.reduce((sum, trade) => sum + Math.abs(numberValue(trade.margin) || numberValue(trade.entryPrice) * numberValue(trade.size)), 0);
 
   useEffect(() => {
     if (!selectedTrade && (trades.length > 0 || tradeHistory.length > 0)) {
@@ -168,40 +178,95 @@ export default function ActiveTrades({ authToken, trades, tradeHistory, account,
         </div>
       )}
 
-      <div className="grid grid-cols-1 xl:grid-cols-[0.6fr_0.4fr] gap-6">
-        <div className="bg-bento-card border border-slate-800 rounded-2xl p-6 shadow-md">
-          <div className="flex items-center justify-between mb-5">
-            <div>
-              <h3 className="text-sm font-semibold text-white tracking-tight font-sans">Trade Cards</h3>
-              <p className="text-xs text-slate-500 mt-1">Open positions first, then today's most recent closed trades.</p>
+      <div className="grid grid-cols-1 xl:grid-cols-[0.64fr_0.36fr] gap-6">
+        <div className="bg-bento-card border border-slate-800 rounded-2xl overflow-hidden shadow-md">
+          <div className="flex items-center justify-between gap-4 border-b border-slate-800 px-5 py-4">
+            <div className="flex items-center gap-3">
+              <h3 className="text-sm font-semibold text-white tracking-tight font-sans uppercase">Active Portfolio Positions</h3>
+              <span className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-2 py-1 text-[10px] font-mono text-emerald-300">Live Streams</span>
             </div>
-            <span className="text-[10px] font-mono text-slate-500">{trades.length + todayClosedTrades.length} rows</span>
+            <div className="text-right text-[10px] font-mono text-slate-400">
+              <div>Total Exposure: <span className="text-white">{formatMoney(totalExposure)}</span></div>
+            </div>
           </div>
 
-          <div className="space-y-3 max-h-[980px] overflow-y-auto pr-1">
-            {trades.map((trade) => (
-              <TradeCard
-                key={trade.id}
-                trade={trade}
-                active={selectedTrade?.id === trade.id}
-                onSelect={() => setSelectedTradeId(trade.id)}
-              />
-            ))}
-
-            {todayClosedTrades.map((trade) => (
-              <TradeCard
-                key={`closed-${trade.id}`}
-                trade={trade}
-                active={selectedTrade?.id === trade.id}
-                onSelect={() => setSelectedTradeId(trade.id)}
-                closed
-              />
-            ))}
-
-            {trades.length === 0 && todayClosedTrades.length === 0 && (
-              <div className="py-8 text-center text-slate-500 font-mono text-xs">No active or today-closed trades returned by the backend.</div>
-            )}
-          </div>
+          {trades.length > 0 ? (
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[980px] border-collapse whitespace-nowrap">
+                <thead>
+                  <tr className="border-b border-slate-800 bg-[#111318] text-[10px] font-mono uppercase tracking-wider text-sky-200/80">
+                    <th className="px-4 py-4 text-left">Market Symbol</th>
+                    <th className="px-4 py-4 text-left">Direction</th>
+                    <th className="px-4 py-4 text-center">Margin / Exposure</th>
+                    <th className="px-4 py-4 text-center">Entry / Mark Price</th>
+                    <th className="px-4 py-4 text-center">Stop / Profit Targets</th>
+                    <th className="px-4 py-4 text-center">Floating PnL ($ / %)</th>
+                    <th className="px-4 py-4 text-right">Action Executions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800/80 text-sm">
+                  {trades.map((trade) => {
+                    const selected = selectedTrade?.id === trade.id;
+                    const exposure = Math.abs(numberValue(trade.margin) || numberValue(trade.entryPrice) * numberValue(trade.size));
+                    const markPrice = numberValue(trade.currentPrice || trade.entryPrice);
+                    return (
+                      <tr
+                        key={trade.id}
+                        onClick={() => setSelectedTradeId(trade.id)}
+                        className={`cursor-pointer transition-colors ${selected ? "bg-slate-900/80" : "bg-[#0E1116] hover:bg-slate-900/60"}`}
+                      >
+                        <td className="px-4 py-4">
+                          <div className="flex items-center gap-3">
+                            <div className="text-lg font-bold text-white">{trade.pair.replace("USDT", "/USDT")}</div>
+                            {selected && <span className="rounded-md border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-mono text-emerald-300">Viewing</span>}
+                          </div>
+                        </td>
+                        <td className="px-4 py-4">
+                          <span className={`inline-flex rounded-md border px-3 py-1 text-[11px] font-mono ${trade.direction === "LONG" ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-300" : "border-rose-500/20 bg-rose-500/10 text-rose-300"}`}>
+                            {trade.direction} {Math.max(1, Math.round(numberValue(trade.leverage)))}X
+                          </span>
+                        </td>
+                        <td className="px-4 py-4 text-center font-mono">
+                          <div className="font-semibold text-white">{formatMoney(numberValue(trade.margin))}</div>
+                          <div className="mt-1 text-[11px] text-slate-500">Exposure: {formatCompactMoney(exposure)}</div>
+                        </td>
+                        <td className="px-4 py-4 text-center font-mono">
+                          <div className="text-slate-300">{formatMoney(trade.entryPrice)}</div>
+                          <div className="mt-1 text-emerald-400">Mark: {formatMoney(markPrice)}</div>
+                        </td>
+                        <td className="px-4 py-4 text-center font-mono">
+                          <div className="text-rose-400">SL: {formatMoney(trade.stopLoss)}</div>
+                          <div className="mt-1 text-emerald-400">TP: {formatMoney(trade.takeProfit)}</div>
+                        </td>
+                        <td className="px-4 py-4 text-center font-mono">
+                          <div className={numberValue(trade.unrealizedPnl) >= 0 ? "text-emerald-400" : "text-rose-400"}>
+                            {numberValue(trade.unrealizedPnl) >= 0 ? "+" : ""}{formatMoney(numberValue(trade.unrealizedPnl))}
+                          </div>
+                          <div className={`mt-1 ${numberValue(trade.pnlPercent) >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
+                            ({numberValue(trade.pnlPercent) >= 0 ? "+" : ""}{formatPercent(numberValue(trade.pnlPercent))})
+                          </div>
+                        </td>
+                        <td className="px-4 py-4 text-right">
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setSelectedTradeId(trade.id);
+                            }}
+                            className="rounded-md border border-rose-500/20 bg-rose-500/10 px-4 py-2 text-[11px] font-semibold text-rose-300"
+                          >
+                            Market Close
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="px-6 py-12 text-center text-slate-500 font-mono text-xs">No active positions returned by the backend.</div>
+          )}
         </div>
 
         <div className="bg-bento-card border border-slate-800 rounded-2xl p-6 shadow-md">
@@ -258,43 +323,6 @@ function SummaryCard({ label, value, tone }: { label: string; value: string; ton
       <div className="text-[10px] font-mono uppercase tracking-wider text-slate-500">{label}</div>
       <div className="mt-2 text-sm font-semibold">{value}</div>
     </div>
-  );
-}
-
-function TradeCard({ trade, active, onSelect, closed = false }: { trade: Trade | TradeHistoryEntry; active: boolean; onSelect: () => void; closed?: boolean }) {
-  const resultLabel = "result" in trade && trade.result ? trade.result : trade.status;
-  return (
-    <button
-      onClick={onSelect}
-      className={`w-full text-left p-4 rounded-2xl border transition-colors cursor-pointer ${
-        active ? "bg-emerald-500/10 border-emerald-500/20" : "bg-[#0A0B0E] border-slate-800 hover:border-slate-700"
-      }`}
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <div className="text-sm font-semibold text-white">{trade.pair}</div>
-          <div className="mt-1 text-[10px] font-mono text-slate-500">{formatBdtDateTime(trade.closedAt || trade.timestamp)}</div>
-        </div>
-        <span className={`px-2 py-1 rounded-full text-[10px] font-mono ${
-          closed ? "bg-slate-800 text-slate-300" : trade.direction === "LONG" ? "bg-emerald-500/10 text-emerald-300" : "bg-rose-500/10 text-rose-300"
-        }`}>
-          {closed ? resultLabel : trade.direction}
-        </span>
-      </div>
-
-      <div className="grid grid-cols-2 gap-3 mt-4 text-[10px] font-mono">
-        <Meta label="Entry" value={formatMoney(trade.entryPrice)} />
-        <Meta label="Size" value={String(trade.size)} />
-        <Meta label="SL / TP" value={`${formatMoney(trade.stopLoss)} / ${formatMoney(trade.takeProfit)}`} />
-        <Meta label="Status" value={trade.rawStatus || trade.status} />
-      </div>
-
-      {closed && "reason" in trade && trade.result === "LOSS" && (
-        <div className="mt-4 rounded-xl border border-slate-800 bg-slate-950/60 px-3 py-2 text-[10px] font-mono text-slate-500">
-          SL Reason: {trade.reason || "unknown"}
-        </div>
-      )}
-    </button>
   );
 }
 

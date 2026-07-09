@@ -87,6 +87,57 @@ function formatChartPrice(value: number) {
   return value.toFixed(5);
 }
 
+function formatVolume(value: number) {
+  return new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 2 }).format(value);
+}
+
+function computeEma(values: number[], period: number) {
+  if (!values.length) {
+    return [];
+  }
+  const multiplier = 2 / (period + 1);
+  const ema: number[] = [];
+  let previous = values[0];
+  ema.push(previous);
+  for (let index = 1; index < values.length; index += 1) {
+    previous = values[index] * multiplier + previous * (1 - multiplier);
+    ema.push(previous);
+  }
+  return ema;
+}
+
+function computeRsi(values: number[], period = 14) {
+  if (values.length < 2) {
+    return values.map(() => 50);
+  }
+  const gains: number[] = [];
+  const losses: number[] = [];
+  for (let index = 1; index < values.length; index += 1) {
+    const delta = values[index] - values[index - 1];
+    gains.push(Math.max(delta, 0));
+    losses.push(Math.max(-delta, 0));
+  }
+  let avgGain = gains.slice(0, period).reduce((sum, value) => sum + value, 0) / Math.max(period, 1);
+  let avgLoss = losses.slice(0, period).reduce((sum, value) => sum + value, 0) / Math.max(period, 1);
+  const rsi = new Array(values.length).fill(50);
+  for (let index = period; index < gains.length; index += 1) {
+    avgGain = (avgGain * (period - 1) + gains[index]) / period;
+    avgLoss = (avgLoss * (period - 1) + losses[index]) / period;
+    const rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
+    rsi[index + 1] = 100 - 100 / (1 + rs);
+  }
+  return rsi;
+}
+
+function computeMacd(values: number[]) {
+  const ema12 = computeEma(values, 12);
+  const ema26 = computeEma(values, 26);
+  const macd = values.map((_, index) => ema12[index] - ema26[index]);
+  const signal = computeEma(macd, 9);
+  const histogram = macd.map((value, index) => value - signal[index]);
+  return { macd, signal, histogram };
+}
+
 function formatBdtDateTime(value?: string | Date | null) {
   if (!value) {
     return "N/A";
@@ -221,6 +272,8 @@ export default function DashboardView({
             high: numberValue(item.high),
             low: numberValue(item.low),
             close: numberValue(item.close),
+            volume: numberValue(item.volume),
+            turnover: numberValue(item.turnover),
           })));
           setMarketError(candleResponse.error || null);
         }
@@ -433,15 +486,29 @@ function TickerTable({
 
 function CandlesPanel({ candles, loading, symbol }: { candles: MarketCandle[]; loading: boolean; symbol: string }) {
   const width = 920;
-  const height = 320;
+  const height = 560;
   const paddingLeft = 16;
   const paddingRight = 68;
   const paddingTop = 16;
   const paddingBottom = 28;
-  const plotHeight = height - paddingTop - paddingBottom;
+  const pricePanelHeight = 270;
+  const volumePanelHeight = 78;
+  const rsiPanelHeight = 92;
+  const macdPanelHeight = 92;
+  const panelGap = 12;
+  const pricePanelTop = paddingTop;
+  const volumePanelTop = pricePanelTop + pricePanelHeight + panelGap;
+  const rsiPanelTop = volumePanelTop + volumePanelHeight + panelGap;
+  const macdPanelTop = rsiPanelTop + rsiPanelHeight + panelGap;
   const plotWidth = width - paddingLeft - paddingRight;
+  const plotHeight = pricePanelHeight;
   const candleHighs = candles.map((candle) => candle.high);
   const candleLows = candles.map((candle) => candle.low);
+  const closes = candles.map((candle) => candle.close);
+  const volumes = candles.map((candle) => numberValue(candle.volume));
+  const ema14 = computeEma(closes, 14);
+  const rsi14 = computeRsi(closes, 14);
+  const { macd, signal, histogram } = computeMacd(closes);
   const rawHigh = candleHighs.length > 0 ? Math.max(...candleHighs) : 1;
   const rawLow = candleLows.length > 0 ? Math.min(...candleLows) : 0;
   const pricePadding = Math.max((rawHigh - rawLow) * 0.08, rawHigh > 1 ? 0.5 : 0.0005);
@@ -453,8 +520,12 @@ function CandlesPanel({ candles, loading, symbol }: { candles: MarketCandle[]; l
   const priceLevels = [0, 0.25, 0.5, 0.75, 1].map((line) => high - range * line);
   const timeLabelStep = Math.max(Math.floor(candles.length / 6), 1);
   const latestClose = candles.length > 0 ? candles[candles.length - 1].close : null;
+  const maxVolume = Math.max(...volumes, 1);
+  const rsiY = (value: number) => rsiPanelTop + ((100 - value) / 100) * rsiPanelHeight;
+  const macdMax = Math.max(...macd.map(Math.abs), ...signal.map(Math.abs), ...histogram.map(Math.abs), 1);
+  const macdY = (value: number) => macdPanelTop + ((macdMax - value) / (macdMax * 2)) * macdPanelHeight;
 
-  const y = (value: number) => paddingTop + ((high - value) / range) * plotHeight;
+  const y = (value: number) => pricePanelTop + ((high - value) / range) * plotHeight;
 
   return (
     <div>
@@ -470,21 +541,24 @@ function CandlesPanel({ candles, loading, symbol }: { candles: MarketCandle[]; l
               <stop offset="100%" stopColor="#020617" stopOpacity="0.15" />
             </linearGradient>
           </defs>
-          <rect x={paddingLeft} y={paddingTop} width={plotWidth} height={plotHeight} rx="10" fill="url(#dashboardChartBg)" />
+          <rect x={paddingLeft} y={pricePanelTop} width={plotWidth} height={pricePanelHeight} rx="10" fill="url(#dashboardChartBg)" />
+          <rect x={paddingLeft} y={volumePanelTop} width={plotWidth} height={volumePanelHeight} rx="10" fill="#09111c" />
+          <rect x={paddingLeft} y={rsiPanelTop} width={plotWidth} height={rsiPanelHeight} rx="10" fill="#0b0d17" />
+          <rect x={paddingLeft} y={macdPanelTop} width={plotWidth} height={macdPanelHeight} rx="10" fill="#0b0d17" />
           {priceLevels.map((level, index) => (
             <g key={level}>
               <line
                 x1={paddingLeft}
                 x2={width - paddingRight}
-                y1={paddingTop + plotHeight * (index / (priceLevels.length - 1))}
-                y2={paddingTop + plotHeight * (index / (priceLevels.length - 1))}
+                y1={pricePanelTop + plotHeight * (index / (priceLevels.length - 1))}
+                y2={pricePanelTop + plotHeight * (index / (priceLevels.length - 1))}
                 stroke="#1e293b"
                 strokeWidth="1"
                 strokeDasharray="3 5"
               />
               <text
                 x={width - paddingRight + 8}
-                y={paddingTop + plotHeight * (index / (priceLevels.length - 1)) + 4}
+                y={pricePanelTop + plotHeight * (index / (priceLevels.length - 1)) + 4}
                 fontSize="10"
                 fill="#64748b"
                 textAnchor="start"
@@ -501,7 +575,7 @@ function CandlesPanel({ candles, loading, symbol }: { candles: MarketCandle[]; l
                 <line
                   x1={x}
                   x2={x}
-                  y1={paddingTop}
+                  y1={pricePanelTop}
                   y2={height - paddingBottom}
                   stroke="#0f172a"
                   strokeWidth="1"
@@ -545,6 +619,14 @@ function CandlesPanel({ candles, loading, symbol }: { candles: MarketCandle[]; l
               </text>
             </g>
           )}
+          {ema14.length === candles.length && (
+            <path
+              d={ema14.map((value, index) => `${index === 0 ? "M" : "L"} ${paddingLeft + index * step + step / 2} ${y(value)}`).join(" ")}
+              fill="none"
+              stroke="#3b82f6"
+              strokeWidth="1.4"
+            />
+          )}
           {candles.map((candle, index) => {
             const x = paddingLeft + index * step + (step - candleWidth) / 2;
             const openY = y(candle.open);
@@ -579,6 +661,64 @@ function CandlesPanel({ candles, loading, symbol }: { candles: MarketCandle[]; l
               </g>
             );
           })}
+          {candles.map((candle, index) => {
+            const barHeight = (numberValue(candle.volume) / maxVolume) * (volumePanelHeight - 16);
+            const x = paddingLeft + index * step + (step - candleWidth) / 2;
+            const isBull = candle.close >= candle.open;
+            return (
+              <rect
+                key={`volume-${candle.timestamp}-${index}`}
+                x={x}
+                y={volumePanelTop + volumePanelHeight - barHeight - 8}
+                width={candleWidth}
+                height={Math.max(barHeight, 1.5)}
+                rx="1"
+                fill={isBull ? "#0f9f6e88" : "#e11d4888"}
+              />
+            );
+          })}
+          <text x={paddingLeft + 8} y={volumePanelTop + 14} fontSize="10" fill="#94a3b8">VOL {formatVolume(maxVolume)}</text>
+          <line x1={paddingLeft} x2={width - paddingRight} y1={rsiY(70)} y2={rsiY(70)} stroke="#475569" strokeDasharray="4 4" />
+          <line x1={paddingLeft} x2={width - paddingRight} y1={rsiY(30)} y2={rsiY(30)} stroke="#475569" strokeDasharray="4 4" />
+          <path
+            d={rsi14.map((value, index) => `${index === 0 ? "M" : "L"} ${paddingLeft + index * step + step / 2} ${rsiY(value)}`).join(" ")}
+            fill="none"
+            stroke="#8b5cf6"
+            strokeWidth="1.3"
+          />
+          <text x={paddingLeft + 8} y={rsiPanelTop + 14} fontSize="10" fill="#c4b5fd">RSI 14 {rsi14.length ? rsi14[rsi14.length - 1].toFixed(2) : "0.00"}</text>
+          <line x1={paddingLeft} x2={width - paddingRight} y1={macdY(0)} y2={macdY(0)} stroke="#334155" strokeWidth="1" />
+          {histogram.map((value, index) => {
+            const x = paddingLeft + index * step + (step - candleWidth) / 2;
+            const barY = value >= 0 ? macdY(value) : macdY(0);
+            const barHeight = Math.abs(macdY(value) - macdY(0));
+            return (
+              <rect
+                key={`macd-hist-${candles[index]?.timestamp || index}`}
+                x={x}
+                y={barY}
+                width={candleWidth}
+                height={Math.max(barHeight, 1)}
+                rx="1"
+                fill={value >= 0 ? "#99f6e4" : "#fda4af"}
+              />
+            );
+          })}
+          <path
+            d={macd.map((value, index) => `${index === 0 ? "M" : "L"} ${paddingLeft + index * step + step / 2} ${macdY(value)}`).join(" ")}
+            fill="none"
+            stroke="#0ea5e9"
+            strokeWidth="1.2"
+          />
+          <path
+            d={signal.map((value, index) => `${index === 0 ? "M" : "L"} ${paddingLeft + index * step + step / 2} ${macdY(value)}`).join(" ")}
+            fill="none"
+            stroke="#f59e0b"
+            strokeWidth="1.2"
+          />
+          <text x={paddingLeft + 8} y={macdPanelTop + 14} fontSize="10" fill="#93c5fd">
+            MACD {macd.length ? macd[macd.length - 1].toFixed(2) : "0.00"} / {signal.length ? signal[signal.length - 1].toFixed(2) : "0.00"}
+          </text>
         </svg>
         {candles.length === 0 && <div className="py-16 text-center text-xs font-mono text-slate-500">No backend candles available for this symbol yet.</div>}
       </div>

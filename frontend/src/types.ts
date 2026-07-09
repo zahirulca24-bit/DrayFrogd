@@ -315,6 +315,8 @@ export interface MarketCandle {
   high: number;
   low: number;
   close: number;
+  volume?: number;
+  turnover?: number;
 }
 
 export interface MarketTicker {

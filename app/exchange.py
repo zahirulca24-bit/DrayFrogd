@@ -172,6 +172,8 @@ class BybitClient:
                     "high": item[2],
                     "low": item[3],
                     "close": item[4],
+                    "volume": item[5],
+                    "turnover": item[6],
                 }
             )
         return candles
