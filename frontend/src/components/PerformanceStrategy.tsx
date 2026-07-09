@@ -9,6 +9,7 @@ interface PerformanceStrategyProps {
 }
 
 type PerformanceRow = TradeHistoryEntry & {
+  tradeStatus: string;
   strategy: string;
   symbol: string;
   session: "Asia" | "Europe" | "US" | "Late";
@@ -103,6 +104,47 @@ function toBdtDate(value?: string | null) {
   return value ? BDT_DATE.format(new Date(value)) : "N/A";
 }
 
+function journalToPerformanceRow(item: JournalTradeEntry, index: number): PerformanceRow {
+  const entryPrice = numberValue(item.entry);
+  const stopLoss = numberValue(item.stop_loss);
+  const takeProfit = numberValue(item.take_profit);
+  const isClosed = String(item.status || "").toLowerCase() === "closed";
+  const rawResult = String(item.result || "").toLowerCase();
+  const result = rawResult === "tp" || rawResult === "profit" ? "PROFIT" : "LOSS";
+  const closedAt = item.closed_at || item.opened_at || item.detected_at || new Date().toISOString();
+
+  return {
+    id: item.order_id || item.journal_id || `${item.symbol}-${index}`,
+    pair: item.symbol,
+    strategy: "EMA Pullback",
+    direction: String(item.direction || "").toUpperCase() === "SHORT" ? "SHORT" : "LONG",
+    entryPrice,
+    currentPrice: entryPrice,
+    stopLoss,
+    takeProfit,
+    size: numberValue(item.quantity),
+    margin: 0,
+    leverage: 1,
+    unrealizedPnl: 0,
+    pnlPercent: 0,
+    status: isClosed ? "CLOSED" : "OPEN",
+    timestamp: item.opened_at || item.detected_at || closedAt,
+    orderConfirmed: Boolean(item.order_id),
+    rawStatus: item.status,
+    journalId: item.journal_id,
+    executionMode: item.execution_mode || "demo",
+    exitPrice: isClosed ? numberValue((item.exchange_metadata as Record<string, any>)?.exit_price || item.take_profit) : 0,
+    pnl: isClosed ? (result === "PROFIT" ? 2 : -1) : 0,
+    result,
+    reason: item.sl_hit_reason || (isClosed ? "n/a" : "open"),
+    closedAt,
+    tradeStatus: item.status || (isClosed ? "closed" : "active"),
+    symbol: item.symbol,
+    session: getSession(closedAt),
+    rrValue: calcRr(entryPrice, stopLoss, takeProfit),
+  };
+}
+
 export default function PerformanceStrategy({ authToken, history }: PerformanceStrategyProps) {
   const [journalTrades, setJournalTrades] = useState<JournalTradeEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -133,8 +175,8 @@ export default function PerformanceStrategy({ authToken, history }: PerformanceS
       const current = BDT_DATE.format(new Date());
       if (current !== bdtDayRef.current) {
         bdtDayRef.current = current;
-        void loadJournal();
       }
+      void loadJournal();
     }, 10000);
 
     return () => {
@@ -144,41 +186,43 @@ export default function PerformanceStrategy({ authToken, history }: PerformanceS
   }, [authToken]);
 
   const rows = useMemo<PerformanceRow[]>(() => {
-    return history.map((trade) => {
-      const journal =
-        journalTrades.find((item) => item.journal_id === trade.journalId) ||
-        journalTrades.find((item) => item.order_id && item.order_id === trade.orderId) ||
-        journalTrades.find((item) => item.symbol === trade.pair && item.closed_at === trade.closedAt);
-      return {
-        ...trade,
-        strategy: trade.strategy || "EMA Pullback",
-        symbol: trade.pair,
-        session: getSession(trade.closedAt),
-        rrValue: calcRr(trade.entryPrice, trade.stopLoss, trade.takeProfit),
-      };
-    });
+    if (journalTrades.length > 0) {
+      return journalTrades.map(journalToPerformanceRow);
+    }
+
+    return history.map((trade) => ({
+      ...trade,
+      tradeStatus: trade.rawStatus || trade.status,
+      strategy: trade.strategy || "EMA Pullback",
+      symbol: trade.pair,
+      session: getSession(trade.closedAt),
+      rrValue: calcRr(trade.entryPrice, trade.stopLoss, trade.takeProfit),
+    }));
   }, [history, journalTrades]);
 
+  const closedRows = rows.filter((row) => String(row.tradeStatus || row.status).toLowerCase() === "closed" || row.status === "CLOSED");
+  const openRows = rows.filter((row) => !closedRows.includes(row));
+
   const totalTrades = rows.length;
-  const winTrades = rows.filter((row) => row.result === "PROFIT").length;
-  const lossTrades = rows.filter((row) => row.result === "LOSS").length;
-  const winRate = totalTrades > 0 ? winTrades / totalTrades : null;
-  const netPnl = totalTrades > 0 ? rows.reduce((sum, row) => sum + numberValue(row.pnl), 0) : null;
-  const profitFactor = totalTrades > 0 ? computeProfitFactor(rows) : null;
+  const winTrades = closedRows.filter((row) => row.result === "PROFIT").length;
+  const lossTrades = closedRows.filter((row) => row.result === "LOSS").length;
+  const winRate = closedRows.length > 0 ? winTrades / closedRows.length : null;
+  const netPnl = closedRows.length > 0 ? closedRows.reduce((sum, row) => sum + numberValue(row.pnl), 0) : null;
+  const profitFactor = closedRows.length > 0 ? computeProfitFactor(closedRows) : null;
   const rrValues = rows.map((row) => row.rrValue).filter((value): value is number => value !== null);
   const avgRr = rrValues.length > 0 ? rrValues.reduce((sum, value) => sum + value, 0) / rrValues.length : null;
-  const avgWin = winTrades > 0 ? rows.filter((row) => row.result === "PROFIT").reduce((sum, row) => sum + numberValue(row.pnl), 0) / winTrades : null;
-  const avgLoss = lossTrades > 0 ? rows.filter((row) => row.result === "LOSS").reduce((sum, row) => sum + numberValue(row.pnl), 0) / lossTrades : null;
-  const maxDrawdown = totalTrades > 0 ? computeMaxDrawdown(rows) : null;
+  const avgWin = winTrades > 0 ? closedRows.filter((row) => row.result === "PROFIT").reduce((sum, row) => sum + numberValue(row.pnl), 0) / winTrades : null;
+  const avgLoss = lossTrades > 0 ? closedRows.filter((row) => row.result === "LOSS").reduce((sum, row) => sum + numberValue(row.pnl), 0) / lossTrades : null;
+  const maxDrawdown = closedRows.length > 0 ? computeMaxDrawdown(closedRows) : null;
 
-  const equityCurve = rows.reduce<Array<{ x: string; y: number }>>((acc, row) => {
+  const equityCurve = closedRows.reduce<Array<{ x: string; y: number }>>((acc, row) => {
     const previous = acc[acc.length - 1]?.y || 0;
     acc.push({ x: toBdtDate(row.closedAt), y: previous + numberValue(row.pnl) });
     return acc;
   }, []);
 
   const dailyPnl = Array.from(
-    rows.reduce((map, row) => {
+    closedRows.reduce((map, row) => {
       const key = toBdtDate(row.closedAt);
       map.set(key, (map.get(key) || 0) + numberValue(row.pnl));
       return map;
@@ -254,7 +298,7 @@ export default function PerformanceStrategy({ authToken, history }: PerformanceS
         <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-4">
           <div>
             <h3 className="text-sm font-semibold text-white tracking-tight font-sans">Performance & Strategy</h3>
-            <p className="text-xs text-slate-500 mt-1">Real persisted trade data only. Missing source values show as N/A or Insufficient Data.</p>
+            <p className="text-xs text-slate-500 mt-1">Real persisted journal data. Open trades populate counts/breakdowns; realized PnL cards use closed trades only.</p>
           </div>
           <div className="text-[10px] font-mono text-slate-500">BDT {BDT_DATE_TIME.format(new Date())}</div>
         </div>
@@ -263,6 +307,7 @@ export default function PerformanceStrategy({ authToken, history }: PerformanceS
 
       <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
         <KpiCard label="Total Trades" value={totalTrades > 0 ? String(totalTrades) : "Insufficient Data"} />
+        <KpiCard label="Open Trades" value={openRows.length > 0 ? String(openRows.length) : "0"} />
         <KpiCard label="Win Rate" value={winRate !== null ? formatPercent(winRate) : "Insufficient Data"} />
         <KpiCard label="Net PnL" value={netPnl !== null ? formatMoney(netPnl) : "Insufficient Data"} />
         <KpiCard label="Profit Factor" value={profitFactor === Infinity ? "Infinity" : profitFactor !== null ? profitFactor.toFixed(2) : "Insufficient Data"} />

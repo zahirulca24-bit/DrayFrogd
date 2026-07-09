@@ -15,13 +15,21 @@ from app.trade_management import manage_open_trades
 logger = logging.getLogger(__name__)
 
 
+def _safe_log_bot_event(event_type: str, message: str, *, level: str = "info", metadata: dict | None = None) -> None:
+    try:
+        log_bot_event(event_type, message, level=level, metadata=metadata)
+    except Exception:
+        logger.exception("Failed to persist bot event: %s", event_type)
+
+
+
 async def auto_trading_loop() -> None:
     while True:
         try:
             client = get_exchange_client(get_execution_mode())
             management_result = await asyncio.to_thread(manage_open_trades, client)
             if not management_result.get("ok"):
-                log_bot_event(
+                _safe_log_bot_event(
                     "trade_management_failed",
                     management_result.get("error", "Trade management failed"),
                     level="warning",
@@ -43,7 +51,7 @@ async def auto_trading_loop() -> None:
 
             result = await asyncio.to_thread(run_scan, client)
             if not result.get("ok"):
-                log_bot_event(
+                _safe_log_bot_event(
                     "scan_failed",
                     result.get("error", "Scanner failed"),
                     level="warning",
@@ -64,7 +72,7 @@ async def auto_trading_loop() -> None:
                     outcome = await asyncio.to_thread(execute_signal, client, signal, True)
                 except Exception as exc:
                     logger.exception("Auto execution crashed for %s", signal.get("symbol"))
-                    log_bot_event(
+                    _safe_log_bot_event(
                         "auto_execution_error",
                         f"Auto execution crashed for {signal.get('symbol')}",
                         level="error",
@@ -79,7 +87,7 @@ async def auto_trading_loop() -> None:
                     continue
 
                 if outcome.get("ok"):
-                    log_bot_event(
+                    _safe_log_bot_event(
                         "trade_executed",
                         f"Executed {signal.get('symbol')} in {get_execution_mode()} mode",
                         metadata={"trade": outcome.get("trade"), "signal": signal},
@@ -87,7 +95,7 @@ async def auto_trading_loop() -> None:
                 else:
                     error_message = outcome.get("error", "Unknown execution failure")
                     logger.warning("Auto execution failed for %s: %s", signal.get("symbol"), error_message)
-                    log_bot_event(
+                    _safe_log_bot_event(
                         "auto_execution_failed",
                         f"Auto execution failed for {signal.get('symbol')}",
                         level="warning",
@@ -104,7 +112,7 @@ async def auto_trading_loop() -> None:
             raise
         except Exception as exc:  # pragma: no cover - defensive background task guard
             logger.exception("Auto trading loop crashed")
-            log_bot_event(
+            _safe_log_bot_event(
                 "auto_loop_error",
                 str(exc),
                 level="error",

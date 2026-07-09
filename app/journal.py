@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from datetime import UTC, datetime
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -256,7 +257,7 @@ def _send_supabase(table: str, payload: dict[str, Any], upsert: bool) -> None:
 
 
 def _make_journal_id() -> str:
-    return f"jrnl-{int(datetime.now(UTC).timestamp() * 1000)}"
+    return f"jrnl-{datetime.now(UTC).strftime('%Y%m%d%H%M%S%f')}-{uuid.uuid4().hex[:8]}"
 
 
 def _utc_now() -> datetime:
