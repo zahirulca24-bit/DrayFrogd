@@ -1,10 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Activity, AlertTriangle, ArrowDownRight, ArrowUpRight, Clock3, ShieldCheck, Target } from "lucide-react";
-import { api } from "../api";
-import { AccountResponse, MarketCandle, OrderBookResponse, Trade, TradeHistoryEntry } from "../types";
+import { useEffect, useMemo, useRef } from "react";
+import { AccountResponse, Trade, TradeHistoryEntry } from "../types";
 
 interface ActiveTradesProps {
-  authToken: string | null;
   trades: Trade[];
   tradeHistory: TradeHistoryEntry[];
   account: AccountResponse;
@@ -60,24 +57,10 @@ function isTodayInBdt(value?: string | null) {
   return left === right;
 }
 
-export default function ActiveTrades({ authToken, trades, tradeHistory, account, onRefresh }: ActiveTradesProps) {
-  const [selectedTradeId, setSelectedTradeId] = useState<string | null>(null);
-  const [candles, setCandles] = useState<MarketCandle[]>([]);
-  const [orderBook, setOrderBook] = useState<OrderBookResponse["orderbook"]>({ bids: [], asks: [] });
-  const [panelLoading, setPanelLoading] = useState(false);
-  const [panelError, setPanelError] = useState<string | null>(null);
+export default function ActiveTrades({ trades, tradeHistory, account, onRefresh }: ActiveTradesProps) {
   const bdtDayRef = useRef(new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Dhaka" }));
 
   const todayClosedTrades = useMemo(() => tradeHistory.filter((trade) => isTodayInBdt(trade.closedAt)), [tradeHistory]);
-  const latestTrade = trades[0] || null;
-  const selectedTrade = useMemo(() => {
-    const activeMatch = trades.find((trade) => trade.id === selectedTradeId);
-    if (activeMatch) {
-      return activeMatch;
-    }
-    const historyMatch = tradeHistory.find((trade) => trade.id === selectedTradeId);
-    return historyMatch || latestTrade || tradeHistory[0] || null;
-  }, [latestTrade, selectedTradeId, tradeHistory, trades]);
 
   const todaysOpen = useMemo(() => trades.filter((trade) => isTodayInBdt(trade.timestamp)).length, [trades]);
   const todaysClosed = todayClosedTrades.length;
@@ -86,12 +69,6 @@ export default function ActiveTrades({ authToken, trades, tradeHistory, account,
   const todaysRealized = todayClosedTrades.reduce((sum, trade) => sum + numberValue(trade.pnl), 0);
   const todaysUnrealized = (account.positions.data || []).reduce((sum, position) => sum + numberValue(position.unrealisedPnl), 0);
   const totalExposure = trades.reduce((sum, trade) => sum + Math.abs(numberValue(trade.margin) || numberValue(trade.entryPrice) * numberValue(trade.size)), 0);
-
-  useEffect(() => {
-    if (!selectedTrade && (trades.length > 0 || tradeHistory.length > 0)) {
-      setSelectedTradeId((trades[0] || tradeHistory[0]).id);
-    }
-  }, [selectedTrade, tradeHistory, trades]);
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -104,51 +81,6 @@ export default function ActiveTrades({ authToken, trades, tradeHistory, account,
 
     return () => clearInterval(interval);
   }, [onRefresh]);
-
-  useEffect(() => {
-    if (!authToken || !selectedTrade) {
-      return;
-    }
-
-    let cancelled = false;
-
-    const loadPanel = async () => {
-      setPanelLoading(true);
-      try {
-        const [candleResponse, orderBookResponse] = await Promise.all([
-          api.getMarketCandles(authToken, selectedTrade.pair, "1", 60),
-          api.getOrderBook(authToken, selectedTrade.pair, 12),
-        ]);
-        if (!cancelled) {
-          setCandles((candleResponse.candles || []).map((item) => ({
-            ...item,
-            open: numberValue(item.open),
-            high: numberValue(item.high),
-            low: numberValue(item.low),
-            close: numberValue(item.close),
-          })));
-          setOrderBook(orderBookResponse.orderbook || { bids: [], asks: [] });
-          setPanelError(candleResponse.error || orderBookResponse.error || null);
-        }
-      } catch (error: any) {
-        if (!cancelled) {
-          setPanelError(error?.message || "Failed to load selected trade monitor");
-        }
-      } finally {
-        if (!cancelled) {
-          setPanelLoading(false);
-        }
-      }
-    };
-
-    loadPanel();
-    const interval = setInterval(loadPanel, 10000);
-
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-  }, [authToken, selectedTrade]);
 
   return (
     <div className="space-y-6" id="active-trades-root">
@@ -172,14 +104,7 @@ export default function ActiveTrades({ authToken, trades, tradeHistory, account,
         </div>
       </div>
 
-      {panelError && (
-        <div className="bg-rose-500/10 border border-rose-500/20 text-rose-300 p-4 rounded-2xl text-xs font-mono">
-          {panelError}
-        </div>
-      )}
-
-      <div className="grid grid-cols-1 xl:grid-cols-[0.64fr_0.36fr] gap-6">
-        <div className="bg-bento-card border border-slate-800 rounded-2xl overflow-hidden shadow-md">
+      <div className="bg-bento-card border border-slate-800 rounded-2xl overflow-hidden shadow-md">
           <div className="flex items-center justify-between gap-4 border-b border-slate-800 px-5 py-4">
             <div className="flex items-center gap-3">
               <h3 className="text-sm font-semibold text-white tracking-tight font-sans uppercase">Active Portfolio Positions</h3>
@@ -206,19 +131,16 @@ export default function ActiveTrades({ authToken, trades, tradeHistory, account,
                 </thead>
                 <tbody className="divide-y divide-slate-800/80 text-sm">
                   {trades.map((trade) => {
-                    const selected = selectedTrade?.id === trade.id;
                     const exposure = Math.abs(numberValue(trade.margin) || numberValue(trade.entryPrice) * numberValue(trade.size));
                     const markPrice = numberValue(trade.currentPrice || trade.entryPrice);
                     return (
                       <tr
                         key={trade.id}
-                        onClick={() => setSelectedTradeId(trade.id)}
-                        className={`cursor-pointer transition-colors ${selected ? "bg-slate-900/80" : "bg-[#0E1116] hover:bg-slate-900/60"}`}
+                        className="bg-[#0E1116] transition-colors hover:bg-slate-900/60"
                       >
                         <td className="px-4 py-4">
                           <div className="flex items-center gap-3">
                             <div className="text-lg font-bold text-white">{trade.pair.replace("USDT", "/USDT")}</div>
-                            {selected && <span className="rounded-md border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-mono text-emerald-300">Viewing</span>}
                           </div>
                         </td>
                         <td className="px-4 py-4">
@@ -251,10 +173,6 @@ export default function ActiveTrades({ authToken, trades, tradeHistory, account,
                         <td className="px-4 py-4 text-right">
                           <button
                             type="button"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              setSelectedTradeId(trade.id);
-                            }}
                             className="rounded-md border border-rose-500/20 bg-rose-500/10 px-4 py-2 text-[11px] font-semibold text-rose-300"
                           >
                             Market Close
@@ -269,59 +187,6 @@ export default function ActiveTrades({ authToken, trades, tradeHistory, account,
           ) : (
             <div className="px-6 py-12 text-center text-slate-500 font-mono text-xs">No active positions returned by the backend.</div>
           )}
-        </div>
-
-        <div className="bg-bento-card border border-slate-800 rounded-2xl p-6 shadow-md">
-          {selectedTrade ? (
-            <>
-              <div className="flex items-center justify-between mb-5">
-                <div>
-                  <h3 className="text-sm font-semibold text-white tracking-tight font-sans">{selectedTrade.pair} Monitor</h3>
-                  <p className="text-xs text-slate-500 mt-1">Selected trade chart, protection levels, and depth snapshot.</p>
-                </div>
-                <span className="text-[10px] font-mono text-slate-500">{panelLoading ? "Updating..." : selectedTrade.status}</span>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3 mb-4">
-                <MonitorMetric label="Direction" value={selectedTrade.direction} good={selectedTrade.direction === "LONG"} />
-                <MonitorMetric label="Size" value={String(selectedTrade.size)} />
-                <MonitorMetric label="Entry" value={formatMoney(selectedTrade.entryPrice)} />
-                <MonitorMetric label="SL / TP1" value={`${formatMoney(selectedTrade.stopLoss)} / ${formatMoney(selectedTrade.managementTp1 || selectedTrade.takeProfit)}`} />
-                <MonitorMetric label="Mode" value={selectedTrade.executionMode || "demo"} />
-                <MonitorMetric label="Timestamp" value={formatBdtDateTime(selectedTrade.closedAt || selectedTrade.timestamp)} />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3 mb-4">
-                <MonitorMetric label="TP2" value={formatMoney(selectedTrade.managementTp2 || selectedTrade.takeProfit)} />
-                <MonitorMetric label="Runner" value={formatMoney(selectedTrade.managementRunner || selectedTrade.takeProfit)} />
-                <MonitorMetric label="TP1 Done" value={selectedTrade.tp1Done ? "YES" : "NO"} good={selectedTrade.tp1Done} />
-                <MonitorMetric label="Break Even" value={selectedTrade.breakEvenSet ? "SET" : "NOT SET"} good={selectedTrade.breakEvenSet} />
-              </div>
-
-              <div className="rounded-2xl border border-slate-800 bg-[#0A0B0E] p-4">
-                <div className="flex items-center justify-between mb-3 text-[10px] font-mono text-slate-500">
-                  <span>Live backend chart</span>
-                  <span>{candles.length} candles</span>
-                </div>
-                <MiniTradeChart
-                  candles={candles}
-                  entry={selectedTrade.entryPrice}
-                  stopLoss={selectedTrade.stopLoss}
-                  tp1={selectedTrade.managementTp1 || selectedTrade.takeProfit}
-                  tp2={selectedTrade.managementTp2}
-                  runner={selectedTrade.managementRunner}
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-4 mt-4">
-                <DepthPanel title="Bids" rows={orderBook.bids.slice(0, 6)} side="bid" />
-                <DepthPanel title="Asks" rows={orderBook.asks.slice(0, 6)} side="ask" />
-              </div>
-            </>
-          ) : (
-            <div className="py-12 text-center text-slate-500 font-mono text-xs">Select a trade card to inspect its live monitor.</div>
-          )}
-        </div>
       </div>
     </div>
   );
@@ -338,114 +203,6 @@ function SummaryCard({ label, value, tone }: { label: string; value: string; ton
     <div className={`rounded-xl border p-3 ${styles}`}>
       <div className="text-[10px] font-mono uppercase tracking-wider text-slate-500">{label}</div>
       <div className="mt-2 text-sm font-semibold">{value}</div>
-    </div>
-  );
-}
-
-function MonitorMetric({ label, value, good }: { label: string; value: string; good?: boolean }) {
-  return (
-    <div className="rounded-xl border border-slate-800 bg-[#0A0B0E] p-3">
-      <div className="text-[10px] font-mono uppercase tracking-wider text-slate-500">{label}</div>
-      <div className={`mt-2 text-xs font-semibold ${good === undefined ? "text-white" : good ? "text-emerald-300" : "text-rose-300"}`}>{value}</div>
-    </div>
-  );
-}
-
-function DepthPanel({ title, rows, side }: { title: string; rows: Array<{ price: number; size: number }>; side: "bid" | "ask" }) {
-  return (
-    <div className="space-y-2">
-      <div className={`text-[10px] font-mono uppercase tracking-wider ${side === "bid" ? "text-emerald-400" : "text-rose-400"}`}>{title}</div>
-      {rows.map((row, index) => (
-        <div
-          key={`${title}-${index}`}
-          className={`grid grid-cols-2 gap-2 text-[10px] font-mono px-3 py-2 rounded-lg border ${
-            side === "bid" ? "bg-emerald-500/8 border-emerald-500/10 text-emerald-300" : "bg-rose-500/8 border-rose-500/10 text-rose-300"
-          }`}
-        >
-          <span>{numberValue(row.price).toFixed(4)}</span>
-          <span className="text-right">{numberValue(row.size).toFixed(4)}</span>
-        </div>
-      ))}
-      {rows.length === 0 && <div className="text-[10px] font-mono text-slate-500">No depth rows.</div>}
-    </div>
-  );
-}
-
-function MiniTradeChart({
-  candles,
-  entry,
-  stopLoss,
-  tp1,
-  tp2,
-  runner,
-}: {
-  candles: MarketCandle[];
-  entry: number;
-  stopLoss: number;
-  tp1: number;
-  tp2?: number;
-  runner?: number;
-}) {
-  const width = 480;
-  const height = 220;
-  const padding = 12;
-
-  if (!candles.length) {
-    return <div className="py-12 text-center text-xs font-mono text-slate-500">No live candles available.</div>;
-  }
-
-  const high = Math.max(...candles.map((item) => item.high), runner || tp2 || tp1, entry);
-  const low = Math.min(...candles.map((item) => item.low), stopLoss, runner || tp2 || tp1, entry);
-  const range = Math.max(high - low, 1);
-  const plotWidth = width - padding * 2;
-  const plotHeight = height - padding * 2;
-  const candleWidth = Math.max(plotWidth / candles.length - 2, 2);
-  const getY = (value: number) => padding + ((high - value) / range) * plotHeight;
-
-  return (
-    <svg viewBox={`0 0 ${width} ${height}`} className="w-full">
-      {[entry, stopLoss, tp1, tp2, runner].filter((level): level is number => Boolean(level)).map((level, index) => (
-        <line
-          key={index}
-          x1={padding}
-          x2={width - padding}
-          y1={getY(level)}
-          y2={getY(level)}
-          stroke={index === 0 ? "#94a3b8" : index === 1 ? "#f43f5e" : index === 2 ? "#10b981" : index === 3 ? "#38bdf8" : "#14b8a6"}
-          strokeDasharray="5 5"
-          strokeWidth="1"
-        />
-      ))}
-      {candles.map((candle, index) => {
-        const x = padding + index * (plotWidth / candles.length);
-        const openY = getY(candle.open);
-        const closeY = getY(candle.close);
-        const highY = getY(candle.high);
-        const lowY = getY(candle.low);
-        const isBull = candle.close >= candle.open;
-        return (
-          <g key={`${candle.timestamp}-${index}`}>
-            <line x1={x + candleWidth / 2} x2={x + candleWidth / 2} y1={highY} y2={lowY} stroke={isBull ? "#10b981" : "#f43f5e"} strokeWidth="1.1" />
-            <rect
-              x={x}
-              y={Math.min(openY, closeY)}
-              width={candleWidth}
-              height={Math.max(Math.abs(closeY - openY), 1.5)}
-              rx="1"
-              fill={isBull ? "#10b981" : "#f43f5e"}
-            />
-          </g>
-        );
-      })}
-    </svg>
-  );
-}
-
-function Meta({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <div className="text-slate-500">{label}</div>
-      <div className="mt-1 text-slate-200">{value}</div>
     </div>
   );
 }
