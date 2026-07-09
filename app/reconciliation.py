@@ -48,17 +48,31 @@ def reconcile_state(client: BybitClient) -> dict[str, Any]:
         position = positions_by_symbol.get(symbol)
 
         if position is None and open_order is None:
-            close_result = _resolve_close_result(trade, ticker_prices.get(symbol))
-            closed_trade = close_trade(journal_id, close_result) if journal_id else None
-            if closed_trade is None:
-                closed_trade = dict(trade)
-                closed_trade.update(close_result)
-                closed_trade["status"] = "closed"
-            closed_symbols.append(symbol)
-            closed_trades.append(closed_trade)
-            updates.append({"symbol": symbol, "status": "closed", "reason": close_result.get("close_reason", "Position not found on exchange")})
-            _persist_reconciliation_event(journal_id, "RECONCILED_CLOSED", "Exchange no longer reports this position.", close_result)
-            continue
+            # REPAIR: Verify position is truly missing (check twice)
+            ok_recheck, positions_recheck, _ = client.safe_fetch_positions()
+            position_recheck = None
+            if ok_recheck:
+                position_recheck = next(
+                    (p for p in positions_recheck if str(p.get("symbol", "")).upper() == symbol and _position_is_open(p)),
+                    None
+                )
+            
+            if position_recheck is None:
+                # Position confirmed missing on exchange - safe to close
+                close_result = _resolve_close_result(trade, ticker_prices.get(symbol))
+                closed_trade = close_trade(journal_id, close_result) if journal_id else None
+                if closed_trade is None:
+                    closed_trade = dict(trade)
+                    closed_trade.update(close_result)
+                    closed_trade["status"] = "closed"
+                closed_symbols.append(symbol)
+                closed_trades.append(closed_trade)
+                updates.append({"symbol": symbol, "status": "closed", "reason": close_result.get("close_reason", "Position not found on exchange")})
+                _persist_reconciliation_event(journal_id, "RECONCILED_CLOSED_VERIFIED", "Exchange position verified missing twice; trade closed safely.", close_result)
+                continue
+            else:
+                # Position exists on recheck - use it
+                position = position_recheck
 
         if position is None and open_order is not None:
             reconciled = dict(trade)
