@@ -445,6 +445,7 @@ export default function App() {
               >
                 <Menu className="h-4 w-4" />
               </button>
+            </div>
             <h2 className="min-w-0 text-sm font-semibold text-slate-400 capitalize tracking-tight font-sans">
               Terminal: <span className="text-white font-bold">{activeTab.replace("-", " ")}</span>
             </h2>
