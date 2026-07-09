@@ -108,10 +108,10 @@ def calculate_position_size(
     else:
         required_margin = notional / leverage_cap
 
-    existing_exposure = _current_exposure(active_trades, positions)
-    max_allowed_exposure = equity * exposure_cap
-    if existing_exposure + notional > max_allowed_exposure:
-        return _reject("Exposure cap exceeded")
+    existing_margin = _current_margin(active_trades, positions, leverage_cap)
+    max_allowed_margin = equity * exposure_cap
+    if existing_margin + required_margin > max_allowed_margin:
+        return _reject("Margin exposure cap exceeded")
 
     actual_risk_amount = quantity * sl_distance
     if actual_risk_amount <= 0 or not isfinite(actual_risk_amount):
@@ -136,8 +136,10 @@ def calculate_position_size(
         "available_balance": available_balance,
         "leverage_cap": leverage_cap,
         "exposure_cap": exposure_cap,
-        "current_exposure": existing_exposure,
-        "max_allowed_exposure": max_allowed_exposure,
+        "current_margin_exposure": existing_margin,
+        "max_allowed_margin_exposure": max_allowed_margin,
+        "current_exposure": existing_margin,
+        "max_allowed_exposure": max_allowed_margin,
         "min_notional": min_notional,
         "qty_step": str(qty_step),
         "tick_size": str(tick_size),
@@ -182,22 +184,46 @@ def _stale_reason(value: Any) -> str:
     return ""
 
 
-def _current_exposure(active_trades: list[dict[str, Any]], positions: list[dict[str, Any]]) -> float:
-    exposure = 0.0
+def _current_margin(
+    active_trades: list[dict[str, Any]],
+    positions: list[dict[str, Any]],
+    fallback_leverage: float,
+) -> float:
+    margin = 0.0
+
     for trade in active_trades:
+        required_margin = _positive_float(trade.get("required_margin"))
+        if required_margin is not None:
+            margin += required_margin
+            continue
+
         quantity = _positive_float(trade.get("quantity")) or 0.0
         entry = _positive_float(trade.get("entry")) or 0.0
-        exposure += quantity * entry
+        leverage = _positive_float(trade.get("leverage")) or fallback_leverage
+        if leverage > 0:
+            margin += abs(quantity * entry) / leverage
 
     for position in positions:
-        position_value = _positive_float(position.get("positionValue"))
-        if position_value is not None:
-            exposure += abs(position_value)
+        position_margin = (
+            _positive_float(position.get("positionIM"))
+            or _positive_float(position.get("positionInitialMargin"))
+        )
+        if position_margin is not None:
+            margin += abs(position_margin)
             continue
+
+        position_value = _positive_float(position.get("positionValue"))
+        leverage = _positive_float(position.get("leverage")) or fallback_leverage
+        if position_value is not None and leverage > 0:
+            margin += abs(position_value) / leverage
+            continue
+
         size = _positive_float(position.get("size")) or 0.0
         mark_price = _positive_float(position.get("markPrice")) or 0.0
-        exposure += abs(size * mark_price)
-    return exposure
+        if leverage > 0:
+            margin += abs(size * mark_price) / leverage
+
+    return margin
 
 
 def _extract_positive(wallet: dict[str, Any], keys: list[str]) -> float | None:
