@@ -67,7 +67,7 @@ async def auto_trading_loop() -> None:
                         metadata={"trade": outcome.get("trade"), "signal": signal},
                     )
                 elif outcome.get("error"):
-                    logger.debug("Auto execution skipped for %s: %s", signal.get("symbol"), outcome.get("error"))
+                    logger.warning("Auto execution skipped for %s: %s", signal.get("symbol"), outcome.get("error"))
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # pragma: no cover - defensive background task guard
