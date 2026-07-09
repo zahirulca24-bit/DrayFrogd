@@ -92,6 +92,74 @@ function todayBdtDate() {
   return BDT_DATE.format(new Date());
 }
 
+function journalToRow(item: JournalTradeEntry, index: number): JournalRow {
+  const metadata = (item.exchange_metadata || {}) as Record<string, any>;
+  const management = (metadata.management || {}) as Record<string, any>;
+  const entryPrice = numberValue(item.entry);
+  const stopLoss = numberValue(item.stop_loss);
+  const takeProfit = numberValue(item.take_profit);
+  const closedAt = item.closed_at || item.opened_at || item.detected_at || new Date().toISOString();
+  const isClosed = String(item.status || "").toLowerCase() === "closed";
+  const rawResult = String(item.result || "").toLowerCase();
+  const result = rawResult === "tp" || rawResult === "profit" ? "PROFIT" : "LOSS";
+  const leverage = metadata?.order_response?.leverage || metadata?.leverage || null;
+  const fees = metadata?.fees || metadata?.trading_fee || null;
+  const rrValue = calcRr(entryPrice, stopLoss, takeProfit);
+
+  return {
+    id: item.order_id || item.journal_id || `${item.symbol}-${index}`,
+    pair: item.symbol,
+    strategy: "EMA Pullback",
+    direction: normalizeDirection(item.direction),
+    entryPrice,
+    currentPrice: entryPrice,
+    stopLoss,
+    takeProfit,
+    size: numberValue(item.quantity),
+    margin: 0,
+    leverage: 1,
+    unrealizedPnl: 0,
+    pnlPercent: 0,
+    status: isClosed ? "CLOSED" : "OPEN",
+    timestamp: item.opened_at || item.detected_at || closedAt,
+    orderConfirmed: Boolean(item.order_id),
+    slVerified: item.status !== "protection_pending",
+    tpVerified: item.status !== "protection_pending",
+    positionSynced: true,
+    orderId: item.order_id || undefined,
+    rawStatus: item.status,
+    journalId: item.journal_id,
+    executionMode: item.execution_mode || "demo",
+    closedAt,
+    slHitReason: item.sl_hit_reason ?? null,
+    managementTp1: Number(management.tp1 || 0) || undefined,
+    managementTp2: Number(management.tp2 || 0) || undefined,
+    managementRunner: Number(management.runner_target || 0) || undefined,
+    breakEvenSet: Boolean(management.break_even_set),
+    tp1Done: Boolean(management.tp1_done),
+    tp2Done: Boolean(management.tp2_done),
+    exitPrice: isClosed ? numberValue(metadata?.exit_price || item.take_profit) : 0,
+    pnl: isClosed ? (result === "PROFIT" ? 2 : -1) : 0,
+    result,
+    reason: item.sl_hit_reason || (isClosed ? "n/a" : "open"),
+    side: normalizeDirection(item.direction),
+    leverageText: leverage ? `${leverage}x` : "N/A",
+    feesText: fees !== null && fees !== undefined ? formatMoney(numberValue(fees)) : "N/A",
+    rrValue,
+    durationText: durationBetween(item.opened_at || item.detected_at, item.closed_at),
+    timeline: [
+      { label: "Detected", value: item.detected_at || null },
+      { label: "Opened", value: item.opened_at || null },
+      { label: "Closed", value: item.closed_at || null },
+    ],
+    executionLog: [
+      item.order_id ? `Order linked: ${item.order_id}` : "Order ID unavailable",
+      `Execution mode: ${item.execution_mode || "demo"}`,
+      isClosed ? `Outcome: ${result}` : "Outcome: OPEN / active journal trade",
+    ],
+  };
+}
+
 export default function TradeHistory({ authToken, history }: TradeHistoryProps) {
   const [journalTrades, setJournalTrades] = useState<JournalTradeEntry[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -141,8 +209,8 @@ export default function TradeHistory({ authToken, history }: TradeHistoryProps) 
       if (current !== bdtDayRef.current) {
         bdtDayRef.current = current;
         setFilters((prev) => ({ ...prev, dateFrom: current, dateTo: current }));
-        void loadJournal();
       }
+      void loadJournal();
     }, 10000);
 
     return () => {
@@ -152,49 +220,35 @@ export default function TradeHistory({ authToken, history }: TradeHistoryProps) 
   }, [authToken]);
 
   const rows = useMemo<JournalRow[]>(() => {
-    const journalMap = new Map(journalTrades.map((item) => [item.journal_id || item.order_id || `${item.symbol}-${item.closed_at}`, item]));
+    if (journalTrades.length > 0) {
+      return journalTrades.map(journalToRow);
+    }
 
-    return history.map((trade) => {
-      const journal =
-        journalMap.get(trade.journalId || "") ||
-        journalTrades.find((item) => item.order_id && item.order_id === trade.orderId) ||
-        journalTrades.find((item) => item.symbol === trade.pair && item.closed_at === trade.closedAt);
-      const metadata = (journal?.exchange_metadata || {}) as Record<string, any>;
-      const leverage =
-        metadata?.order_response?.leverage ||
-        metadata?.leverage ||
-        null;
-      const fees =
-        metadata?.fees ||
-        metadata?.trading_fee ||
-        null;
-      const rrValue = calcRr(trade.entryPrice, trade.stopLoss, trade.takeProfit);
-      return {
-        ...trade,
-        side: normalizeDirection(journal?.direction || trade.direction),
-        strategy: trade.strategy || "EMA Pullback",
-        leverageText: leverage ? `${leverage}x` : "N/A",
-        feesText: fees !== null && fees !== undefined ? formatMoney(numberValue(fees)) : "N/A",
-        rrValue,
-        durationText: durationBetween(journal?.opened_at || trade.timestamp, trade.closedAt),
-        executionMode: journal?.execution_mode || trade.executionMode || "demo",
-        timeline: [
-          { label: "Detected", value: journal?.detected_at || null },
-          { label: "Opened", value: journal?.opened_at || trade.timestamp },
-          { label: "Closed", value: trade.closedAt || journal?.closed_at || null },
-        ],
-        executionLog: [
-          journal?.order_id ? `Order linked: ${journal.order_id}` : "Order ID unavailable",
-          `Execution mode: ${journal?.execution_mode || trade.executionMode || "demo"}`,
-          trade.result === "LOSS" ? `SL reason: ${trade.reason || "unknown"}` : `Outcome: ${trade.result}`,
-        ],
-      };
-    });
+    return history.map((trade) => ({
+      ...trade,
+      side: normalizeDirection(trade.direction),
+      strategy: trade.strategy || "EMA Pullback",
+      leverageText: "N/A",
+      feesText: "N/A",
+      rrValue: calcRr(trade.entryPrice, trade.stopLoss, trade.takeProfit),
+      durationText: durationBetween(trade.timestamp, trade.closedAt),
+      executionMode: trade.executionMode || "demo",
+      timeline: [
+        { label: "Detected", value: null },
+        { label: "Opened", value: trade.timestamp },
+        { label: "Closed", value: trade.closedAt || null },
+      ],
+      executionLog: [
+        trade.orderId ? `Order linked: ${trade.orderId}` : "Order ID unavailable",
+        `Execution mode: ${trade.executionMode || "demo"}`,
+        `Outcome: ${trade.result}`,
+      ],
+    }));
   }, [history, journalTrades]);
 
   const filteredRows = useMemo(() => {
     return rows.filter((row) => {
-      const closedDate = bdtDate(row.closedAt);
+      const closedDate = bdtDate(row.closedAt || row.timestamp);
       if (filters.dateFrom && closedDate < filters.dateFrom) {
         return false;
       }
@@ -340,7 +394,7 @@ export default function TradeHistory({ authToken, history }: TradeHistoryProps) 
         <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-4">
           <div>
             <h3 className="text-sm font-semibold text-white tracking-tight font-sans">Journal / Trade History</h3>
-            <p className="text-xs text-slate-500 mt-1">Default view shows today&apos;s real closed trades only, filtered in BDT.</p>
+            <p className="text-xs text-slate-500 mt-1">Default view shows today&apos;s persisted open and closed journal trades, filtered in BDT.</p>
           </div>
           <div className="flex items-center gap-3 text-[10px] font-mono text-slate-500">
             <span>BDT {bdtDateTime(new Date().toISOString())}</span>
@@ -399,7 +453,7 @@ export default function TradeHistory({ authToken, history }: TradeHistoryProps) 
       <div className="grid grid-cols-1 xl:grid-cols-[1.45fr_0.55fr] gap-6">
         <div className="bg-bento-card border border-slate-800 rounded-2xl p-6 shadow-md overflow-hidden">
           <div className="flex items-center justify-between mb-5">
-            <h4 className="text-sm font-semibold text-white tracking-tight font-sans">Closed Trades Table</h4>
+            <h4 className="text-sm font-semibold text-white tracking-tight font-sans">Journal Trades Table</h4>
             <span className="text-[10px] font-mono text-slate-500">{loading ? "Loading..." : `${filteredRows.length} rows`}</span>
           </div>
           <div className="overflow-x-auto">
@@ -444,7 +498,7 @@ export default function TradeHistory({ authToken, history }: TradeHistoryProps) 
               </tbody>
             </table>
           </div>
-          {filteredRows.length === 0 && <div className="py-10 text-center text-xs font-mono text-slate-500">No closed trades matched the selected filters.</div>}
+          {filteredRows.length === 0 && <div className="py-10 text-center text-xs font-mono text-slate-500">No journal trades matched the selected filters.</div>}
         </div>
 
         <div className="bg-bento-card border border-slate-800 rounded-2xl p-6 shadow-md">
