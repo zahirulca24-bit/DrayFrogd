@@ -1,48 +1,55 @@
 # Repository Audit
 
-Audit date: 2026-07-09
+Audit date: 2026-07-10
 
 ## Scope
 
-This audit covered the current FastAPI backend, React/Vite frontend, configuration files, and automated checks available in the repository.
+This audit reviewed the current FastAPI backend, React/Vite frontend, configured CI checks, and the journal/performance patch that was merged through PR #2.
 
-## Checks performed
+## Verified checks
 
-| Area | Command | Result |
-| --- | --- | --- |
-| Backend tests | `python -m pytest -q` | Passed: 11 tests |
-| Backend syntax | `python -m compileall -q app tests` | Passed |
-| Frontend typecheck | `npm run lint` from `frontend/` | Passed |
-| Frontend production build | `npm run build` from `frontend/` | Passed |
-| Frontend test script | `npm test -- --run` from `frontend/` | Not configured: `package.json` has no `test` script |
+The repository CI workflow covers:
 
-## Findings
+- Backend dependency installation
+- Python compile checks for `app` and `tests`
+- Backend unit-test discovery
+- Frontend dependency installation
+- Frontend TypeScript validation
+- Frontend production build
 
-### Strengths
+The latest validated branch run passed all configured backend and frontend checks.
 
-- Backend unit tests cover position sizing and trade management rule behavior.
-- Frontend TypeScript validation and production bundling complete successfully.
-- Runtime secrets are documented as required manual environment variables rather than being committed.
-- Authentication, exchange, risk, reconciliation, watchdog, and journaling concerns are split into focused backend modules.
+## Verified safe changes
 
-### Gaps to address
+### Background event logging isolation
 
-1. **No frontend test script**
-   - `npm test -- --run` fails because the frontend package does not define a `test` script.
-   - Recommendation: add a test runner such as Vitest plus at least smoke tests for core views and API helpers.
+`app/background_worker.py` wraps bot-event persistence with `_safe_log_bot_event` so database or journal failures do not terminate scanner, trade-management, or auto-execution processing.
 
-2. **Limited backend test coverage**
-   - Existing backend tests pass, but only two functional areas are covered.
-   - Recommendation: add tests for authentication token verification, protected routes, exchange error handling, bot controls, and risk validation.
+### Journal identifier strengthening
 
-3. **Manual database setup notes only**
-   - Supabase table setup is described in prose, but there are no migration files or SQL setup scripts.
-   - Recommendation: add versioned SQL migrations or schema setup scripts for `trade_journal` and `bot_events`.
+Journal IDs now combine a UTC microsecond timestamp with a random UUID suffix, reducing collision risk compared with millisecond-only IDs.
 
-4. **Operational checks are not consolidated**
-   - Required audit checks currently need to be discovered and run individually.
-   - Recommendation: add a Makefile, task runner, or CI workflow that runs backend tests, backend compile checks, frontend typecheck, and frontend build together.
+## Data-integrity risks requiring correction
 
-## Current status
+The frontend journal transformation merged through PR #2 contains financial-reporting risks:
 
-The repository is in a healthy baseline state for the checks available today. The highest-impact next improvement is adding automated frontend tests and a single CI/check command so future audits can be repeated consistently.
+1. A journal record without a recognized profit result can be mapped to `LOSS`, including open or incomplete records.
+2. Closed journal records can receive synthetic PnL values of fixed `+2` or `-1` instead of persisted realized PnL.
+3. A missing exit price can be replaced by take-profit, which can misstate the actual execution result.
+4. Whenever any journal records exist, the existing trade-history source can be discarded entirely.
+5. Strategy names, leverage, margin, and other values can be filled with defaults rather than exchange-derived or persisted values.
+
+Performance and history screens must only display persisted or exchange-derived realized values. Missing financial fields must remain unavailable until the backend stores them explicitly.
+
+## Required next corrections
+
+1. Persist realized PnL, realized fees, actual exit price, strategy name, and leverage in the journal schema.
+2. Represent open, closed, profit, loss, and unknown results separately.
+3. Never infer a loss from a missing result.
+4. Never synthesize realized PnL or exit price.
+5. Add mapping tests for open trades, unknown results, partial closes, TP exits, SL exits, and missing metadata.
+6. Add frontend automated tests and versioned database migrations.
+
+## Current conclusion
+
+Backend logging resilience and stronger journal IDs are valid improvements. The merged frontend journal/performance mapping requires a dedicated correction before its financial metrics can be considered trustworthy.
