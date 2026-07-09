@@ -315,31 +315,40 @@ def _attach_protection_with_retry(
 
 
 def _build_management_state(entry: float, stop_loss: float, take_profit: float, quantity: str, direction: str) -> dict[str, Any]:
+    """
+    REPAIR: Updated TP structure to:
+    - TP1 = RR 1:2 (entry + risk*1 for long, entry - risk*1 for short)
+    - TP2 = RR 1:2.5 (entry + risk*1.5 for long, entry - risk*1.5 for short)
+    - TP3/Runner = RR 1:3 (entry + risk*2 for long, entry - risk*2 for short)
+    
+    Trailing stop only activates after TP2 confirmed.
+    """
     risk = abs(entry - stop_loss)
     qty_value = _to_float(quantity, 0.0)
+    
     if direction == "long":
-        tp1 = entry + risk
-        tp2 = entry + risk * 2
-        runner_target = entry + risk * 3
+        tp1 = entry + risk * 1.0      # RR 1:2
+        tp2 = entry + risk * 1.5      # RR 1:2.5
+        runner_target = entry + risk * 2.0  # RR 1:3
     else:
-        tp1 = entry - risk
-        tp2 = entry - risk * 2
-        runner_target = entry - risk * 3
+        tp1 = entry - risk * 1.0      # RR 1:2
+        tp2 = entry - risk * 1.5      # RR 1:2.5
+        runner_target = entry - risk * 2.0  # RR 1:3
 
     return {
         "tp1": tp1,
         "tp2": tp2,
         "strategy_take_profit": take_profit,
         "runner_target": runner_target,
-        "tp1_fraction": 0.5,
-        "tp2_fraction": 0.25,
-        "runner_fraction": 0.25,
+        "tp1_fraction": 0.5,          # Close 50% at TP1
+        "tp2_fraction": 0.25,         # Close 25% at TP2
+        "runner_fraction": 0.25,      # Let 25% run with trailing stop
         "initial_quantity": qty_value,
         "remaining_quantity": qty_value,
-        "tp1_done": False,
-        "tp2_done": False,
-        "break_even_set": False,
-        "trailing_stop": None,
+        "tp1_done": False,            # Never set true until close confirmed
+        "tp2_done": False,            # Never set true until close confirmed
+        "break_even_set": False,      # Set true only after SL move confirmed
+        "trailing_stop": None,        # Only activated after TP2 confirmed
         "last_momentum_check": None,
         "last_state_change": _utc_now_iso(),
     }
