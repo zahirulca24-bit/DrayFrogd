@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - fix-trade-management-demo-ci
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install backend dependencies
+        run: python -m pip install --upgrade pip && pip install -r requirements.txt
+
+      - name: Compile backend
+        run: python -m compileall -q app tests
+
+      - name: Run backend tests
+        id: backend_tests
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m unittest discover -s tests -p "test_*.py" -v 2>&1 | tee backend-tests.log
+
+      - name: Upload backend logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-test-logs
+          path: backend-tests.log
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: TypeScript check
+        id: typescript_check
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run lint 2>&1 | tee typescript-check.log
+
+      - name: Upload TypeScript logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-typescript-logs
+          path: frontend/typescript-check.log
+
+      - name: Build frontend
+        run: npm run build

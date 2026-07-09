@@ -86,32 +86,15 @@ def calculate_position_size(
         if notional < min_notional:
             return _reject("Minimum notional cannot be satisfied with symbol precision")
 
+    required_margin = notional / leverage_cap
     margin_buffer = available_balance * 0.95
-    max_notional_by_margin = margin_buffer * leverage_cap
+    if required_margin > margin_buffer:
+        return _reject("Required margin exceeds available balance")
 
-    if notional > max_notional_by_margin:
-        capped_qty = max_notional_by_margin / entry
-        normalized_quantity = client.normalize_quantity(capped_qty, str(qty_step))
-        quantity = _positive_float(normalized_quantity)
-
-        if quantity is None:
-            return _reject("Available balance is too low after margin safety buffer")
-
-        notional = quantity * entry
-        required_margin = notional / leverage_cap
-
-        if min_order_qty is not None and quantity < min_order_qty:
-            return _reject("Available balance cannot satisfy minimum order quantity")
-
-        if notional < min_notional:
-            return _reject("Available balance cannot satisfy minimum notional")
-    else:
-        required_margin = notional / leverage_cap
-
-    existing_margin = _current_margin(active_trades, positions, leverage_cap)
-    max_allowed_margin = equity * exposure_cap
-    if existing_margin + required_margin > max_allowed_margin:
-        return _reject("Margin exposure cap exceeded")
+    existing_exposure = _current_notional_exposure(active_trades, positions)
+    max_allowed_exposure = equity * exposure_cap
+    if existing_exposure + notional > max_allowed_exposure:
+        return _reject("Exposure cap exceeded")
 
     actual_risk_amount = quantity * sl_distance
     if actual_risk_amount <= 0 or not isfinite(actual_risk_amount):
@@ -136,10 +119,10 @@ def calculate_position_size(
         "available_balance": available_balance,
         "leverage_cap": leverage_cap,
         "exposure_cap": exposure_cap,
-        "current_margin_exposure": existing_margin,
-        "max_allowed_margin_exposure": max_allowed_margin,
-        "current_exposure": existing_margin,
-        "max_allowed_exposure": max_allowed_margin,
+        "current_margin_exposure": _current_margin(active_trades, positions, leverage_cap),
+        "max_allowed_margin_exposure": available_balance * 0.95,
+        "current_exposure": existing_exposure,
+        "max_allowed_exposure": max_allowed_exposure,
         "min_notional": min_notional,
         "qty_step": str(qty_step),
         "tick_size": str(tick_size),
@@ -184,6 +167,32 @@ def _stale_reason(value: Any) -> str:
     return ""
 
 
+def _current_notional_exposure(active_trades: list[dict[str, Any]], positions: list[dict[str, Any]]) -> float:
+    exposure = 0.0
+
+    for trade in active_trades:
+        notional = _positive_float(trade.get("notional"))
+        if notional is not None:
+            exposure += abs(notional)
+            continue
+
+        quantity = _positive_float(trade.get("quantity")) or 0.0
+        entry = _positive_float(trade.get("entry")) or 0.0
+        exposure += abs(quantity * entry)
+
+    for position in positions:
+        position_value = _positive_float(position.get("positionValue"))
+        if position_value is not None:
+            exposure += abs(position_value)
+            continue
+
+        size = _positive_float(position.get("size")) or 0.0
+        mark_price = _positive_float(position.get("markPrice")) or 0.0
+        exposure += abs(size * mark_price)
+
+    return exposure
+
+
 def _current_margin(
     active_trades: list[dict[str, Any]],
     positions: list[dict[str, Any]],
@@ -204,10 +213,7 @@ def _current_margin(
             margin += abs(quantity * entry) / leverage
 
     for position in positions:
-        position_margin = (
-            _positive_float(position.get("positionIM"))
-            or _positive_float(position.get("positionInitialMargin"))
-        )
+        position_margin = _positive_float(position.get("positionIM")) or _positive_float(position.get("positionInitialMargin"))
         if position_margin is not None:
             margin += abs(position_margin)
             continue

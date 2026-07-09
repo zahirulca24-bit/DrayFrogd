@@ -28,7 +28,7 @@ class Settings:
     admin_password_hash: str = os.getenv("ADMIN_PASSWORD_HASH", "")
     session_secret: str = os.getenv("SESSION_SECRET", "")
     frontend_url: str = os.getenv("FRONTEND_URL", "http://127.0.0.1:3000")
-    bybit_demo_base_url: str = os.getenv("BYBIT_DEMO_BASE_URL", "https://api-testnet.bybit.com")
+    bybit_demo_base_url: str = os.getenv("BYBIT_DEMO_BASE_URL", "https://api-demo.bybit.com")
     bybit_demo_api_key: str = os.getenv("BYBIT_DEMO_API_KEY", "")
     bybit_demo_api_secret: str = os.getenv("BYBIT_DEMO_API_SECRET", "")
     bybit_live_base_url: str = os.getenv("BYBIT_LIVE_BASE_URL", "https://api.bybit.com")
