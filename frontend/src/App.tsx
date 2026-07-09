@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { LogOut, RefreshCw, Server } from "lucide-react";
+import { LogOut, Menu, RefreshCw, Server } from "lucide-react";
 import { api, ApiError } from "./api";
 import {
   AccountResponse,
@@ -116,6 +116,7 @@ export default function App() {
   const [authToken, setAuthToken] = useState<string | null>(localStorage.getItem("scalp_token"));
   const [activeTab, setActiveTab] = useState("dashboard");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [signals, setSignals] = useState<ExecutableSignal[]>([]);
   const [scannerResults, setScannerResults] = useState<ExecutableSignal[]>([]);
   const [activeTrades, setActiveTrades] = useState<Trade[]>([]);
@@ -150,6 +151,10 @@ export default function App() {
     };
 
     document.title = `DayFrogd-ScalpingEngin | ${pageNameMap[activeTab] || "Terminal"}`;
+  }, [activeTab]);
+
+  useEffect(() => {
+    setMobileSidebarOpen(false);
   }, [activeTab]);
 
   const logout = () => {
@@ -415,31 +420,42 @@ export default function App() {
   }
 
   return (
-    <div className="flex h-screen bg-[#0A0B0E] text-slate-300 font-sans selection:bg-rose-500 selection:text-white overflow-hidden" id="main-app-container">
+    <div className="flex min-h-screen bg-[#0A0B0E] text-slate-300 font-sans selection:bg-rose-500 selection:text-white overflow-hidden" id="main-app-container">
       <Sidebar
         activeTab={activeTab}
         setActiveTab={setActiveTab}
         collapsed={sidebarCollapsed}
         setCollapsed={setSidebarCollapsed}
+        mobileOpen={mobileSidebarOpen}
+        setMobileOpen={setMobileSidebarOpen}
         onLogout={logout}
       />
 
-      <div className="flex-1 flex flex-col min-w-0" id="main-terminal-shell">
-        <header className="h-16 bg-[#0A0B0E]/80 backdrop-blur-sm border-b border-slate-800 flex items-center justify-between px-6" id="top-bar-header">
-          <div className="flex items-center space-x-3">
-            <h2 className="text-sm font-semibold text-slate-400 capitalize tracking-tight font-sans">
+      <div className="flex-1 flex flex-col min-w-0 min-h-screen" id="main-terminal-shell">
+        <header className="sticky top-0 z-20 bg-[#0A0B0E]/90 backdrop-blur-sm border-b border-slate-800 px-4 py-3 sm:px-6" id="top-bar-header">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex min-w-0 items-center gap-3">
+              <button
+                type="button"
+                onClick={() => setMobileSidebarOpen(true)}
+                className="inline-flex items-center justify-center rounded-lg border border-slate-800 bg-[#12141C] p-2 text-slate-300 md:hidden"
+                aria-label="Open navigation"
+              >
+                <Menu className="h-4 w-4" />
+              </button>
+            <h2 className="min-w-0 text-sm font-semibold text-slate-400 capitalize tracking-tight font-sans">
               Terminal: <span className="text-white font-bold">{activeTab.replace("-", " ")}</span>
             </h2>
             {(loading || actionLoading) && (
-              <span className="flex items-center space-x-1 font-mono text-[9px] text-slate-500 bg-[#12141C] px-2 py-0.5 rounded border border-slate-800">
+              <span className="hidden sm:flex items-center space-x-1 font-mono text-[9px] text-slate-500 bg-[#12141C] px-2 py-0.5 rounded border border-slate-800">
                 <RefreshCw className="w-2.5 h-2.5 animate-spin text-rose-400" />
                 <span>SYNCING...</span>
               </span>
             )}
           </div>
 
-          <div className="flex items-center space-x-4" id="top-bar-system-stats">
-            <div className="hidden sm:flex items-center space-x-1.5 font-mono text-[10px] text-slate-500">
+          <div className="flex flex-wrap items-center justify-end gap-2 sm:gap-4" id="top-bar-system-stats">
+            <div className="hidden lg:flex items-center space-x-1.5 font-mono text-[10px] text-slate-500">
               <Server className="w-3.5 h-3.5 text-slate-600" />
               <span>FASTAPI:</span>
               <strong className="text-slate-300">8000</strong>
@@ -480,7 +496,7 @@ export default function App() {
           </div>
         </header>
 
-        <main className="flex-1 overflow-y-auto p-6" id="terminal-viewports-wrapper">
+        <main className="flex-1 overflow-y-auto p-4 sm:p-6" id="terminal-viewports-wrapper">
           {errorMsg && (
             <div className="mb-6 bg-red-500/10 border border-red-500/20 text-rose-400 p-4 rounded-2xl flex items-center space-x-3 font-mono text-xs" id="app-sync-error">
               <span className="w-2 h-2 rounded-full bg-red-500 animate-ping" />

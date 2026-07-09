@@ -11,6 +11,7 @@ import {
   ShieldAlert,
   Sliders,
   TrendingUp,
+  X,
 } from "lucide-react";
 
 interface SidebarProps {
@@ -18,6 +19,8 @@ interface SidebarProps {
   setActiveTab: (tab: string) => void;
   collapsed: boolean;
   setCollapsed: (collapsed: boolean) => void;
+  mobileOpen: boolean;
+  setMobileOpen: (open: boolean) => void;
   onLogout: () => void;
 }
 
@@ -26,6 +29,8 @@ export default function Sidebar({
   setActiveTab,
   collapsed,
   setCollapsed,
+  mobileOpen,
+  setMobileOpen,
   onLogout,
 }: SidebarProps) {
   const menuItems = [
@@ -40,12 +45,19 @@ export default function Sidebar({
   ];
 
   return (
-    <aside
-      id="app-sidebar"
-      className={`bg-[#12141C] border-r border-slate-800 flex flex-col transition-all duration-300 h-screen text-slate-400 select-none ${
-        collapsed ? "w-16" : "w-64"
-      }`}
-    >
+    <>
+      <div
+        className={`fixed inset-0 z-30 bg-black/60 transition-opacity duration-300 md:hidden ${
+          mobileOpen ? "opacity-100" : "pointer-events-none opacity-0"
+        }`}
+        onClick={() => setMobileOpen(false)}
+      />
+      <aside
+        id="app-sidebar"
+        className={`fixed inset-y-0 left-0 z-40 bg-[#12141C] border-r border-slate-800 flex flex-col transition-all duration-300 text-slate-400 select-none md:static md:z-auto ${
+          mobileOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"
+        } ${collapsed ? "md:w-16" : "md:w-64"} w-[86vw] max-w-[320px]`}
+      >
       <div className="p-4 border-b border-slate-800 flex items-center justify-between" id="sidebar-brand-section">
         {!collapsed && (
           <div className="flex items-center space-x-2" id="sidebar-logo-text">
@@ -61,6 +73,14 @@ export default function Sidebar({
           title={collapsed ? "Expand Sidebar" : "Collapse Sidebar"}
         >
           {collapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
+        </button>
+        <button
+          type="button"
+          onClick={() => setMobileOpen(false)}
+          className="p-1 rounded-md hover:bg-slate-800 hover:text-white transition-colors cursor-pointer md:hidden"
+          title="Close Navigation"
+        >
+          <X className="w-4 h-4" />
         </button>
       </div>
 
@@ -84,7 +104,10 @@ export default function Sidebar({
             <button
               id={`nav-${item.id}`}
               key={item.id}
-              onClick={() => setActiveTab(item.id)}
+              onClick={() => {
+                setActiveTab(item.id);
+                setMobileOpen(false);
+              }}
               className={`w-full flex items-center p-2.5 rounded-lg text-sm font-medium transition-all cursor-pointer group ${
                 isActive
                   ? "bg-rose-500/10 text-rose-400 border border-rose-500/20"
@@ -110,7 +133,10 @@ export default function Sidebar({
         </div>
         <button
           id="logout-btn"
-          onClick={onLogout}
+          onClick={() => {
+            setMobileOpen(false);
+            onLogout();
+          }}
           className={`w-full flex items-center p-2.5 rounded-lg text-sm font-medium text-slate-500 hover:bg-slate-950 hover:text-rose-400 transition-all cursor-pointer ${
             collapsed ? "justify-center" : "space-x-3"
           }`}
@@ -120,6 +146,7 @@ export default function Sidebar({
           {!collapsed && <span className="truncate">Exit Session</span>}
         </button>
       </div>
-    </aside>
+      </aside>
+    </>
   );
 }

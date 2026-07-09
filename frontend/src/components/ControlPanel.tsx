@@ -131,7 +131,7 @@ export default function ControlPanel({
 
   return (
     <div className="space-y-6">
-      <div className={`bg-bento-card border ${healthStatus === "ONLINE" ? "border-emerald-500/25" : "border-rose-500/25"} rounded-2xl p-6 shadow-md`}>
+      <div className={`bg-bento-card border ${healthStatus === "ONLINE" ? "border-emerald-500/25" : "border-rose-500/25"} rounded-2xl p-4 sm:p-6 shadow-md`}>
         <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-4">
           <div>
             <h3 className="text-sm font-semibold text-white tracking-tight font-sans">Control Panel</h3>
@@ -139,8 +139,8 @@ export default function ControlPanel({
               One-click engine start for demo mode, automatic scanning, and immediate trade execution attempts.
             </p>
           </div>
-          <div className="flex items-center gap-3 text-[10px] font-mono text-slate-500">
-            <span>BDT {formatTime(new Date().toISOString())}</span>
+          <div className="flex flex-wrap items-center gap-3 text-[10px] font-mono text-slate-500">
+            <span className="hidden sm:inline">BDT {formatTime(new Date().toISOString())}</span>
             <button
               onClick={onRefresh}
               disabled={loading}
@@ -153,7 +153,7 @@ export default function ControlPanel({
         </div>
       </div>
 
-      <div className="grid grid-cols-2 xl:grid-cols-5 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-4">
         <SummaryCard label="Backend" value={healthStatus} tone={healthStatus === "ONLINE" ? "good" : "bad"} />
         <SummaryCard label="Bybit" value={exchangeStatus.reachable ? "CONNECTED" : "DEGRADED"} tone={exchangeStatus.reachable ? "good" : "warn"} />
         <SummaryCard label="Wallet" value={account.wallet.ok ? "LIVE" : "FAILED"} tone={account.wallet.ok ? "good" : "warn"} />
@@ -162,7 +162,7 @@ export default function ControlPanel({
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-[1.4fr_0.6fr] gap-6">
-        <div className="bg-bento-card border border-slate-800 rounded-2xl p-6 shadow-md">
+        <div className="bg-bento-card border border-slate-800 rounded-2xl p-4 sm:p-6 shadow-md">
           <div className="flex items-center justify-between mb-5">
             <div>
               <h4 className="text-sm font-semibold text-white tracking-tight font-sans">Execution Setup & Status</h4>
@@ -171,7 +171,7 @@ export default function ControlPanel({
             <Server className="w-4 h-4 text-emerald-400" />
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
             {moduleCards.map((module) => (
               <ModuleCard
                 key={module.module}
@@ -234,7 +234,7 @@ export default function ControlPanel({
         </PanelCard>
 
         <PanelCard title="Risk Settings" icon={<ShieldAlert className="w-4 h-4 text-amber-400" />}>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <MiniMetric label="Risk / Trade" value={formatPercent(riskState.risk_per_trade)} />
             <MiniMetric label="Leverage Cap" value={`${riskState.leverage_cap}x`} />
             <MiniMetric label="Exposure Cap" value={formatPercent(riskState.exposure_cap)} />
@@ -244,7 +244,7 @@ export default function ControlPanel({
             <MiniMetric label="Active Symbols" value={riskState.active_symbols.length > 0 ? riskState.active_symbols.join(", ") : "None"} />
             <MiniMetric label="Cooldown" value={riskState.cooldown_until ? formatTime(riskState.cooldown_until) : "CLEAR"} />
           </div>
-          <div className="mt-4 grid grid-cols-2 gap-3">
+          <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
             <RiskInput label="Risk %" value={riskForm.riskPercent} onChange={(value) => setRiskForm((current) => ({ ...current, riskPercent: value }))} />
             <RiskInput label="Leverage Cap" value={riskForm.leverageCap} onChange={(value) => setRiskForm((current) => ({ ...current, leverageCap: value }))} />
             <RiskInput label="Exposure %" value={riskForm.exposureCap} onChange={(value) => setRiskForm((current) => ({ ...current, exposureCap: value }))} />
@@ -270,10 +270,10 @@ export default function ControlPanel({
       <div className="grid grid-cols-1 xl:grid-cols-[0.9fr_1.1fr] gap-6">
         <PanelCard title="Scanner Monitor" icon={<Radio className="w-4 h-4 text-violet-400" />}>
           <div className="space-y-4">
-            <div className="rounded-xl border border-slate-800 bg-[#0A0B0E] p-4 text-xs text-slate-400">
+            <div className="rounded-xl border border-slate-800 bg-[#0A0B0E] p-4 text-xs leading-relaxed text-slate-400">
               The engine start button already handles demo mode, scan, and immediate execution attempt. This panel is now read-first instead of click-heavy.
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <MiniMetric label="Active Signals" value={String(signals.length)} />
               <MiniMetric label="Latest Results" value={String(scannerResults.length)} />
               <MiniMetric label="Win Rate" value={formatPercent(metrics.win_rate)} />
@@ -287,10 +287,10 @@ export default function ControlPanel({
             <div className="space-y-3">
               {queueRows.map((signal) => (
                 <div key={signal.id} className="rounded-xl border border-slate-800 bg-[#0A0B0E] p-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="min-w-0">
                       <div className="text-xs font-semibold text-white">{signal.pair} {signal.direction}</div>
-                      <div className="text-[10px] font-mono text-slate-500 mt-1">
+                      <div className="mt-1 text-[10px] font-mono text-slate-500">
                         {signal.executionStatus} | RR {signal.rr.toFixed(2)} | Score {signal.score}
                       </div>
                     </div>
@@ -365,8 +365,8 @@ function SummaryCard({ label, value, tone }: { label: string; value: string; ton
 
 function PanelCard({ title, icon, children }: { title: string; icon: ReactNode; children: ReactNode }) {
   return (
-    <div className="bg-bento-card border border-slate-800 rounded-2xl p-6 shadow-md">
-      <div className="flex items-center gap-2 mb-4">
+    <div className="bg-bento-card border border-slate-800 rounded-2xl p-4 sm:p-6 shadow-md">
+      <div className="mb-4 flex items-center gap-2">
         {icon}
         <h4 className="text-sm font-semibold text-white tracking-tight font-sans">{title}</h4>
       </div>
@@ -406,7 +406,7 @@ function ModuleCard({
 
   return (
     <div className="rounded-2xl border border-slate-800 bg-[#0A0B0E] p-4">
-      <div className="flex items-start justify-between gap-3">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="flex items-center gap-2">
           {icon}
           <div>
@@ -417,7 +417,7 @@ function ModuleCard({
         <button
           onClick={onAction}
           disabled={loading}
-          className="px-2.5 py-1 text-[10px] font-mono rounded-lg border border-slate-800 bg-slate-950 hover:text-white cursor-pointer"
+          className="w-full px-2.5 py-1 text-[10px] font-mono rounded-lg border border-slate-800 bg-slate-950 hover:text-white cursor-pointer sm:w-auto"
         >
           {loading ? "..." : actionLabel}
         </button>
@@ -456,15 +456,15 @@ function ActionRow({
   }[accent];
 
   return (
-    <div className="p-4 bg-[#0A0B0E] border border-slate-800/65 rounded-xl flex items-center justify-between gap-3">
-      <div>
+    <div className="rounded-xl border border-slate-800/65 bg-[#0A0B0E] p-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="min-w-0">
         <h4 className="text-xs font-semibold text-slate-200">{title}</h4>
         <p className="text-[10px] text-slate-500 mt-1">{description}</p>
       </div>
       <button
         onClick={onClick}
         disabled={loading}
-        className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all border flex items-center space-x-1.5 ${styles} disabled:opacity-50 cursor-pointer`}
+        className={`w-full sm:w-auto px-3 py-2 sm:py-1.5 text-xs font-semibold rounded-lg transition-all border flex items-center justify-center space-x-1.5 ${styles} disabled:opacity-50 cursor-pointer`}
       >
         {icon}
         <span>{loading ? "..." : buttonLabel}</span>
