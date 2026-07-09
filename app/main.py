@@ -8,6 +8,7 @@ from app.auth import authenticate_admin, create_session_token, is_auth_configure
 from app.background_worker import auto_trading_loop
 from app.bot_controls import (
     activate_emergency_stop,
+    can_execute,
     ensure_runtime_config,
     get_bot_status,
     get_execution_mode,
@@ -38,7 +39,6 @@ from app.watchdog import get_watchdog_snapshot
 
 app = FastAPI(title=settings.app_name)
 _background_task: asyncio.Task | None = None
-_scanner_task: asyncio.Task | None = None
 
 app.add_middleware(AuthMiddleware)
 app.add_middleware(
@@ -228,36 +228,74 @@ def readiness() -> dict:
     return get_readiness_status()
 
 
-async def _run_scanner_job(mode: str) -> None:
+def _run_scan_cycle(mode: str, *, trigger: str) -> dict:
     client = get_exchange_client(mode)
-    try:
-        result = await asyncio.to_thread(run_scan, client)
-        log_bot_event("scanner_run", "Scanner executed manually", metadata={"mode": mode, "result": result})
-    except Exception as exc:
-        log_bot_event(
-            "scanner_run",
-            "Scanner execution failed",
-            level="error",
-            metadata={
-                "mode": mode,
-                "error": str(exc),
-                "endpoint": "/scanner/run",
-                "affected_module": "scanner",
-                "error_code": "SCANNER_RUN_FAILED",
-                "retry_count": 0,
-            },
-        )
+    scan_result = run_scan(client)
+    execution_attempts: list[dict] = []
+    blocked_reason: str | None = None
+
+    if scan_result.get("ok"):
+        signals = scan_result.get("signals") or []
+        allowed, reason = can_execute()
+        if signals and allowed:
+            for signal in signals:
+                outcome = execute_signal(client, signal, True)
+                execution_attempts.append(
+                    {
+                        "symbol": signal.get("symbol"),
+                        "ok": outcome.get("ok", False),
+                        "error": outcome.get("error"),
+                        "trade": outcome.get("trade"),
+                    }
+                )
+                if outcome.get("ok"):
+                    log_bot_event(
+                        "trade_executed",
+                        f"Executed {signal.get('symbol')} in {mode} mode",
+                        metadata={"trade": outcome.get("trade"), "signal": signal, "trigger": trigger},
+                    )
+                else:
+                    log_bot_event(
+                        "auto_execution_failed",
+                        f"Auto execution failed for {signal.get('symbol')}",
+                        level="warning",
+                        metadata={
+                            "endpoint": f"{trigger}:auto_execution",
+                            "affected_module": "execution",
+                            "error_code": "AUTO_EXECUTION_FAILED",
+                            "signal": signal,
+                            "outcome": outcome,
+                            "error": outcome.get("error", "Unknown execution failure"),
+                        },
+                    )
+        elif signals:
+            blocked_reason = reason or "Auto execution is blocked"
+            for signal in signals:
+                execution_attempts.append(
+                    {
+                        "symbol": signal.get("symbol"),
+                        "ok": False,
+                        "error": blocked_reason,
+                        "trade": None,
+                    }
+                )
+
+    return {
+        **scan_result,
+        "scanned_symbols": scan_result.get("symbols_scanned", 0),
+        "execution_attempted": len(execution_attempts) > 0,
+        "executions": execution_attempts,
+        "executed": sum(1 for item in execution_attempts if item.get("ok")),
+        "execution_blocked_reason": blocked_reason,
+    }
 
 
 @app.post("/scanner/run")
 async def scanner_run(_: dict = Depends(require_authenticated)) -> dict:
-    global _scanner_task
-
     mode = get_execution_mode()
-    if _scanner_task is None or _scanner_task.done():
-        _scanner_task = asyncio.create_task(_run_scanner_job(mode))
-
-    return {"ok": True, "queued": True, "mode": mode}
+    result = await asyncio.to_thread(_run_scan_cycle, mode, trigger="/scanner/run")
+    log_bot_event("scanner_run", "Scanner executed manually", metadata={"mode": mode, "result": result})
+    return result
 
 
 @app.get("/scanner/results")
@@ -388,9 +426,7 @@ def bot_start(_: dict = Depends(require_authenticated)) -> dict:
     )
     resume_bot()
     state = start_bot()
-
-    client = get_exchange_client("demo")
-    scan_result = run_scan(client)
+    cycle = _run_scan_cycle("demo", trigger="/bot/start")
 
     log_bot_event(
         "bot_start",
@@ -398,20 +434,23 @@ def bot_start(_: dict = Depends(require_authenticated)) -> dict:
         metadata={
             **state,
             "scan_started": True,
-            "scan_ok": scan_result.get("ok", False),
-            "scanned_symbols": scan_result.get("scanned", 0),
-            "signals_generated": len(scan_result.get("signals") or []),
+            "scan_ok": cycle.get("ok", False),
+            "scanned_symbols": cycle.get("scanned_symbols", 0),
+            "signals_generated": len(cycle.get("signals") or []),
+            "executed": cycle.get("executed", 0),
+            "execution_blocked_reason": cycle.get("execution_blocked_reason"),
         },
     )
 
     return {
         **state,
-        "scan": scan_result,
+        "scan": cycle,
         "automation": {
             "demo_mode": True,
             "auto_trading": True,
             "worker_loop": True,
             "trade_management": True,
+            "immediate_execution": True,
         },
     }
 

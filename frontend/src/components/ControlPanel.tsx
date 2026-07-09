@@ -11,7 +11,6 @@ import {
   ShieldAlert,
   Square,
   Wallet,
-  Zap,
 } from "lucide-react";
 import {
   AccountResponse,
@@ -105,10 +104,7 @@ export default function ControlPanel({
   onStop,
   onEmergencyStop,
   onResume,
-  onRunScanner,
   onRefresh,
-  onModeChange,
-  onAutoTradingToggle,
   onRiskSettingsChange,
 }: ControlPanelProps) {
   const activityLogs = botEvents.slice(0, 10);
@@ -140,7 +136,7 @@ export default function ControlPanel({
           <div>
             <h3 className="text-sm font-semibold text-white tracking-tight font-sans">Control Panel</h3>
             <p className="text-xs text-slate-500 mt-1">
-              Execution setup, module readiness, reconnect actions, and live runtime evidence from the FastAPI backend.
+              One-click engine start for demo mode, automatic scanning, and immediate trade execution attempts.
             </p>
           </div>
           <div className="flex items-center gap-3 text-[10px] font-mono text-slate-500">
@@ -184,9 +180,9 @@ export default function ControlPanel({
                 reason={module.reason}
                 endpoint={module.endpoint}
                 errorCode={module.error_code}
-                actionLabel={module.module === "scanner" ? "Run Test" : "Retest"}
-                onAction={module.module === "scanner" ? onRunScanner : onRefresh}
-                loading={actionLoading === "scanner" && module.module === "scanner" ? true : loading}
+                actionLabel="Retest"
+                onAction={onRefresh}
+                loading={loading}
               />
             ))}
           </div>
@@ -222,11 +218,18 @@ export default function ControlPanel({
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
         <PanelCard title="Bot Controls" icon={<Bot className="w-4 h-4 text-emerald-400" />}>
           <div className="space-y-4">
-            <ActionRow title="Start Bot" description="Set runtime status to running." buttonLabel="START" onClick={onStart} loading={actionLoading === "bot-start"} accent="emerald" icon={<Play className="w-3 h-3" />} />
-            <ActionRow title="Stop Bot" description="Set runtime status to stopped." buttonLabel="STOP" onClick={onStop} loading={actionLoading === "bot-stop"} accent="amber" icon={<Square className="w-3 h-3" />} />
-            <ActionRow title="Switch To Demo" description="Use demo execution mode." buttonLabel="DEMO" onClick={() => onModeChange("demo")} loading={actionLoading === "bot-config-mode"} accent="emerald" icon={<Play className="w-3 h-3" />} />
-            <ActionRow title="Switch To Live" description={botStatus.live_mode_available ? "Live keys detected and mode can be tested." : "Live mode is blocked until real keys exist."} buttonLabel="LIVE" onClick={() => onModeChange("live")} loading={actionLoading === "bot-config-mode"} accent="amber" icon={<AlertTriangle className="w-3 h-3" />} />
-            <ActionRow title="Auto Trading" description={botStatus.auto_trading_enabled ? "Disable automated execution." : "Enable automated execution."} buttonLabel={botStatus.auto_trading_enabled ? "DISABLE" : "ENABLE"} onClick={() => onAutoTradingToggle(!(botStatus.auto_trading_enabled ?? true))} loading={actionLoading === "bot-config-auto"} accent="rose" icon={<Zap className="w-3 h-3" />} />
+            <ActionRow
+              title="Full Engine Start"
+              description="Starts the bot in demo mode, enables auto trading, runs the scan, and instantly tries to execute active signals."
+              buttonLabel="START ENGINE"
+              onClick={onStart}
+              loading={actionLoading === "bot-start"}
+              accent="emerald"
+              icon={<Play className="w-3 h-3" />}
+            />
+            <ActionRow title="Stop Engine" description="Stop the running engine without activating emergency lock." buttonLabel="STOP" onClick={onStop} loading={actionLoading === "bot-stop"} accent="amber" icon={<Square className="w-3 h-3" />} />
+            <ActionRow title="Emergency Stop" description="Immediately block all execution." buttonLabel="ACTIVATE" onClick={onEmergencyStop} loading={actionLoading === "bot-emergency"} accent="red" icon={<AlertTriangle className="w-3 h-3" />} />
+            <ActionRow title="Resume Engine" description="Clear emergency stop and allow automation again." buttonLabel="RESUME" onClick={onResume} loading={actionLoading === "bot-resume"} accent="emerald" icon={<Play className="w-3 h-3" />} />
           </div>
         </PanelCard>
 
@@ -265,9 +268,11 @@ export default function ControlPanel({
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-[0.9fr_1.1fr] gap-6">
-        <PanelCard title="Scanner Controls" icon={<Radio className="w-4 h-4 text-violet-400" />}>
+        <PanelCard title="Scanner Monitor" icon={<Radio className="w-4 h-4 text-violet-400" />}>
           <div className="space-y-4">
-            <ActionRow title="Manual Scanner Run" description="Trigger the existing backend scanner job." buttonLabel="RUN SCAN" onClick={onRunScanner} loading={actionLoading === "scanner"} accent="rose" icon={<Play className="w-3 h-3" />} />
+            <div className="rounded-xl border border-slate-800 bg-[#0A0B0E] p-4 text-xs text-slate-400">
+              The engine start button already handles demo mode, scan, and immediate execution attempt. This panel is now read-first instead of click-heavy.
+            </div>
             <div className="grid grid-cols-2 gap-3">
               <MiniMetric label="Active Signals" value={String(signals.length)} />
               <MiniMetric label="Latest Results" value={String(scannerResults.length)} />
@@ -306,13 +311,12 @@ export default function ControlPanel({
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-[0.7fr_1.3fr] gap-6">
-        <PanelCard title="Emergency Actions" icon={<ShieldAlert className="w-4 h-4 text-rose-400" />}>
+        <PanelCard title="Runtime Snapshot" icon={<Wallet className="w-4 h-4 text-cyan-400" />}>
           <div className="space-y-4">
-            <ActionRow title="Emergency Stop" description="Immediately block all execution." buttonLabel="ACTIVATE" onClick={onEmergencyStop} loading={actionLoading === "bot-emergency"} accent="red" icon={<AlertTriangle className="w-3 h-3" />} />
-            <ActionRow title="Resume Bot" description="Clear emergency stop and restore normal mode." buttonLabel="RESUME" onClick={onResume} loading={actionLoading === "bot-resume"} accent="emerald" icon={<Play className="w-3 h-3" />} />
             <MiniMetric label="Available Balance" value={String(account.wallet.data?.totalAvailableBalance ?? account.wallet.data?.totalWalletBalance ?? "N/A")} />
             <MiniMetric label="Open Positions" value={String(activeTrades.length)} />
             <MiniMetric label="Portfolio Mode" value={(portfolio.execution_mode || botStatus.execution_mode || "demo").toUpperCase()} />
+            <MiniMetric label="Bot Status" value={botStatus.status.toUpperCase()} />
           </div>
         </PanelCard>
 
