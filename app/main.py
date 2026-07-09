@@ -382,9 +382,38 @@ def portfolio(_: dict = Depends(require_authenticated)) -> dict:
 
 @app.post("/bot/start")
 def bot_start(_: dict = Depends(require_authenticated)) -> dict:
+    update_bot_config(
+        execution_mode="demo",
+        auto_trading_enabled=True,
+    )
+    resume_bot()
     state = start_bot()
-    log_bot_event("bot_start", "Bot started", metadata=state)
-    return state
+
+    client = get_exchange_client("demo")
+    scan_result = run_scan(client)
+
+    log_bot_event(
+        "bot_start",
+        "Bot started in full automatic demo mode",
+        metadata={
+            **state,
+            "scan_started": True,
+            "scan_ok": scan_result.get("ok", False),
+            "scanned_symbols": scan_result.get("scanned", 0),
+            "signals_generated": len(scan_result.get("signals") or []),
+        },
+    )
+
+    return {
+        **state,
+        "scan": scan_result,
+        "automation": {
+            "demo_mode": True,
+            "auto_trading": True,
+            "worker_loop": True,
+            "trade_management": True,
+        },
+    }
 
 
 @app.post("/bot/stop")
