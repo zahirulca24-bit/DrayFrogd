@@ -402,6 +402,14 @@ export interface PositionSizeResponse {
   tick_size?: string;
 }
 
+export interface ExecuteTradeResponse {
+  ok: boolean;
+  error?: string | null;
+  warning?: string | null;
+  trade?: Record<string, unknown>;
+  sizing?: Record<string, unknown>;
+}
+
 export interface JournalTradeEntry {
   journal_id: string;
   symbol: string;

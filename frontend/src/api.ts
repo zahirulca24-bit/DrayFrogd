@@ -3,6 +3,7 @@ import {
   BotControlState,
   BotEventEntry,
   ExchangeStatusResponse,
+  ExecuteTradeResponse,
   ExecutableSignal,
   HealthResponse,
   JournalTradeEntry,
@@ -238,7 +239,7 @@ export const api = {
   calculatePositionSize: (token: string, payload: RiskPayload) =>
     request<PositionSizeResponse>("/position-size/calculate", { method: "POST", body: JSON.stringify(payload) }, token),
   executeTrade: (token: string, payload: RiskPayload) =>
-    request("/execute", { method: "POST", body: JSON.stringify(payload) }, token),
+    request<ExecuteTradeResponse>("/execute", { method: "POST", body: JSON.stringify(payload) }, token),
   getActiveTrades: async (token: string) => {
     const response = await request<{ trades: BackendTrade[] }>("/active-trades", {}, token);
     return response.trades.map(toUiTrade);

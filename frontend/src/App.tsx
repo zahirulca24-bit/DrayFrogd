@@ -5,6 +5,7 @@ import {
   AccountResponse,
   BotControlState,
   BotEventEntry,
+  ExecuteTradeResponse,
   ExchangeStatusResponse,
   ExecutableSignal,
   MetricsResponse,
@@ -305,6 +306,40 @@ export default function App() {
     }
   };
 
+  const executeSignalFromUi = async (signal: {
+    symbol: string;
+    direction: string;
+    entry: number;
+    stop_loss: number;
+    take_profit: number;
+    risk_reward: number;
+    detected_at?: string | null;
+    status: string;
+  }): Promise<ExecuteTradeResponse> => {
+    if (!authToken) {
+      return { ok: false, error: "Session expired. Please log in again." };
+    }
+
+    setActionLoading("execute-signal");
+    setErrorMsg(null);
+    try {
+      const result = await api.executeTrade(authToken, signal);
+      await fetchAllData(true);
+      return result;
+    } catch (err: any) {
+      if (err instanceof ApiError && err.status === 401) {
+        logout();
+        setErrorMsg("Session expired. Please log in again.");
+        return { ok: false, error: "Session expired. Please log in again." };
+      }
+      const message = err?.message || "Action failed.";
+      setErrorMsg(message);
+      return { ok: false, error: message };
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
   const renderTabContent = () => {
     switch (activeTab) {
       case "dashboard":
@@ -333,7 +368,7 @@ export default function App() {
             loading={loading || actionLoading === "scanner"}
             onRunScan={() => authToken ? runAction("scanner", () => api.runScanner(authToken)) : Promise.resolve()}
             onRefresh={() => fetchAllData()}
-            onExecuteSignal={(signal) => authToken ? runAction("execute-signal", () => api.executeTrade(authToken, signal)) : Promise.resolve()}
+            onExecuteSignal={executeSignalFromUi}
           />
         );
       case "active-trades":

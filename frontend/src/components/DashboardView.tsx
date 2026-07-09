@@ -77,6 +77,16 @@ function formatPercent(value: number) {
   return `${(value * 100).toFixed(2)}%`;
 }
 
+function formatChartPrice(value: number) {
+  if (value >= 1000) {
+    return value.toFixed(2);
+  }
+  if (value >= 1) {
+    return value.toFixed(4);
+  }
+  return value.toFixed(5);
+}
+
 function formatBdtDateTime(value?: string | Date | null) {
   if (!value) {
     return "N/A";
@@ -423,21 +433,26 @@ function TickerTable({
 
 function CandlesPanel({ candles, loading, symbol }: { candles: MarketCandle[]; loading: boolean; symbol: string }) {
   const width = 920;
-  const height = 260;
-  const paddingX = 16;
-  const paddingTop = 20;
-  const paddingBottom = 32;
+  const height = 320;
+  const paddingLeft = 16;
+  const paddingRight = 68;
+  const paddingTop = 16;
+  const paddingBottom = 28;
   const plotHeight = height - paddingTop - paddingBottom;
-  const plotWidth = width - paddingX * 2;
+  const plotWidth = width - paddingLeft - paddingRight;
   const candleHighs = candles.map((candle) => candle.high);
   const candleLows = candles.map((candle) => candle.low);
   const rawHigh = candleHighs.length > 0 ? Math.max(...candleHighs) : 1;
   const rawLow = candleLows.length > 0 ? Math.min(...candleLows) : 0;
-  const pricePadding = Math.max((rawHigh - rawLow) * 0.12, 1);
+  const pricePadding = Math.max((rawHigh - rawLow) * 0.08, rawHigh > 1 ? 0.5 : 0.0005);
   const high = rawHigh + pricePadding;
   const low = Math.max(rawLow - pricePadding, 0);
   const range = Math.max(high - low, 1);
-  const candleWidth = candles.length > 0 ? Math.max(plotWidth / candles.length - 2, 2) : 4;
+  const step = candles.length > 0 ? plotWidth / candles.length : plotWidth;
+  const candleWidth = candles.length > 0 ? Math.max(Math.min(step * 0.72, 8), 3) : 4;
+  const priceLevels = [0, 0.25, 0.5, 0.75, 1].map((line) => high - range * line);
+  const timeLabelStep = Math.max(Math.floor(candles.length / 6), 1);
+  const latestClose = candles.length > 0 ? candles[candles.length - 1].close : null;
 
   const y = (value: number) => paddingTop + ((high - value) / range) * plotHeight;
 
@@ -449,27 +464,96 @@ function CandlesPanel({ candles, loading, symbol }: { candles: MarketCandle[]; l
       </div>
       <div className="rounded-2xl border border-slate-800 bg-[#0A0B0E] p-3 overflow-x-auto">
         <svg viewBox={`0 0 ${width} ${height}`} className="w-full min-w-[760px]">
-          {[0, 0.25, 0.5, 0.75, 1].map((line) => (
-            <line
-              key={line}
-              x1={paddingX}
-              x2={width - paddingX}
-              y1={paddingTop + plotHeight * line}
-              y2={paddingTop + plotHeight * line}
-              stroke="#1f2937"
-              strokeWidth="1"
-              strokeDasharray="4 6"
-            />
+          <defs>
+            <linearGradient id="dashboardChartBg" x1="0" x2="0" y1="0" y2="1">
+              <stop offset="0%" stopColor="#0f172a" stopOpacity="0.55" />
+              <stop offset="100%" stopColor="#020617" stopOpacity="0.15" />
+            </linearGradient>
+          </defs>
+          <rect x={paddingLeft} y={paddingTop} width={plotWidth} height={plotHeight} rx="10" fill="url(#dashboardChartBg)" />
+          {priceLevels.map((level, index) => (
+            <g key={level}>
+              <line
+                x1={paddingLeft}
+                x2={width - paddingRight}
+                y1={paddingTop + plotHeight * (index / (priceLevels.length - 1))}
+                y2={paddingTop + plotHeight * (index / (priceLevels.length - 1))}
+                stroke="#1e293b"
+                strokeWidth="1"
+                strokeDasharray="3 5"
+              />
+              <text
+                x={width - paddingRight + 8}
+                y={paddingTop + plotHeight * (index / (priceLevels.length - 1)) + 4}
+                fontSize="10"
+                fill="#64748b"
+                textAnchor="start"
+              >
+                {formatChartPrice(level)}
+              </text>
+            </g>
           ))}
+          {candles.filter((_, index) => index % timeLabelStep === 0).map((candle, index) => {
+            const sourceIndex = index * timeLabelStep;
+            const x = paddingLeft + sourceIndex * step + step / 2;
+            return (
+              <g key={`grid-${candle.timestamp}-${sourceIndex}`}>
+                <line
+                  x1={x}
+                  x2={x}
+                  y1={paddingTop}
+                  y2={height - paddingBottom}
+                  stroke="#0f172a"
+                  strokeWidth="1"
+                />
+                <text
+                  x={x}
+                  y={height - 8}
+                  fontSize="10"
+                  fill="#64748b"
+                  textAnchor="middle"
+                >
+                  {formatBdtTime(candle.timestamp)}
+                </text>
+              </g>
+            );
+          })}
+          {latestClose !== null && (
+            <g>
+              <line
+                x1={paddingLeft}
+                x2={width - paddingRight}
+                y1={y(latestClose)}
+                y2={y(latestClose)}
+                stroke="#38bdf8"
+                strokeWidth="1"
+                strokeDasharray="2 4"
+                opacity="0.9"
+              />
+              <rect
+                x={width - paddingRight + 6}
+                y={y(latestClose) - 9}
+                width="54"
+                height="18"
+                rx="6"
+                fill="#082f49"
+                stroke="#0ea5e9"
+                opacity="0.95"
+              />
+              <text x={width - 35} y={y(latestClose) + 4} fontSize="10" fill="#e0f2fe" textAnchor="middle">
+                {formatChartPrice(latestClose)}
+              </text>
+            </g>
+          )}
           {candles.map((candle, index) => {
-            const x = paddingX + index * (plotWidth / Math.max(candles.length, 1)) + 1;
+            const x = paddingLeft + index * step + (step - candleWidth) / 2;
             const openY = y(candle.open);
             const closeY = y(candle.close);
             const highY = y(candle.high);
             const lowY = y(candle.low);
             const isBull = candle.close >= candle.open;
             const bodyY = Math.min(openY, closeY);
-            const bodyHeight = Math.max(Math.abs(closeY - openY), 1.5);
+            const bodyHeight = Math.max(Math.abs(closeY - openY), 2);
             return (
               <g key={`${candle.timestamp}-${index}`}>
                 <line
@@ -477,8 +561,9 @@ function CandlesPanel({ candles, loading, symbol }: { candles: MarketCandle[]; l
                   x2={x + candleWidth / 2}
                   y1={highY}
                   y2={lowY}
-                  stroke={isBull ? "#10b981" : "#f43f5e"}
-                  strokeWidth="1.2"
+                  stroke={isBull ? "#34d399" : "#fb7185"}
+                  strokeWidth="1.1"
+                  strokeLinecap="round"
                 />
                 <rect
                   x={x}
@@ -486,23 +571,14 @@ function CandlesPanel({ candles, loading, symbol }: { candles: MarketCandle[]; l
                   width={candleWidth}
                   height={bodyHeight}
                   rx="1"
-                  fill={isBull ? "#10b981" : "#f43f5e"}
-                  opacity="0.9"
+                  fill={isBull ? "#0f9f6e" : "#e11d48"}
+                  stroke={isBull ? "#6ee7b7" : "#fda4af"}
+                  strokeWidth="0.7"
+                  opacity="0.96"
                 />
               </g>
             );
           })}
-          {candles.filter((_, index) => index % Math.max(Math.floor(candles.length / 5), 1) === 0).map((candle, index) => (
-            <text
-              key={`label-${candle.timestamp}-${index}`}
-              x={paddingX + index * Math.max(plotWidth / 5, 1)}
-              y={height - 10}
-              fontSize="10"
-              fill="#64748b"
-            >
-              {formatBdtTime(candle.timestamp)}
-            </text>
-          ))}
         </svg>
         {candles.length === 0 && <div className="py-16 text-center text-xs font-mono text-slate-500">No backend candles available for this symbol yet.</div>}
       </div>

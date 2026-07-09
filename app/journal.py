@@ -174,7 +174,7 @@ def log_bot_event(event_type: str, message: str, level: str = "info", metadata: 
         "level": level,
         "message": message,
         "event_metadata": json.dumps(metadata or {}, separators=(",", ":")),
-        "created_at": _utc_now(),
+        "created_at": _utc_now_iso(),
     }
 
     db = SessionLocal()

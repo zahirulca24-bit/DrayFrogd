@@ -1,4 +1,5 @@
 import asyncio
+from typing import Any
 from datetime import UTC, datetime
 
 from fastapi import Depends, FastAPI, HTTPException, status
@@ -22,7 +23,7 @@ from app.database import Base, SessionLocal, engine
 from app.dependencies import require_authenticated
 from app.execution import execute_signal, get_active_trades, get_closed_trades, replace_active_trades
 from app.exchange import get_exchange_client
-from app.journal import get_bot_events, get_closed_trade_history, get_open_trade_history, get_trade_history, log_bot_event
+from app.journal import create_trade_entry, get_bot_events, get_closed_trade_history, get_open_trade_history, get_trade_history, log_bot_event
 from app.metrics import get_metrics, get_portfolio_summary
 from app.middleware import AuthMiddleware
 from app.models import UserSession
@@ -379,6 +380,11 @@ def active_trades(_: dict = Depends(require_authenticated)) -> dict:
         trades = get_open_trade_history()
         if trades:
             replace_active_trades(trades)
+    client = get_exchange_client(get_execution_mode())
+    ok_positions, positions, _ = client.safe_fetch_positions()
+    if ok_positions:
+        trades = _merge_exchange_positions_into_trades(trades, positions, get_execution_mode())
+        replace_active_trades(trades)
     return {"trades": trades}
 
 
@@ -530,3 +536,66 @@ def _to_float(value) -> float:
 
 def _utc_now_iso() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _merge_exchange_positions_into_trades(trades: list[dict[str, Any]], positions: list[dict[str, Any]], execution_mode: str) -> list[dict[str, Any]]:
+    merged = [dict(trade) for trade in trades]
+    trades_by_symbol = {str(trade.get("symbol", "")).upper(): trade for trade in merged}
+
+    for position in positions:
+        try:
+            size = float(position.get("size", 0))
+        except (TypeError, ValueError):
+            continue
+        if size <= 0:
+            continue
+
+        symbol = str(position.get("symbol", "")).upper()
+        if not symbol:
+            continue
+
+        direction = "short" if str(position.get("side", "")).lower() == "sell" else "long"
+        entry = _to_float(position.get("avgPrice")) or 0.0
+        mark_price = _to_float(position.get("markPrice")) or entry
+        stop_loss = _to_float(position.get("stopLoss")) or entry
+        take_profit = _to_float(position.get("takeProfit")) or entry
+        existing = trades_by_symbol.get(symbol)
+
+        if existing:
+            existing["quantity"] = position.get("size", existing.get("quantity"))
+            existing["remaining_quantity"] = position.get("size", existing.get("remaining_quantity", existing.get("quantity")))
+            existing["entry"] = entry or _to_float(existing.get("entry")) or 0.0
+            existing["direction"] = existing.get("direction") or direction
+            existing["status"] = "active"
+            existing["mark_price"] = mark_price
+            if not _to_float(existing.get("stop_loss")):
+                existing["stop_loss"] = stop_loss
+            if not _to_float(existing.get("take_profit")):
+                existing["take_profit"] = take_profit
+            continue
+
+        trade = {
+            "symbol": symbol,
+            "direction": direction,
+            "entry": entry,
+            "stop_loss": stop_loss,
+            "take_profit": take_profit,
+            "quantity": position.get("size"),
+            "remaining_quantity": position.get("size"),
+            "status": "active",
+            "opened_at": _utc_now_iso(),
+            "execution_mode": execution_mode,
+            "order_id": None,
+            "journal_id": f"exchange-{execution_mode}-{symbol}",
+            "mark_price": mark_price,
+            "exchange_metadata": {
+                "source": "exchange_position_only",
+                "position_snapshot": position,
+            },
+        }
+        journal = create_trade_entry(trade)
+        trade["journal_id"] = journal["journal_id"]
+        merged.append(trade)
+        trades_by_symbol[symbol] = trade
+
+    return merged

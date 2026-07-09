@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, Play, RefreshCw } from "lucide-react";
 import { api } from "../api";
-import { ExecutableSignal, MarketTicker } from "../types";
+import { ExecutableSignal, ExecuteTradeResponse, MarketTicker } from "../types";
 
 interface SignalEngineProps {
   authToken: string | null;
@@ -19,7 +19,7 @@ interface SignalEngineProps {
     risk_reward: number;
     detected_at?: string | null;
     status: string;
-  }) => Promise<void>;
+  }) => Promise<ExecuteTradeResponse>;
 }
 
 const BDT_DATE_TIME = new Intl.DateTimeFormat("en-BD", {
@@ -105,6 +105,7 @@ export default function SignalEngine({
   const [marketError, setMarketError] = useState<string | null>(null);
   const [selectedSignalId, setSelectedSignalId] = useState<string | null>(null);
   const [autoTradeArmed, setAutoTradeArmed] = useState<Record<string, boolean>>({});
+  const [executionFeedback, setExecutionFeedback] = useState<Record<string, string>>({});
   const bdtDayRef = useRef(new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Dhaka" }));
 
   useEffect(() => {
@@ -278,17 +279,24 @@ export default function SignalEngine({
                 }
                 onSelect={() => setSelectedSignalId(signal.id)}
                 onExecute={() =>
-                  onExecuteSignal({
-                    symbol: signal.pair,
-                    direction: signal.direction.toLowerCase(),
-                    entry: signal.entryPrice,
-                    stop_loss: signal.stopLoss,
-                    take_profit: signal.takeProfit,
-                    risk_reward: signal.rr,
-                    detected_at: signal.timestamp,
-                    status: "active",
-                  })
+                  (async () => {
+                    const result = await onExecuteSignal({
+                      symbol: signal.pair,
+                      direction: signal.direction.toLowerCase(),
+                      entry: signal.entryPrice,
+                      stop_loss: signal.stopLoss,
+                      take_profit: signal.takeProfit,
+                      risk_reward: signal.rr,
+                      detected_at: signal.timestamp,
+                      status: "active",
+                    });
+                    setExecutionFeedback((current) => ({
+                      ...current,
+                      [signal.id]: result.ok ? (result.warning || "Execution submitted successfully.") : (result.error || "Execution failed."),
+                    }));
+                  })()
                 }
+                executionFeedback={executionFeedback[signal.id]}
               />
             ))}
           </div>
@@ -354,6 +362,7 @@ function SignalCard({
   onToggleAutoTrade,
   onSelect,
   onExecute,
+  executionFeedback,
 }: {
   signal: ExecutableSignal;
   ticker?: MarketTicker;
@@ -362,6 +371,7 @@ function SignalCard({
   onToggleAutoTrade: () => void;
   onSelect: () => void;
   onExecute: () => Promise<void>;
+  executionFeedback?: string;
 }) {
   const executable = signal.executionStatus === "READY";
   return (
@@ -426,6 +436,12 @@ function SignalCard({
       {signal.rejectionReason && (
         <div className="mt-4 rounded-xl border border-slate-800 bg-slate-950/60 px-4 py-3 text-[11px] text-slate-400">
           <span className="text-slate-300">Reason:</span> {signal.rejectionReason}
+        </div>
+      )}
+
+      {executionFeedback && (
+        <div className="mt-4 rounded-xl border border-slate-800 bg-slate-950/60 px-4 py-3 text-[11px] text-slate-300">
+          <span className="text-slate-400">Execution:</span> {executionFeedback}
         </div>
       )}
     </div>
