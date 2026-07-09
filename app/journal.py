@@ -159,7 +159,7 @@ def log_bot_event(event_type: str, message: str, level: str = "info", metadata: 
         "level": level,
         "message": message,
         "event_metadata": json.dumps(metadata or {}, separators=(",", ":")),
-        "created_at": _utc_now_iso(),
+        "created_at": _utc_now(),
     }
 
     db = SessionLocal()
@@ -244,8 +244,12 @@ def _make_journal_id() -> str:
     return f"jrnl-{int(datetime.now(UTC).timestamp() * 1000)}"
 
 
+def _utc_now() -> datetime:
+    return datetime.now(UTC)
+
+
 def _utc_now_iso() -> str:
-    return datetime.now(UTC).isoformat()
+    return _utc_now().isoformat()
 
 
 def _optional_float(value: Any) -> float | None:

@@ -58,16 +58,48 @@ async def auto_trading_loop() -> None:
                 await asyncio.sleep(settings.bot_scan_interval_seconds)
                 continue
 
-            for signal in get_active_signals():
-                outcome = await asyncio.to_thread(execute_signal, client, signal, True)
+            active_signals = result.get("signals") or get_active_signals()
+            for signal in active_signals:
+                try:
+                    outcome = await asyncio.to_thread(execute_signal, client, signal, True)
+                except Exception as exc:
+                    logger.exception("Auto execution crashed for %s", signal.get("symbol"))
+                    log_bot_event(
+                        "auto_execution_error",
+                        f"Auto execution crashed for {signal.get('symbol')}",
+                        level="error",
+                        metadata={
+                            "endpoint": "background:auto_execution",
+                            "affected_module": "execution",
+                            "error_code": "AUTO_EXECUTION_ERROR",
+                            "signal": signal,
+                            "error": str(exc),
+                        },
+                    )
+                    continue
+
                 if outcome.get("ok"):
                     log_bot_event(
                         "trade_executed",
                         f"Executed {signal.get('symbol')} in {get_execution_mode()} mode",
                         metadata={"trade": outcome.get("trade"), "signal": signal},
                     )
-                elif outcome.get("error"):
-                    logger.warning("Auto execution skipped for %s: %s", signal.get("symbol"), outcome.get("error"))
+                else:
+                    error_message = outcome.get("error", "Unknown execution failure")
+                    logger.warning("Auto execution failed for %s: %s", signal.get("symbol"), error_message)
+                    log_bot_event(
+                        "auto_execution_failed",
+                        f"Auto execution failed for {signal.get('symbol')}",
+                        level="warning",
+                        metadata={
+                            "endpoint": "background:auto_execution",
+                            "affected_module": "execution",
+                            "error_code": "AUTO_EXECUTION_FAILED",
+                            "signal": signal,
+                            "outcome": outcome,
+                            "error": error_message,
+                        },
+                    )
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # pragma: no cover - defensive background task guard
