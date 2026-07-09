@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef } from "react";
 import { AccountResponse, Trade, TradeHistoryEntry } from "../types";
 
 interface ActiveTradesProps {
+  authToken?: string | null;
   trades: Trade[];
   tradeHistory: TradeHistoryEntry[];
   account: AccountResponse;
