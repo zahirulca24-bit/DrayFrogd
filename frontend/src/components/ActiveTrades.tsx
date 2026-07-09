@@ -197,12 +197,12 @@ export default function ActiveTrades({ authToken, trades, tradeHistory, account,
                   <tr className="border-b border-slate-800 bg-[#111318] text-[10px] font-mono uppercase tracking-wider text-sky-200/80">
                     <th className="px-4 py-4 text-left">Market Symbol</th>
                     <th className="px-4 py-4 text-left">Direction</th>
-                    <th className="px-4 py-4 text-center">Margin / Exposure</th>
-                    <th className="px-4 py-4 text-center">Entry / Mark Price</th>
-                    <th className="px-4 py-4 text-center">Stop / Profit Targets</th>
-                    <th className="px-4 py-4 text-center">Floating PnL ($ / %)</th>
-                    <th className="px-4 py-4 text-right">Action Executions</th>
-                  </tr>
+                      <th className="px-4 py-4 text-center">Margin / Exposure</th>
+                      <th className="px-4 py-4 text-center">Entry / Mark Price</th>
+                      <th className="px-4 py-4 text-center">Stop / Management Targets</th>
+                      <th className="px-4 py-4 text-center">Floating PnL ($ / %)</th>
+                      <th className="px-4 py-4 text-right">Action Executions</th>
+                    </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800/80 text-sm">
                   {trades.map((trade) => {
@@ -236,7 +236,9 @@ export default function ActiveTrades({ authToken, trades, tradeHistory, account,
                         </td>
                         <td className="px-4 py-4 text-center font-mono">
                           <div className="text-rose-400">SL: {formatMoney(trade.stopLoss)}</div>
-                          <div className="mt-1 text-emerald-400">TP: {formatMoney(trade.takeProfit)}</div>
+                          <div className="mt-1 text-emerald-400">TP1: {trade.managementTp1 ? formatMoney(trade.managementTp1) : formatMoney(trade.takeProfit)}</div>
+                          {trade.managementTp2 && <div className="mt-1 text-sky-400">TP2: {formatMoney(trade.managementTp2)}</div>}
+                          {trade.managementRunner && <div className="mt-1 text-teal-300">Runner: {formatMoney(trade.managementRunner)}</div>}
                         </td>
                         <td className="px-4 py-4 text-center font-mono">
                           <div className={numberValue(trade.unrealizedPnl) >= 0 ? "text-emerald-400" : "text-rose-400"}>
@@ -284,9 +286,16 @@ export default function ActiveTrades({ authToken, trades, tradeHistory, account,
                 <MonitorMetric label="Direction" value={selectedTrade.direction} good={selectedTrade.direction === "LONG"} />
                 <MonitorMetric label="Size" value={String(selectedTrade.size)} />
                 <MonitorMetric label="Entry" value={formatMoney(selectedTrade.entryPrice)} />
-                <MonitorMetric label="SL / TP" value={`${formatMoney(selectedTrade.stopLoss)} / ${formatMoney(selectedTrade.takeProfit)}`} />
+                <MonitorMetric label="SL / TP1" value={`${formatMoney(selectedTrade.stopLoss)} / ${formatMoney(selectedTrade.managementTp1 || selectedTrade.takeProfit)}`} />
                 <MonitorMetric label="Mode" value={selectedTrade.executionMode || "demo"} />
                 <MonitorMetric label="Timestamp" value={formatBdtDateTime(selectedTrade.closedAt || selectedTrade.timestamp)} />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3 mb-4">
+                <MonitorMetric label="TP2" value={formatMoney(selectedTrade.managementTp2 || selectedTrade.takeProfit)} />
+                <MonitorMetric label="Runner" value={formatMoney(selectedTrade.managementRunner || selectedTrade.takeProfit)} />
+                <MonitorMetric label="TP1 Done" value={selectedTrade.tp1Done ? "YES" : "NO"} good={selectedTrade.tp1Done} />
+                <MonitorMetric label="Break Even" value={selectedTrade.breakEvenSet ? "SET" : "NOT SET"} good={selectedTrade.breakEvenSet} />
               </div>
 
               <div className="rounded-2xl border border-slate-800 bg-[#0A0B0E] p-4">
@@ -294,7 +303,14 @@ export default function ActiveTrades({ authToken, trades, tradeHistory, account,
                   <span>Live backend chart</span>
                   <span>{candles.length} candles</span>
                 </div>
-                <MiniTradeChart candles={candles} entry={selectedTrade.entryPrice} stopLoss={selectedTrade.stopLoss} takeProfit={selectedTrade.takeProfit} />
+                <MiniTradeChart
+                  candles={candles}
+                  entry={selectedTrade.entryPrice}
+                  stopLoss={selectedTrade.stopLoss}
+                  tp1={selectedTrade.managementTp1 || selectedTrade.takeProfit}
+                  tp2={selectedTrade.managementTp2}
+                  runner={selectedTrade.managementRunner}
+                />
               </div>
 
               <div className="grid grid-cols-2 gap-4 mt-4">
@@ -359,12 +375,16 @@ function MiniTradeChart({
   candles,
   entry,
   stopLoss,
-  takeProfit,
+  tp1,
+  tp2,
+  runner,
 }: {
   candles: MarketCandle[];
   entry: number;
   stopLoss: number;
-  takeProfit: number;
+  tp1: number;
+  tp2?: number;
+  runner?: number;
 }) {
   const width = 480;
   const height = 220;
@@ -374,8 +394,8 @@ function MiniTradeChart({
     return <div className="py-12 text-center text-xs font-mono text-slate-500">No live candles available.</div>;
   }
 
-  const high = Math.max(...candles.map((item) => item.high), takeProfit, entry);
-  const low = Math.min(...candles.map((item) => item.low), stopLoss, entry);
+  const high = Math.max(...candles.map((item) => item.high), runner || tp2 || tp1, entry);
+  const low = Math.min(...candles.map((item) => item.low), stopLoss, runner || tp2 || tp1, entry);
   const range = Math.max(high - low, 1);
   const plotWidth = width - padding * 2;
   const plotHeight = height - padding * 2;
@@ -384,14 +404,14 @@ function MiniTradeChart({
 
   return (
     <svg viewBox={`0 0 ${width} ${height}`} className="w-full">
-      {[entry, stopLoss, takeProfit].map((level, index) => (
+      {[entry, stopLoss, tp1, tp2, runner].filter((level): level is number => Boolean(level)).map((level, index) => (
         <line
           key={index}
           x1={padding}
           x2={width - padding}
           y1={getY(level)}
           y2={getY(level)}
-          stroke={index === 0 ? "#94a3b8" : index === 1 ? "#f43f5e" : "#10b981"}
+          stroke={index === 0 ? "#94a3b8" : index === 1 ? "#f43f5e" : index === 2 ? "#10b981" : index === 3 ? "#38bdf8" : "#14b8a6"}
           strokeDasharray="5 5"
           strokeWidth="1"
         />

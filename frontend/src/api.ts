@@ -95,6 +95,7 @@ type BackendTrade = {
   execution_mode?: "demo" | "live";
   journal_id?: string;
   exit_price?: number | null;
+  exchange_metadata?: Record<string, unknown>;
 };
 
 type RiskPayload = {
@@ -154,6 +155,8 @@ function toUiTrade(item: BackendTrade, index: number): Trade {
   const size = Number(item.quantity || 0);
   const direction = item.direction?.toUpperCase() === "SHORT" ? "SHORT" : "LONG";
   const rawResult = String(item.result || "").toUpperCase();
+  const exchangeMetadata = (item.exchange_metadata || {}) as Record<string, any>;
+  const management = (exchangeMetadata.management || {}) as Record<string, any>;
 
   return {
     id: item.order_id || item.journal_id || `${item.symbol}-${index}`,
@@ -183,6 +186,12 @@ function toUiTrade(item: BackendTrade, index: number): Trade {
     closedAt: item.closed_at || undefined,
     slHitReason: item.sl_hit_reason ?? null,
     exitPrice: Number(item.exit_price || 0),
+    managementTp1: Number(management.tp1 || 0) || undefined,
+    managementTp2: Number(management.tp2 || 0) || undefined,
+    managementRunner: Number(management.runner_target || 0) || undefined,
+    breakEvenSet: Boolean(management.break_even_set),
+    tp1Done: Boolean(management.tp1_done),
+    tp2Done: Boolean(management.tp2_done),
   };
 }
 

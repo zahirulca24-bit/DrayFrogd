@@ -36,6 +36,12 @@ export interface Trade {
   closedAt?: string;
   slHitReason?: string | null;
   exitPrice?: number;
+  managementTp1?: number;
+  managementTp2?: number;
+  managementRunner?: number;
+  breakEvenSet?: boolean;
+  tp1Done?: boolean;
+  tp2Done?: boolean;
 }
 
 export interface TradeHistoryEntry extends Omit<Trade, 'result' | 'closedAt' | 'exitPrice'> {
