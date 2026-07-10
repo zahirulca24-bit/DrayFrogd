@@ -48,6 +48,7 @@ class TradeJournal(Base):
     stop_loss: Mapped[float] = mapped_column(Float, nullable=False)
     take_profit: Mapped[float] = mapped_column(Float, nullable=False)
     quantity: Mapped[float | None] = mapped_column(Float, nullable=True)
+    strategy_name: Mapped[str | None] = mapped_column(String(64), nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="active", nullable=False)
     result: Mapped[str | None] = mapped_column(String(32), nullable=True)
     sl_hit_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)

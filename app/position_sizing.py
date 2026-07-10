@@ -91,9 +91,9 @@ def calculate_position_size(
     if required_margin > margin_buffer:
         return _reject("Required margin exceeds available balance")
 
-    existing_exposure = _current_notional_exposure(active_trades, positions)
-    max_allowed_exposure = equity * exposure_cap
-    if existing_exposure + notional > max_allowed_exposure:
+    existing_margin = _current_margin(active_trades, positions, leverage_cap)
+    max_allowed_margin = equity * exposure_cap
+    if existing_margin + required_margin > max_allowed_margin:
         return _reject("Exposure cap exceeded")
 
     actual_risk_amount = quantity * sl_distance
@@ -119,10 +119,10 @@ def calculate_position_size(
         "available_balance": available_balance,
         "leverage_cap": leverage_cap,
         "exposure_cap": exposure_cap,
-        "current_margin_exposure": _current_margin(active_trades, positions, leverage_cap),
-        "max_allowed_margin_exposure": available_balance * 0.95,
-        "current_exposure": existing_exposure,
-        "max_allowed_exposure": max_allowed_exposure,
+        "current_margin_exposure": existing_margin,
+        "max_allowed_margin_exposure": max_allowed_margin,
+        "current_exposure": existing_margin,
+        "max_allowed_exposure": max_allowed_margin,
         "min_notional": min_notional,
         "qty_step": str(qty_step),
         "tick_size": str(tick_size),
@@ -165,42 +165,23 @@ def _stale_reason(value: Any) -> str:
     if datetime.now(UTC) - detected_at.astimezone(UTC) > timedelta(minutes=SIGNAL_MAX_AGE_MINUTES):
         return "Signal is stale for position sizing"
     return ""
-
-
-def _current_notional_exposure(active_trades: list[dict[str, Any]], positions: list[dict[str, Any]]) -> float:
-    exposure = 0.0
-
-    for trade in active_trades:
-        notional = _positive_float(trade.get("notional"))
-        if notional is not None:
-            exposure += abs(notional)
-            continue
-
-        quantity = _positive_float(trade.get("quantity")) or 0.0
-        entry = _positive_float(trade.get("entry")) or 0.0
-        exposure += abs(quantity * entry)
-
-    for position in positions:
-        position_value = _positive_float(position.get("positionValue"))
-        if position_value is not None:
-            exposure += abs(position_value)
-            continue
-
-        size = _positive_float(position.get("size")) or 0.0
-        mark_price = _positive_float(position.get("markPrice")) or 0.0
-        exposure += abs(size * mark_price)
-
-    return exposure
-
-
 def _current_margin(
     active_trades: list[dict[str, Any]],
     positions: list[dict[str, Any]],
     fallback_leverage: float,
 ) -> float:
-    margin = 0.0
+    authoritative_positions = _normalize_open_positions(positions)
+    if authoritative_positions:
+        return _positions_margin(authoritative_positions, fallback_leverage)
 
+    return _active_trades_margin(active_trades, fallback_leverage)
+
+
+def _active_trades_margin(active_trades: list[dict[str, Any]], fallback_leverage: float) -> float:
+    margin = 0.0
     for trade in active_trades:
+        if str(trade.get("status", "active")).lower() == "closed":
+            continue
         required_margin = _positive_float(trade.get("required_margin"))
         if required_margin is not None:
             margin += required_margin
@@ -211,7 +192,11 @@ def _current_margin(
         leverage = _positive_float(trade.get("leverage")) or fallback_leverage
         if leverage > 0:
             margin += abs(quantity * entry) / leverage
+    return margin
 
+
+def _positions_margin(positions: list[dict[str, Any]], fallback_leverage: float) -> float:
+    margin = 0.0
     for position in positions:
         position_margin = _positive_float(position.get("positionIM")) or _positive_float(position.get("positionInitialMargin"))
         if position_margin is not None:
@@ -230,6 +215,31 @@ def _current_margin(
             margin += abs(size * mark_price) / leverage
 
     return margin
+
+
+def _normalize_open_positions(positions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    seen_keys: set[tuple[str, str, str]] = set()
+
+    for position in positions:
+        size = _positive_float(position.get("size"))
+        if size is None or size <= 0:
+            continue
+
+        symbol = str(position.get("symbol", "")).upper().strip()
+        if not symbol:
+            continue
+
+        side = str(position.get("side", "")).lower().strip()
+        position_idx = str(position.get("positionIdx", "")).strip()
+        key = (symbol, side, position_idx)
+        if key in seen_keys:
+            continue
+
+        seen_keys.add(key)
+        normalized.append(position)
+
+    return normalized
 
 
 def _extract_positive(wallet: dict[str, Any], keys: list[str]) -> float | None:

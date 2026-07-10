@@ -18,6 +18,8 @@ class SessionVerifyResponse(BaseModel):
 
 class RiskSignalRequest(BaseModel):
     symbol: str
+    strategy_name: str | None = None
+    strategy: str | None = None
     direction: str | None = None
     entry: float
     stop_loss: float
@@ -29,6 +31,8 @@ class RiskSignalRequest(BaseModel):
 
 class ExecuteSignalRequest(BaseModel):
     symbol: str
+    strategy_name: str | None = None
+    strategy: str | None = None
     direction: str
     entry: float
     stop_loss: float
@@ -40,6 +44,8 @@ class ExecuteSignalRequest(BaseModel):
 
 class PositionSizeRequest(BaseModel):
     symbol: str
+    strategy_name: str | None = None
+    strategy: str | None = None
     direction: str
     entry: float
     stop_loss: float

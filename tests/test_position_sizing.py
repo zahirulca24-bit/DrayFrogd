@@ -68,7 +68,7 @@ class PositionSizingTests(unittest.TestCase):
             signal=self.signal,
             wallet=self.wallet,
             symbol_info=self.symbol_info,
-            active_trades=[{"entry": 100.0, "quantity": 4.0}],
+            active_trades=[{"required_margin": 480.0}],
             positions=[],
             settings=self.settings,
             client=FakeClient(),
@@ -76,6 +76,72 @@ class PositionSizingTests(unittest.TestCase):
 
         self.assertFalse(result["allowed"])
         self.assertEqual(result["reason"], "Exposure cap exceeded")
+
+    def test_exchange_positions_are_authoritative_when_available(self) -> None:
+        result = calculate_position_size(
+            signal=self.signal,
+            wallet=self.wallet,
+            symbol_info=self.symbol_info,
+            active_trades=[{"required_margin": 490.0}],
+            positions=[{"symbol": "BTCUSDT", "side": "Buy", "size": "1", "markPrice": "100", "leverage": "5"}],
+            settings=self.settings,
+            client=FakeClient(),
+        )
+
+        self.assertTrue(result["allowed"])
+        self.assertEqual(result["current_exposure"], 20.0)
+
+    def test_active_trades_are_used_as_fallback_when_positions_missing(self) -> None:
+        result = calculate_position_size(
+            signal=self.signal,
+            wallet=self.wallet,
+            symbol_info=self.symbol_info,
+            active_trades=[{"required_margin": 480.0}],
+            positions=[],
+            settings=self.settings,
+            client=FakeClient(),
+        )
+
+        self.assertFalse(result["allowed"])
+        self.assertEqual(result["reason"], "Exposure cap exceeded")
+
+    def test_duplicate_positions_are_counted_once(self) -> None:
+        duplicated_position = {
+            "symbol": "BTCUSDT",
+            "side": "Buy",
+            "positionIdx": "1",
+            "size": "1",
+            "positionIM": "400",
+        }
+        result = calculate_position_size(
+            signal=self.signal,
+            wallet=self.wallet,
+            symbol_info=self.symbol_info,
+            active_trades=[],
+            positions=[duplicated_position, dict(duplicated_position)],
+            settings=self.settings,
+            client=FakeClient(),
+        )
+
+        self.assertTrue(result["allowed"])
+        self.assertEqual(result["current_exposure"], 400.0)
+
+    def test_hedge_mode_long_and_short_positions_remain_separate(self) -> None:
+        result = calculate_position_size(
+            signal=self.signal,
+            wallet=self.wallet,
+            symbol_info=self.symbol_info,
+            active_trades=[],
+            positions=[
+                {"symbol": "BTCUSDT", "side": "Buy", "positionIdx": "1", "size": "1", "positionIM": "100"},
+                {"symbol": "BTCUSDT", "side": "Sell", "positionIdx": "2", "size": "1", "positionIM": "100"},
+            ],
+            settings=self.settings,
+            client=FakeClient(),
+        )
+
+        self.assertTrue(result["allowed"])
+        self.assertEqual(result["current_exposure"], 200.0)
 
 
 if __name__ == "__main__":

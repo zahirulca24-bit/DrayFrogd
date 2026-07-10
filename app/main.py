@@ -296,8 +296,9 @@ def _run_scan_cycle(mode: str, *, trigger: str) -> dict:
 @app.post("/scanner/run")
 async def scanner_run(_: dict = Depends(require_authenticated)) -> dict:
     mode = get_execution_mode()
-    result = await asyncio.to_thread(_run_scan_cycle, mode, trigger="/scanner/run")
-    log_bot_event("scanner_run", "Scanner executed manually", metadata={"mode": mode, "result": result})
+    client = get_exchange_client(mode)
+    result = await asyncio.to_thread(run_scan, client)
+    log_bot_event("scanner_run", "Scanner executed manually (scan-only diagnostic)", metadata={"mode": mode, "result": result})
     return result
 
 
@@ -576,6 +577,8 @@ def _merge_exchange_positions_into_trades(trades: list[dict[str, Any]], position
 
         trade = {
             "symbol": symbol,
+            "strategy_name": "unknown",
+            "strategy": "unknown",
             "direction": direction,
             "entry": entry,
             "stop_loss": stop_loss,

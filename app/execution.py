@@ -86,6 +86,8 @@ def execute_signal(client: BybitClient, signal: dict[str, Any], auto_triggered: 
 
     trade = {
         "symbol": normalized_signal["symbol"],
+        "strategy_name": normalized_signal.get("strategy_name") or "unknown",
+        "strategy": normalized_signal.get("strategy_name") or "unknown",
         "direction": normalized_signal["direction"],
         "entry": normalized_signal["entry"],
         "stop_loss": float(stop_loss),
@@ -103,6 +105,8 @@ def execute_signal(client: BybitClient, signal: dict[str, Any], auto_triggered: 
         "auto_triggered": auto_triggered,
         "exchange_metadata": {
             "mode": execution_mode,
+            "strategy_name": normalized_signal.get("strategy_name") or "unknown",
+            "strategy": normalized_signal.get("strategy_name") or "unknown",
             "order_response": order_result,
             "position_sizing": sizing,
             "management": management,
@@ -255,6 +259,7 @@ def _normalize_signal(signal: dict[str, Any]) -> dict[str, Any] | None:
             return None
         return {
             "symbol": str(signal.get("symbol", "")).upper(),
+            "strategy_name": str(signal.get("strategy_name") or signal.get("strategy") or "unknown"),
             "direction": direction,
             "entry": float(signal.get("entry")),
             "stop_loss": float(signal.get("stop_loss")),

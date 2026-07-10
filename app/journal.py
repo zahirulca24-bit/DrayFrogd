@@ -7,15 +7,17 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from sqlalchemy import desc
+from sqlalchemy import desc, inspect, text
 
 from app.config import settings
-from app.database import SessionLocal
+from app.database import SessionLocal, engine
 from app.models import BotEvent, TradeJournal
 
 
 def create_trade_entry(trade: dict[str, Any]) -> dict[str, Any]:
+    _ensure_trade_journal_columns()
     journal_id = str(trade.get("journal_id") or _make_journal_id())
+    strategy_name = _resolve_strategy_name_from_trade(trade)
     payload = {
         "journal_id": journal_id,
         "symbol": str(trade.get("symbol", "")).upper(),
@@ -25,6 +27,7 @@ def create_trade_entry(trade: dict[str, Any]) -> dict[str, Any]:
         "stop_loss": float(trade.get("stop_loss", 0)),
         "take_profit": float(trade.get("take_profit", 0)),
         "quantity": _optional_float(trade.get("quantity")),
+        "strategy_name": strategy_name,
         "status": str(trade.get("status", "active")),
         "result": trade.get("result"),
         "sl_hit_reason": trade.get("sl_hit_reason"),
@@ -53,6 +56,7 @@ def create_trade_entry(trade: dict[str, Any]) -> dict[str, Any]:
 
 
 def update_trade_entry(journal_id: str, updates: dict[str, Any]) -> dict[str, Any] | None:
+    _ensure_trade_journal_columns()
     db = SessionLocal()
     payload: dict[str, Any] | None = None
     try:
@@ -75,6 +79,7 @@ def update_trade_entry(journal_id: str, updates: dict[str, Any]) -> dict[str, An
 
 
 def append_trade_event(journal_id: str, event_type: str, message: str, metadata: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    _ensure_trade_journal_columns()
     db = SessionLocal()
     payload: dict[str, Any] | None = None
     try:
@@ -122,6 +127,7 @@ def append_trade_event(journal_id: str, event_type: str, message: str, metadata:
 
 
 def get_trade_history(limit: int = 100) -> list[dict[str, Any]]:
+    _ensure_trade_journal_columns()
     db = SessionLocal()
     try:
         rows = db.query(TradeJournal).order_by(desc(TradeJournal.id)).limit(limit).all()
@@ -131,6 +137,7 @@ def get_trade_history(limit: int = 100) -> list[dict[str, Any]]:
 
 
 def get_closed_trade_history(limit: int = 100) -> list[dict[str, Any]]:
+    _ensure_trade_journal_columns()
     db = SessionLocal()
     try:
         rows = (
@@ -146,6 +153,7 @@ def get_closed_trade_history(limit: int = 100) -> list[dict[str, Any]]:
 
 
 def get_open_trade_history(limit: int = 100) -> list[dict[str, Any]]:
+    _ensure_trade_journal_columns()
     db = SessionLocal()
     try:
         rows = (
@@ -195,10 +203,13 @@ def serialize_trade_entry(row: TradeJournal) -> dict[str, Any]:
             metadata = json.loads(row.exchange_metadata)
         except json.JSONDecodeError:
             metadata = {}
+    strategy_name = _resolve_strategy_name(row, metadata)
 
     return {
         "journal_id": row.journal_id,
         "symbol": row.symbol,
+        "strategy_name": strategy_name,
+        "strategy": strategy_name,
         "direction": row.direction,
         "execution_mode": row.execution_mode,
         "entry": row.entry_price,
@@ -273,3 +284,32 @@ def _optional_float(value: Any) -> float | None:
         return float(value) if value is not None else None
     except (TypeError, ValueError):
         return None
+
+
+def _resolve_strategy_name_from_trade(trade: dict[str, Any]) -> str:
+    raw_strategy = trade.get("strategy_name") or trade.get("strategy")
+    if raw_strategy is None:
+        return "unknown"
+    strategy_name = str(raw_strategy).strip()
+    return strategy_name or "unknown"
+
+
+def _resolve_strategy_name(row: TradeJournal, metadata: dict[str, Any]) -> str:
+    raw_strategy = row.strategy_name or metadata.get("strategy_name") or metadata.get("strategy")
+    if raw_strategy is None:
+        return "unknown"
+    strategy_name = str(raw_strategy).strip()
+    return strategy_name or "unknown"
+
+
+def _ensure_trade_journal_columns() -> None:
+    inspector = inspect(engine)
+    if "trade_journal" not in inspector.get_table_names():
+        return
+
+    column_names = {column["name"] for column in inspector.get_columns("trade_journal")}
+    if "strategy_name" in column_names:
+        return
+
+    with engine.begin() as connection:
+        connection.execute(text("ALTER TABLE trade_journal ADD COLUMN strategy_name VARCHAR(64) NULL"))

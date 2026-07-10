@@ -2,7 +2,7 @@ from threading import Lock
 from typing import Any
 
 from app.exchange import BybitDemoClient
-from app.strategy import evaluate_ema_pullback_strategy
+from app.strategy import evaluate_registered_strategies
 
 
 DEFAULT_SCANNER_SYMBOLS = [
@@ -69,22 +69,25 @@ def run_scan(client: BybitDemoClient) -> dict[str, Any]:
             skipped.append({"symbol": symbol, "reason": error_1m or "Failed to fetch 1m candles"})
             continue
 
-        signal = evaluate_ema_pullback_strategy(symbol=symbol, candles_5m=candles_5m, candles_1m=candles_1m)
-        normalized = {
-            "symbol": symbol,
-            "direction": signal.get("direction"),
-            "entry": signal.get("entry"),
-            "stop_loss": signal.get("stop_loss"),
-            "take_profit": signal.get("take_profit"),
-            "risk_reward": signal.get("risk_reward"),
-            "detected_at": signal.get("detected_at"),
-            "status": signal.get("status"),
-            "confidence_score": signal.get("confidence_score"),
-            "rejection_reason": signal.get("rejection_reason"),
-        }
-        scan_results.append(normalized)
-        if normalized.get("direction") and normalized.get("status") == "active":
-            signals.append(normalized)
+        strategy_results = evaluate_registered_strategies(symbol=symbol, candles_5m=candles_5m, candles_1m=candles_1m)
+        for result in strategy_results:
+            normalized = {
+                "symbol": symbol,
+                "strategy_name": result.get("strategy_name") or result.get("strategy"),
+                "strategy": result.get("strategy") or result.get("strategy_name"),
+                "direction": result.get("direction"),
+                "entry": result.get("entry"),
+                "stop_loss": result.get("stop_loss"),
+                "take_profit": result.get("take_profit"),
+                "risk_reward": result.get("risk_reward"),
+                "detected_at": result.get("detected_at"),
+                "status": result.get("status"),
+                "confidence_score": result.get("confidence_score"),
+                "rejection_reason": result.get("rejection_reason"),
+            }
+            scan_results.append(normalized)
+            if normalized.get("direction") and normalized.get("status") == "active":
+                signals.append(normalized)
 
     with _signals_lock:
         _latest_signals.clear()
