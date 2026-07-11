@@ -31,6 +31,10 @@ def create_trade_entry(trade: dict[str, Any]) -> dict[str, Any]:
         "status": str(trade.get("status", "active")),
         "result": trade.get("result"),
         "sl_hit_reason": trade.get("sl_hit_reason"),
+        "close_reason": trade.get("close_reason"),
+        "exit_price": _optional_float(trade.get("exit_price")),
+        "realized_pnl": _optional_float(trade.get("realized_pnl")),
+        "fees": _optional_float(trade.get("fees")),
         "order_id": trade.get("order_id"),
         "detected_at": trade.get("detected_at"),
         "opened_at": trade.get("opened_at") or _utc_now_iso(),
@@ -219,6 +223,10 @@ def serialize_trade_entry(row: TradeJournal) -> dict[str, Any]:
         "status": row.status,
         "result": row.result,
         "sl_hit_reason": row.sl_hit_reason,
+        "close_reason": row.close_reason,
+        "exit_price": row.exit_price,
+        "realized_pnl": row.realized_pnl,
+        "fees": row.fees,
         "order_id": row.order_id,
         "detected_at": row.detected_at,
         "opened_at": row.opened_at,
@@ -307,9 +315,15 @@ def _ensure_trade_journal_columns() -> None:
     if "trade_journal" not in inspector.get_table_names():
         return
 
-    column_names = {column["name"] for column in inspector.get_columns("trade_journal")}
-    if "strategy_name" in column_names:
-        return
-
+    existing = {column["name"] for column in inspector.get_columns("trade_journal")}
+    column_defs = {
+        "strategy_name": "VARCHAR(64) NULL",
+        "close_reason": "VARCHAR(64) NULL",
+        "exit_price": "FLOAT NULL",
+        "realized_pnl": "FLOAT NULL",
+        "fees": "FLOAT NULL",
+    }
     with engine.begin() as connection:
-        connection.execute(text("ALTER TABLE trade_journal ADD COLUMN strategy_name VARCHAR(64) NULL"))
+        for name, definition in column_defs.items():
+            if name not in existing:
+                connection.execute(text(f"ALTER TABLE trade_journal ADD COLUMN {name} {definition}"))
