@@ -9,6 +9,7 @@ from app.exchange import get_exchange_client
 from app.journal import log_bot_event
 from app.reconciliation import reconcile_state
 from app.risk import extract_account_equity, refresh_risk_state
+from app.risk_cooldown_sync import sync_loss_cooldowns
 from app.risk_execution import execute_signal
 from app.risk_sync import sync_partial_realized_pnl
 from app.scanner import get_active_signals, run_scan
@@ -62,6 +63,11 @@ async def auto_trading_loop() -> None:
             partial_pnl_result = await asyncio.to_thread(sync_partial_realized_pnl, client)
             if not partial_pnl_result.get("ok") and partial_pnl_result.get("errors"):
                 logger.debug("Partial realized PnL sync pending: %s", partial_pnl_result.get("errors"))
+
+            # Exact negative realized PnL creates a symbol-specific 30-minute
+            # cooldown. The expiry is reconstructed from closed_at, so restart
+            # and repeated worker cycles cannot bypass or extend it.
+            await asyncio.to_thread(sync_loss_cooldowns)
 
             wallet_ok, wallet, wallet_error = await asyncio.to_thread(client.safe_fetch_wallet_balance)
             account_equity = extract_account_equity(wallet) if wallet_ok else None
