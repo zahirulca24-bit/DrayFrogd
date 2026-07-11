@@ -8,6 +8,15 @@ interface PerformanceStrategyProps {
   history: TradeHistoryEntry[];
 }
 
+type FinancialJournalTrade = JournalTradeEntry & {
+  strategy_name?: string | null;
+  strategy?: string | null;
+  exit_price?: number | null;
+  realized_pnl?: number | null;
+  fees?: number | null;
+  close_reason?: string | null;
+};
+
 type PerformanceRow = TradeHistoryEntry & {
   tradeStatus: string;
   strategy: string;
@@ -105,21 +114,28 @@ function toBdtDate(value?: string | null) {
 }
 
 function journalToPerformanceRow(item: JournalTradeEntry, index: number): PerformanceRow {
+  const financial = item as FinancialJournalTrade;
   const entryPrice = numberValue(item.entry);
   const stopLoss = numberValue(item.stop_loss);
   const takeProfit = numberValue(item.take_profit);
   const isClosed = String(item.status || "").toLowerCase() === "closed";
   const rawResult = String(item.result || "").toLowerCase();
-  const result = rawResult === "tp" || rawResult === "profit" ? "PROFIT" : "LOSS";
+  const realizedPnl = financial.realized_pnl === null || financial.realized_pnl === undefined ? 0 : numberValue(financial.realized_pnl);
+  const outcome =
+    realizedPnl > 0 || rawResult === "tp" || rawResult === "profit"
+      ? "PROFIT"
+      : realizedPnl < 0 || rawResult === "sl" || rawResult === "loss"
+      ? "LOSS"
+      : "UNKNOWN";
   const closedAt = item.closed_at || item.opened_at || item.detected_at || new Date().toISOString();
 
   return {
     id: item.order_id || item.journal_id || `${item.symbol}-${index}`,
     pair: item.symbol,
-    strategy: "EMA Pullback",
+    strategy: String(financial.strategy_name || financial.strategy || "unknown"),
     direction: String(item.direction || "").toUpperCase() === "SHORT" ? "SHORT" : "LONG",
     entryPrice,
-    currentPrice: entryPrice,
+    currentPrice: isClosed ? numberValue(financial.exit_price) || entryPrice : entryPrice,
     stopLoss,
     takeProfit,
     size: numberValue(item.quantity),
@@ -133,10 +149,10 @@ function journalToPerformanceRow(item: JournalTradeEntry, index: number): Perfor
     rawStatus: item.status,
     journalId: item.journal_id,
     executionMode: item.execution_mode || "demo",
-    exitPrice: isClosed ? numberValue((item.exchange_metadata as Record<string, any>)?.exit_price || item.take_profit) : 0,
-    pnl: isClosed ? (result === "PROFIT" ? 2 : -1) : 0,
-    result,
-    reason: item.sl_hit_reason || (isClosed ? "n/a" : "open"),
+    exitPrice: isClosed ? numberValue(financial.exit_price) : 0,
+    pnl: isClosed ? realizedPnl : 0,
+    result: outcome as TradeHistoryEntry["result"],
+    reason: financial.close_reason || item.sl_hit_reason || (isClosed ? "unknown" : "open"),
     closedAt,
     tradeStatus: item.status || (isClosed ? "closed" : "active"),
     symbol: item.symbol,
@@ -193,7 +209,7 @@ export default function PerformanceStrategy({ authToken, history }: PerformanceS
     return history.map((trade) => ({
       ...trade,
       tradeStatus: trade.rawStatus || trade.status,
-      strategy: trade.strategy || "EMA Pullback",
+      strategy: trade.strategy || "unknown",
       symbol: trade.pair,
       session: getSession(trade.closedAt),
       rrValue: calcRr(trade.entryPrice, trade.stopLoss, trade.takeProfit),
@@ -201,18 +217,19 @@ export default function PerformanceStrategy({ authToken, history }: PerformanceS
   }, [history, journalTrades]);
 
   const closedRows = rows.filter((row) => String(row.tradeStatus || row.status).toLowerCase() === "closed" || row.status === "CLOSED");
+  const knownClosedRows = closedRows.filter((row) => row.result === "PROFIT" || row.result === "LOSS");
   const openRows = rows.filter((row) => !closedRows.includes(row));
 
   const totalTrades = rows.length;
-  const winTrades = closedRows.filter((row) => row.result === "PROFIT").length;
-  const lossTrades = closedRows.filter((row) => row.result === "LOSS").length;
-  const winRate = closedRows.length > 0 ? winTrades / closedRows.length : null;
+  const winTrades = knownClosedRows.filter((row) => row.result === "PROFIT").length;
+  const lossTrades = knownClosedRows.filter((row) => row.result === "LOSS").length;
+  const winRate = knownClosedRows.length > 0 ? winTrades / knownClosedRows.length : null;
   const netPnl = closedRows.length > 0 ? closedRows.reduce((sum, row) => sum + numberValue(row.pnl), 0) : null;
-  const profitFactor = closedRows.length > 0 ? computeProfitFactor(closedRows) : null;
+  const profitFactor = knownClosedRows.length > 0 ? computeProfitFactor(knownClosedRows) : null;
   const rrValues = rows.map((row) => row.rrValue).filter((value): value is number => value !== null);
   const avgRr = rrValues.length > 0 ? rrValues.reduce((sum, value) => sum + value, 0) / rrValues.length : null;
-  const avgWin = winTrades > 0 ? closedRows.filter((row) => row.result === "PROFIT").reduce((sum, row) => sum + numberValue(row.pnl), 0) / winTrades : null;
-  const avgLoss = lossTrades > 0 ? closedRows.filter((row) => row.result === "LOSS").reduce((sum, row) => sum + numberValue(row.pnl), 0) / lossTrades : null;
+  const avgWin = winTrades > 0 ? knownClosedRows.filter((row) => row.result === "PROFIT").reduce((sum, row) => sum + numberValue(row.pnl), 0) / winTrades : null;
+  const avgLoss = lossTrades > 0 ? knownClosedRows.filter((row) => row.result === "LOSS").reduce((sum, row) => sum + numberValue(row.pnl), 0) / lossTrades : null;
   const maxDrawdown = closedRows.length > 0 ? computeMaxDrawdown(closedRows) : null;
 
   const equityCurve = closedRows.reduce<Array<{ x: string; y: number }>>((acc, row) => {
@@ -282,7 +299,7 @@ export default function PerformanceStrategy({ authToken, history }: PerformanceS
       title: "Risk Efficiency",
       value: avgRr !== null ? `${avgRr.toFixed(2)}R` : "Insufficient Data",
       hint: "Average realized reward-to-risk profile.",
-      tone: avgRr !== null && avgRr >= 2 ? "good" : "warn",
+      tone: avgRr !== null && avgRr >= 1.5 ? "good" : "warn",
     },
     {
       title: "Drawdown Pressure",
