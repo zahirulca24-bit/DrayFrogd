@@ -60,15 +60,22 @@ class BybitClient:
         except ExchangeError as exc:
             return False, [], str(exc)
 
-    def safe_fetch_open_orders(
-        self,
-        category: str = "linear",
-        settle_coin: str = "USDT",
-    ) -> tuple[bool, list[dict[str, Any]], str | None]:
+    def safe_fetch_open_orders(self, category: str = "linear", settle_coin: str = "USDT") -> tuple[bool, list[dict[str, Any]], str | None]:
         try:
             return True, self.fetch_open_orders(category=category, settle_coin=settle_coin), None
         except ExchangeError as exc:
             return False, [], str(exc)
+
+    def safe_fetch_order_by_link_id(
+        self,
+        symbol: str,
+        order_link_id: str,
+        category: str = "linear",
+    ) -> tuple[bool, dict[str, Any] | None, str | None]:
+        try:
+            return True, self.fetch_order_by_link_id(symbol=symbol, order_link_id=order_link_id, category=category), None
+        except ExchangeError as exc:
+            return False, None, str(exc)
 
     def safe_fetch_symbol_info(self, category: str = "linear", symbol: str | None = None) -> tuple[bool, list[dict[str, Any]], str | None]:
         try:
@@ -82,12 +89,7 @@ class BybitClient:
         except ExchangeError as exc:
             return False, [], str(exc)
 
-    def safe_fetch_orderbook(
-        self,
-        symbol: str,
-        category: str = "linear",
-        limit: int = 25,
-    ) -> tuple[bool, dict[str, list[dict[str, Any]]] | None, str | None]:
+    def safe_fetch_orderbook(self, symbol: str, category: str = "linear", limit: int = 25) -> tuple[bool, dict[str, list[dict[str, Any]]] | None, str | None]:
         try:
             return True, self.fetch_orderbook(symbol=symbol, category=category, limit=limit), None
         except ExchangeError as exc:
@@ -111,10 +113,7 @@ class BybitClient:
         return items[0] if items else {}
 
     def fetch_positions(self, category: str = "linear", settle_coin: str = "USDT") -> list[dict[str, Any]]:
-        payload = self._private_get(
-            "/v5/position/list",
-            {"category": category, "settleCoin": settle_coin},
-        )
+        payload = self._private_get("/v5/position/list", {"category": category, "settleCoin": settle_coin})
         return payload.get("list", [])
 
     def fetch_open_orders(self, category: str = "linear", settle_coin: str = "USDT") -> list[dict[str, Any]]:
@@ -123,6 +122,20 @@ class BybitClient:
             {"category": category, "settleCoin": settle_coin, "openOnly": "0", "limit": "50"},
         )
         return payload.get("list", [])
+
+    def fetch_order_by_link_id(self, symbol: str, order_link_id: str, category: str = "linear") -> dict[str, Any] | None:
+        payload = self._private_get(
+            "/v5/order/realtime",
+            {
+                "category": category,
+                "symbol": symbol,
+                "orderLinkId": order_link_id,
+                "openOnly": "2",
+                "limit": "1",
+            },
+        )
+        items = payload.get("list", [])
+        return items[0] if items else None
 
     def fetch_symbol_info(self, category: str = "linear", symbol: str | None = None) -> list[dict[str, Any]]:
         params: dict[str, str] = {"category": category}
@@ -146,21 +159,10 @@ class BybitClient:
             )
         return results
 
-    def fetch_recent_candles(
-        self,
-        symbol: str,
-        interval: str,
-        category: str = "linear",
-        limit: int = 200,
-    ) -> list[dict[str, Any]]:
+    def fetch_recent_candles(self, symbol: str, interval: str, category: str = "linear", limit: int = 200) -> list[dict[str, Any]]:
         payload = self._public_get(
             "/v5/market/kline",
-            {
-                "category": category,
-                "symbol": symbol,
-                "interval": interval,
-                "limit": str(limit),
-            },
+            {"category": category, "symbol": symbol, "interval": interval, "limit": str(limit)},
         )
 
         candles: list[dict[str, Any]] = []
@@ -182,19 +184,10 @@ class BybitClient:
         payload = self._public_get("/v5/market/tickers", {"category": category})
         return payload.get("list", [])
 
-    def fetch_orderbook(
-        self,
-        symbol: str,
-        category: str = "linear",
-        limit: int = 25,
-    ) -> dict[str, list[dict[str, Any]]]:
+    def fetch_orderbook(self, symbol: str, category: str = "linear", limit: int = 25) -> dict[str, list[dict[str, Any]]]:
         payload = self._public_get(
             "/v5/market/orderbook",
-            {
-                "category": category,
-                "symbol": symbol,
-                "limit": str(limit),
-            },
+            {"category": category, "symbol": symbol, "limit": str(limit)},
         )
         return {
             "bids": [{"price": item[0], "size": item[1]} for item in payload.get("b", [])],
@@ -207,6 +200,7 @@ class BybitClient:
         side: str,
         qty: str,
         category: str = "linear",
+        order_link_id: str | None = None,
     ) -> dict[str, Any]:
         return self._private_post(
             "/v5/order/create",
@@ -217,17 +211,11 @@ class BybitClient:
                 "orderType": "Market",
                 "qty": qty,
                 "positionIdx": 0,
-                "orderLinkId": f"demo-{symbol.lower()}-{secrets.token_hex(6)}",
+                "orderLinkId": order_link_id or f"demo-{symbol.lower()}-{secrets.token_hex(6)}",
             },
         )
 
-    def close_position_market(
-        self,
-        symbol: str,
-        side: str,
-        qty: str,
-        category: str = "linear",
-    ) -> dict[str, Any]:
+    def close_position_market(self, symbol: str, side: str, qty: str, category: str = "linear") -> dict[str, Any]:
         return self._private_post(
             "/v5/order/create",
             {
@@ -323,7 +311,7 @@ class BybitClient:
 
         try:
             with urlopen(request, timeout=self.timeout) as response:
-                body = response.read().decode("utf-8")
+                body_text = response.read().decode("utf-8")
         except HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="ignore")
             raise ExchangeError(f"HTTP {exc.code}: {detail or exc.reason}") from exc
@@ -333,7 +321,7 @@ class BybitClient:
             raise ExchangeError("Request timed out") from exc
 
         try:
-            payload = json.loads(body)
+            payload = json.loads(body_text)
         except json.JSONDecodeError as exc:
             raise ExchangeError("Invalid JSON response from exchange") from exc
 
@@ -366,12 +354,7 @@ def get_exchange_client(execution_mode: str = "demo") -> BybitClient:
 def get_exchange_status_summary() -> dict[str, Any]:
     demo_client = get_exchange_client("demo")
     live_client = get_exchange_client("live")
-
-    return {
-        "mode": demo_client.mode,
-        "demo": demo_client.get_status(),
-        "live": live_client.get_status(),
-    }
+    return {"mode": demo_client.mode, "demo": demo_client.get_status(), "live": live_client.get_status()}
 
 
 def _format_decimal(value: float, step: str) -> str:
