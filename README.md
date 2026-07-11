@@ -59,9 +59,13 @@ Deployment sequence:
 
 The backend start command runs a database connection check and creates any missing mapped tables before Uvicorn starts. PostgreSQL pooling uses pre-ping so stale connections are replaced before use.
 
+### Render Free PostgreSQL limitation
+
+The Blueprint currently requests Render's `free` PostgreSQL plan. It persists data across normal backend redeploys, but the free database has a limited lifetime and is not suitable for permanent production retention. Upgrade the database plan before the free instance expires or migrate the data to another persistent PostgreSQL provider.
+
 ### Existing SQLite data
 
-Switching to PostgreSQL prevents future Render redeploys from losing database state. Existing records in an old SQLite file are not copied automatically. Export and migrate any SQLite records that must be retained before replacing the current deployment database.
+Switching to PostgreSQL prevents future Render backend redeploys from losing database state. Existing records in an old SQLite file are not copied automatically. Export and migrate any SQLite records that must be retained before replacing the current deployment database.
 
 ## Notes
 
