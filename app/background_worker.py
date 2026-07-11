@@ -6,9 +6,11 @@ import logging
 from app.bot_controls import can_execute, get_execution_mode
 from app.config import settings
 from app.exchange import get_exchange_client
-from app.execution import execute_signal
 from app.journal import log_bot_event
 from app.reconciliation import reconcile_state
+from app.risk import extract_account_equity, refresh_risk_state
+from app.risk_execution import execute_signal
+from app.risk_sync import sync_partial_realized_pnl
 from app.scanner import get_active_signals, run_scan
 from app.trade_management import manage_open_trades
 
@@ -54,6 +56,25 @@ async def auto_trading_loop() -> None:
                         "error_code": "TRADE_MANAGEMENT_FAILED",
                         "retry_count": 1,
                         "result": management_result,
+                    },
+                )
+
+            partial_pnl_result = await asyncio.to_thread(sync_partial_realized_pnl, client)
+            if not partial_pnl_result.get("ok") and partial_pnl_result.get("errors"):
+                logger.debug("Partial realized PnL sync pending: %s", partial_pnl_result.get("errors"))
+
+            wallet_ok, wallet, wallet_error = await asyncio.to_thread(client.safe_fetch_wallet_balance)
+            account_equity = extract_account_equity(wallet) if wallet_ok else None
+            risk_state = await asyncio.to_thread(refresh_risk_state, account_equity)
+            if not wallet_ok and risk_state.get("day_start_equity") is None:
+                _safe_log_bot_event(
+                    "risk_equity_unavailable",
+                    wallet_error or "Day-start equity is unavailable",
+                    level="warning",
+                    metadata={
+                        "endpoint": "background:risk_refresh",
+                        "affected_module": "risk",
+                        "error_code": "RISK_EQUITY_UNAVAILABLE",
                     },
                 )
 
