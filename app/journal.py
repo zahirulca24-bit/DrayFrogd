@@ -7,7 +7,8 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from sqlalchemy import desc, inspect, text
+from sqlalchemy import desc, inspect, or_, text
+from sqlalchemy.exc import IntegrityError
 
 from app.config import settings
 from app.database import SessionLocal, engine
@@ -17,30 +18,7 @@ from app.models import BotEvent, TradeJournal
 def create_trade_entry(trade: dict[str, Any]) -> dict[str, Any]:
     _ensure_trade_journal_columns()
     journal_id = str(trade.get("journal_id") or _make_journal_id())
-    strategy_name = _resolve_strategy_name_from_trade(trade)
-    payload = {
-        "journal_id": journal_id,
-        "symbol": str(trade.get("symbol", "")).upper(),
-        "direction": str(trade.get("direction", "")).lower(),
-        "execution_mode": str(trade.get("execution_mode", "demo")).lower(),
-        "entry_price": float(trade.get("entry", 0)),
-        "stop_loss": float(trade.get("stop_loss", 0)),
-        "take_profit": float(trade.get("take_profit", 0)),
-        "quantity": _optional_float(trade.get("quantity")),
-        "strategy_name": strategy_name,
-        "status": str(trade.get("status", "active")),
-        "result": trade.get("result"),
-        "sl_hit_reason": trade.get("sl_hit_reason"),
-        "close_reason": trade.get("close_reason"),
-        "exit_price": _optional_float(trade.get("exit_price")),
-        "realized_pnl": _optional_float(trade.get("realized_pnl")),
-        "fees": _optional_float(trade.get("fees")),
-        "order_id": trade.get("order_id"),
-        "detected_at": trade.get("detected_at"),
-        "opened_at": trade.get("opened_at") or _utc_now_iso(),
-        "closed_at": trade.get("closed_at"),
-        "exchange_metadata": json.dumps(trade.get("exchange_metadata") or {}, separators=(",", ":")),
-    }
+    payload = _build_trade_payload(trade, journal_id=journal_id, default_opened_at=True)
 
     db = SessionLocal()
     try:
@@ -59,6 +37,70 @@ def create_trade_entry(trade: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def reserve_trade_execution(trade: dict[str, Any], execution_key: str) -> dict[str, Any]:
+    """Atomically reserve one execution key before any exchange order is sent."""
+    _ensure_trade_journal_columns()
+    normalized_key = str(execution_key or "").strip().lower()
+    if not normalized_key:
+        raise ValueError("execution_key is required")
+
+    journal_id = str(trade.get("journal_id") or f"exec-{normalized_key[:48]}")
+    pending_trade = {
+        **trade,
+        "journal_id": journal_id,
+        "execution_key": normalized_key,
+        "status": "pending_execution",
+        "order_id": None,
+        "opened_at": None,
+        "closed_at": None,
+    }
+    payload = _build_trade_payload(pending_trade, journal_id=journal_id, default_opened_at=False)
+
+    db = SessionLocal()
+    try:
+        existing = (
+            db.query(TradeJournal)
+            .filter(or_(TradeJournal.execution_key == normalized_key, TradeJournal.journal_id == journal_id))
+            .first()
+        )
+        if existing is not None:
+            return {"reserved": False, "trade": serialize_trade_entry(existing)}
+
+        row = TradeJournal(**payload)
+        db.add(row)
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            existing = (
+                db.query(TradeJournal)
+                .filter(or_(TradeJournal.execution_key == normalized_key, TradeJournal.journal_id == journal_id))
+                .first()
+            )
+            if existing is None:
+                raise
+            return {"reserved": False, "trade": serialize_trade_entry(existing)}
+    finally:
+        db.close()
+
+    _send_supabase("trade_journal", payload, upsert=True)
+    return {"reserved": True, "trade": payload}
+
+
+def get_trade_by_execution_key(execution_key: str) -> dict[str, Any] | None:
+    _ensure_trade_journal_columns()
+    normalized_key = str(execution_key or "").strip().lower()
+    if not normalized_key:
+        return None
+
+    db = SessionLocal()
+    try:
+        row = db.query(TradeJournal).filter(TradeJournal.execution_key == normalized_key).first()
+        return serialize_trade_entry(row) if row is not None else None
+    finally:
+        db.close()
+
+
 def update_trade_entry(journal_id: str, updates: dict[str, Any]) -> dict[str, Any] | None:
     _ensure_trade_journal_columns()
     db = SessionLocal()
@@ -72,7 +114,6 @@ def update_trade_entry(journal_id: str, updates: dict[str, Any]) -> dict[str, An
             if hasattr(row, key):
                 setattr(row, key, json.dumps(value, separators=(",", ":")) if key == "exchange_metadata" and isinstance(value, dict) else value)
         db.commit()
-
         payload = serialize_trade_entry(row)
     finally:
         db.close()
@@ -144,13 +185,7 @@ def get_closed_trade_history(limit: int = 100) -> list[dict[str, Any]]:
     _ensure_trade_journal_columns()
     db = SessionLocal()
     try:
-        rows = (
-            db.query(TradeJournal)
-            .filter(TradeJournal.status == "closed")
-            .order_by(desc(TradeJournal.id))
-            .limit(limit)
-            .all()
-        )
+        rows = db.query(TradeJournal).filter(TradeJournal.status == "closed").order_by(desc(TradeJournal.id)).limit(limit).all()
         return [serialize_trade_entry(row) for row in rows]
     finally:
         db.close()
@@ -160,13 +195,7 @@ def get_open_trade_history(limit: int = 100) -> list[dict[str, Any]]:
     _ensure_trade_journal_columns()
     db = SessionLocal()
     try:
-        rows = (
-            db.query(TradeJournal)
-            .filter(TradeJournal.status != "closed")
-            .order_by(desc(TradeJournal.id))
-            .limit(limit)
-            .all()
-        )
+        rows = db.query(TradeJournal).filter(TradeJournal.status != "closed").order_by(desc(TradeJournal.id)).limit(limit).all()
         return [serialize_trade_entry(row) for row in rows]
     finally:
         db.close()
@@ -211,6 +240,7 @@ def serialize_trade_entry(row: TradeJournal) -> dict[str, Any]:
 
     return {
         "journal_id": row.journal_id,
+        "execution_key": row.execution_key,
         "symbol": row.symbol,
         "strategy_name": strategy_name,
         "strategy": strategy_name,
@@ -253,6 +283,37 @@ def serialize_bot_event(row: BotEvent) -> dict[str, Any]:
     }
 
 
+def _build_trade_payload(trade: dict[str, Any], *, journal_id: str, default_opened_at: bool) -> dict[str, Any]:
+    opened_at = trade.get("opened_at")
+    if default_opened_at and not opened_at:
+        opened_at = _utc_now_iso()
+
+    return {
+        "journal_id": journal_id,
+        "execution_key": trade.get("execution_key"),
+        "symbol": str(trade.get("symbol", "")).upper(),
+        "direction": str(trade.get("direction", "")).lower(),
+        "execution_mode": str(trade.get("execution_mode", "demo")).lower(),
+        "entry_price": float(trade.get("entry", 0)),
+        "stop_loss": float(trade.get("stop_loss", 0)),
+        "take_profit": float(trade.get("take_profit", 0)),
+        "quantity": _optional_float(trade.get("quantity")),
+        "strategy_name": _resolve_strategy_name_from_trade(trade),
+        "status": str(trade.get("status", "active")),
+        "result": trade.get("result"),
+        "sl_hit_reason": trade.get("sl_hit_reason"),
+        "close_reason": trade.get("close_reason"),
+        "exit_price": _optional_float(trade.get("exit_price")),
+        "realized_pnl": _optional_float(trade.get("realized_pnl")),
+        "fees": _optional_float(trade.get("fees")),
+        "order_id": trade.get("order_id"),
+        "detected_at": trade.get("detected_at"),
+        "opened_at": opened_at,
+        "closed_at": trade.get("closed_at"),
+        "exchange_metadata": json.dumps(trade.get("exchange_metadata") or {}, separators=(",", ":")),
+    }
+
+
 def _send_supabase(table: str, payload: dict[str, Any], upsert: bool) -> None:
     if not settings.supabase_url or not settings.supabase_service_role_key:
         return
@@ -271,7 +332,6 @@ def _send_supabase(table: str, payload: dict[str, Any], upsert: bool) -> None:
         with urlopen(request, timeout=10):
             pass
     except (HTTPError, URLError, TimeoutError):
-        # Supabase journaling is best-effort only.
         return
 
 
@@ -317,6 +377,7 @@ def _ensure_trade_journal_columns() -> None:
 
     existing = {column["name"] for column in inspector.get_columns("trade_journal")}
     column_defs = {
+        "execution_key": "VARCHAR(64) NULL",
         "strategy_name": "VARCHAR(64) NULL",
         "close_reason": "VARCHAR(64) NULL",
         "exit_price": "FLOAT NULL",
@@ -327,3 +388,4 @@ def _ensure_trade_journal_columns() -> None:
         for name, definition in column_defs.items():
             if name not in existing:
                 connection.execute(text(f"ALTER TABLE trade_journal ADD COLUMN {name} {definition}"))
+        connection.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_trade_journal_execution_key ON trade_journal (execution_key)"))

@@ -47,6 +47,7 @@ class TradeJournal(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     journal_id: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    execution_key: Mapped[str | None] = mapped_column(String(64), unique=True, index=True, nullable=True)
     symbol: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
     direction: Mapped[str] = mapped_column(String(16), nullable=False)
     execution_mode: Mapped[str] = mapped_column(String(16), nullable=False)
