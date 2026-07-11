@@ -1,18 +1,23 @@
 from typing import Any
 
 from sqlalchemy import inspect, text
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.config import settings
 from app.database import SessionLocal, engine
-from app.models import BotRuntimeConfig
+from app.models import BotRuntimeConfig, RiskRuntimeState
 
 
 DEFAULT_RISK_SETTINGS = {
+    # Legacy percentage field is retained for API compatibility. The risk engine
+    # now uses fixed USDT profiles: 20 USDT scalping and 50 USDT intraday.
     "risk_per_trade": 0.01,
-    "leverage_cap": 5.0,
-    "exposure_cap": 0.30,
-    "max_open_trades": 3,
-    "max_daily_trades": 8,
+    "leverage_cap": 20.0,
+    "exposure_cap": 0.50,
+    "max_open_trades": 5,
+    # Zero means unlimited. Signal quality, dynamic risk and active-trade gates
+    # are the authorities instead of a daily trade-count cap.
+    "max_daily_trades": 0,
 }
 
 
@@ -22,22 +27,31 @@ def ensure_runtime_config() -> None:
     try:
         row = db.query(BotRuntimeConfig).filter(BotRuntimeConfig.id == 1).first()
         if row is None:
-            db.add(
-                BotRuntimeConfig(
-                    id=1,
-                    bot_status="idle",
-                    emergency_stop=False,
-                    execution_mode="demo",
-                    auto_trading_enabled=True,
-                    **DEFAULT_RISK_SETTINGS,
-                )
+            row = BotRuntimeConfig(
+                id=1,
+                bot_status="idle",
+                emergency_stop=False,
+                execution_mode="demo",
+                auto_trading_enabled=True,
+                **DEFAULT_RISK_SETTINGS,
             )
-            db.commit()
+            db.add(row)
+        else:
+            # Keep the persisted compatibility fields aligned with the locked
+            # authority policy. Profile-specific risk/leverage is returned by
+            # app.risk.validate_trade.
+            row.leverage_cap = DEFAULT_RISK_SETTINGS["leverage_cap"]
+            row.exposure_cap = DEFAULT_RISK_SETTINGS["exposure_cap"]
+            row.max_open_trades = DEFAULT_RISK_SETTINGS["max_open_trades"]
+            row.max_daily_trades = DEFAULT_RISK_SETTINGS["max_daily_trades"]
+        db.commit()
     finally:
         db.close()
 
 
 def start_bot() -> dict[str, Any]:
+    if _risk_circuit_breaker_active():
+        return _update_runtime(bot_status="stopped")
     return _update_runtime(bot_status="running")
 
 
@@ -74,31 +88,28 @@ def update_bot_config(
     if auto_trading_enabled is not None:
         payload["auto_trading_enabled"] = bool(auto_trading_enabled)
 
+    # Compatibility fields may still arrive from the current Control Center,
+    # but the locked risk authority values cannot be overridden.
     if risk_per_trade is not None:
         if risk_per_trade <= 0 or risk_per_trade > 0.05:
-            raise ValueError("Risk per trade must be greater than 0 and no more than 5%")
+            raise ValueError("Legacy risk percentage must be greater than 0 and no more than 5%")
         payload["risk_per_trade"] = float(risk_per_trade)
 
-    if leverage_cap is not None:
-        if leverage_cap <= 0 or leverage_cap > 50:
-            raise ValueError("Leverage cap must be greater than 0 and no more than 50")
-        payload["leverage_cap"] = float(leverage_cap)
+    if leverage_cap is not None and float(leverage_cap) != DEFAULT_RISK_SETTINGS["leverage_cap"]:
+        raise ValueError("Global leverage is locked; scalping uses max 20x and intraday uses max 10x")
+    if exposure_cap is not None and abs(float(exposure_cap) - 0.50) > 1e-9:
+        raise ValueError("Total margin exposure cap is locked at 50%")
+    if max_open_trades is not None and int(max_open_trades) != 5:
+        raise ValueError("Active trade limit is locked at 5")
+    if max_daily_trades is not None and int(max_daily_trades) != 0:
+        raise ValueError("Daily executable trade count is unlimited; use 0")
 
-    if exposure_cap is not None:
-        if exposure_cap <= 0 or exposure_cap > 1:
-            raise ValueError("Exposure cap must be greater than 0 and no more than 100%")
-        payload["exposure_cap"] = float(exposure_cap)
-
-    if max_open_trades is not None:
-        if max_open_trades < 1 or max_open_trades > 25:
-            raise ValueError("Max open trades must be between 1 and 25")
-        payload["max_open_trades"] = int(max_open_trades)
-
-    if max_daily_trades is not None:
-        if max_daily_trades < 1 or max_daily_trades > 100:
-            raise ValueError("Max daily trades must be between 1 and 100")
-        payload["max_daily_trades"] = int(max_daily_trades)
-
+    payload.update(
+        leverage_cap=DEFAULT_RISK_SETTINGS["leverage_cap"],
+        exposure_cap=DEFAULT_RISK_SETTINGS["exposure_cap"],
+        max_open_trades=DEFAULT_RISK_SETTINGS["max_open_trades"],
+        max_daily_trades=DEFAULT_RISK_SETTINGS["max_daily_trades"],
+    )
     return _update_runtime(**payload)
 
 
@@ -122,6 +133,8 @@ def can_execute() -> tuple[bool, str]:
     row = _get_runtime_row()
     if row.emergency_stop:
         return False, "Emergency stop is active"
+    if _risk_circuit_breaker_active():
+        return False, "Daily net realized loss circuit breaker is active"
     if row.bot_status != "running":
         return False, "Bot is not running"
     if not row.auto_trading_enabled:
@@ -140,11 +153,12 @@ def is_live_mode_available() -> bool:
 
 
 def _update_runtime(**updates: Any) -> dict[str, Any]:
+    ensure_runtime_config()
     db = SessionLocal()
     try:
         row = db.query(BotRuntimeConfig).filter(BotRuntimeConfig.id == 1).first()
         if row is None:
-            row = BotRuntimeConfig(id=1)
+            row = BotRuntimeConfig(id=1, **DEFAULT_RISK_SETTINGS)
             db.add(row)
             db.flush()
 
@@ -177,12 +191,35 @@ def _serialize_runtime(row: BotRuntimeConfig) -> dict[str, Any]:
         "execution_mode": row.execution_mode,
         "auto_trading_enabled": row.auto_trading_enabled,
         "live_mode_available": is_live_mode_available(),
+        "risk_model": "dynamic_fixed_usdt",
         "risk_per_trade": row.risk_per_trade,
         "leverage_cap": row.leverage_cap,
         "exposure_cap": row.exposure_cap,
         "max_open_trades": row.max_open_trades,
+        "max_active_trades": row.max_open_trades,
         "max_daily_trades": row.max_daily_trades,
+        "daily_trade_limit_enabled": False,
     }
+
+
+def _risk_circuit_breaker_active() -> bool:
+    try:
+        inspector = inspect(engine)
+        if "risk_runtime_state" not in inspector.get_table_names():
+            return False
+        existing = {column["name"] for column in inspector.get_columns("risk_runtime_state")}
+        if "circuit_breaker_active" not in existing:
+            return False
+        db = SessionLocal()
+        try:
+            row = db.query(RiskRuntimeState).filter(RiskRuntimeState.id == 1).first()
+            return bool(row and row.circuit_breaker_active)
+        finally:
+            db.close()
+    except SQLAlchemyError:
+        # Database failures are handled by readiness/watchdog. Do not claim a
+        # breaker state that could not be read.
+        return False
 
 
 def _ensure_runtime_columns() -> None:
@@ -193,10 +230,10 @@ def _ensure_runtime_columns() -> None:
     existing = {column["name"] for column in inspector.get_columns("bot_runtime_config")}
     column_defs = {
         "risk_per_trade": "FLOAT NOT NULL DEFAULT 0.01",
-        "leverage_cap": "FLOAT NOT NULL DEFAULT 5.0",
-        "exposure_cap": "FLOAT NOT NULL DEFAULT 0.30",
-        "max_open_trades": "INTEGER NOT NULL DEFAULT 3",
-        "max_daily_trades": "INTEGER NOT NULL DEFAULT 8",
+        "leverage_cap": "FLOAT NOT NULL DEFAULT 20.0",
+        "exposure_cap": "FLOAT NOT NULL DEFAULT 0.50",
+        "max_open_trades": "INTEGER NOT NULL DEFAULT 5",
+        "max_daily_trades": "INTEGER NOT NULL DEFAULT 0",
     }
     with engine.begin() as connection:
         for name, definition in column_defs.items():
