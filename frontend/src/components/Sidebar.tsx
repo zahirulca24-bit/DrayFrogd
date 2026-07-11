@@ -39,8 +39,7 @@ export default function Sidebar({
     { id: "active-trades", label: "Active Trades", icon: Activity },
     { id: "journal", label: "Journal / Trade History", icon: BookOpen },
     { id: "performance-strategy", label: "Performance & Strategy", icon: LineChart },
-    { id: "control-panel", label: "Control Panel", icon: Sliders },
-    { id: "watchdog", label: "Watchdog", icon: ShieldAlert },
+    { id: "control-panel", label: "Control Center", icon: Sliders },
     { id: "settings", label: "Settings", icon: Settings },
   ];
 
