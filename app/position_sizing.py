@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from math import isfinite
+from math import ceil, isfinite
 from typing import Any
 
 from app.exchange import BybitClient
@@ -43,11 +43,17 @@ def calculate_position_size(
     if available_balance is None:
         return _reject("Available balance is unavailable")
 
-    risk_per_trade = _positive_float(settings.get("risk_per_trade"))
+    supplied_fixed_risk = _positive_float(settings.get("risk_amount"))
+    fixed_risk_mode = supplied_fixed_risk is not None
+    target_risk_amount = supplied_fixed_risk
+    legacy_risk_percent = _positive_float(settings.get("risk_per_trade"))
+    if target_risk_amount is None and legacy_risk_percent is not None:
+        target_risk_amount = equity * legacy_risk_percent
+    if target_risk_amount is None:
+        return _reject("Fixed USDT risk amount is unavailable")
+
     leverage_cap = _positive_float(settings.get("leverage_cap"))
     exposure_cap = _positive_float(settings.get("exposure_cap"))
-    if risk_per_trade is None:
-        return _reject("Risk percent setting is invalid")
     if leverage_cap is None:
         return _reject("Leverage cap setting is invalid")
     if exposure_cap is None:
@@ -62,8 +68,7 @@ def calculate_position_size(
     if not tick_size:
         return _reject("Symbol tickSize is unavailable")
 
-    risk_amount = equity * risk_per_trade
-    raw_quantity = risk_amount / sl_distance
+    raw_quantity = target_risk_amount / sl_distance
     normalized_quantity = client.normalize_quantity(raw_quantity, str(qty_step))
     quantity = _positive_float(normalized_quantity)
     if quantity is None:
@@ -86,21 +91,47 @@ def calculate_position_size(
         if notional < min_notional:
             return _reject("Minimum notional cannot be satisfied with symbol precision")
 
-    required_margin = notional / leverage_cap
-    margin_buffer = available_balance * 0.95
-    if required_margin > margin_buffer:
-        return _reject("Required margin exceeds available balance")
-
-    existing_margin = _current_margin(active_trades, positions, leverage_cap)
-    max_allowed_margin = equity * exposure_cap
-    if existing_margin + required_margin > max_allowed_margin:
-        return _reject("Exposure cap exceeded")
-
     actual_risk_amount = quantity * sl_distance
     if actual_risk_amount <= 0 or not isfinite(actual_risk_amount):
         return _reject("Position risk is invalid")
-    if actual_risk_amount > risk_amount * 1.001:
-        return _reject("Minimum quantity exceeds configured risk percent")
+    if actual_risk_amount > target_risk_amount * 1.001:
+        return _reject("Minimum quantity exceeds configured fixed USDT risk")
+
+    existing_margin = _current_margin(active_trades, positions, leverage_cap)
+    max_allowed_margin = equity * exposure_cap
+    margin_buffer = available_balance * 0.95
+
+    if not fixed_risk_mode:
+        # Backward-compatible percentage mode keeps the former fixed-leverage
+        # calculations and error precedence for existing API consumers/tests.
+        selected_leverage = leverage_cap
+        minimum_required_leverage = selected_leverage
+        required_margin = notional / selected_leverage
+        if required_margin > margin_buffer + 1e-9:
+            return _reject("Required margin exceeds available balance")
+        if existing_margin + required_margin > max_allowed_margin + 1e-9:
+            return _reject("Exposure cap exceeded")
+        remaining_exposure_margin = max_allowed_margin - existing_margin
+    else:
+        # Locked Risk Engine mode selects only the leverage needed to fit the
+        # position safely inside available margin and the 50% exposure budget.
+        remaining_exposure_margin = max_allowed_margin - existing_margin
+        usable_margin = min(remaining_exposure_margin, margin_buffer)
+        if usable_margin <= 0:
+            return _reject("Capital exposure cap exceeded")
+
+        minimum_required_leverage = max(notional / usable_margin, 1.0)
+        selected_leverage = ceil(minimum_required_leverage * 100) / 100
+        if selected_leverage > leverage_cap + 1e-9:
+            return _reject(
+                f"Required leverage {selected_leverage:.2f}x exceeds {leverage_cap:.2f}x profile cap"
+            )
+
+        required_margin = notional / selected_leverage
+        if required_margin > margin_buffer + 1e-9:
+            return _reject("Required margin exceeds available balance")
+        if existing_margin + required_margin > max_allowed_margin + 1e-9:
+            return _reject("Capital exposure cap exceeded")
 
     return {
         "allowed": True,
@@ -110,17 +141,22 @@ def calculate_position_size(
         "entry": entry,
         "stop_loss": stop_loss,
         "sl_distance": sl_distance,
-        "risk_percent": risk_per_trade,
+        "risk_percent": actual_risk_amount / equity,
         "risk_amount": actual_risk_amount,
-        "target_risk_amount": risk_amount,
+        "target_risk_amount": target_risk_amount,
+        "risk_mode": "fixed_usdt" if fixed_risk_mode else "legacy_percent",
         "notional": notional,
         "required_margin": required_margin,
         "equity": equity,
         "available_balance": available_balance,
+        "leverage": selected_leverage,
+        "selected_leverage": selected_leverage,
+        "minimum_required_leverage": minimum_required_leverage,
         "leverage_cap": leverage_cap,
         "exposure_cap": exposure_cap,
         "current_margin_exposure": existing_margin,
         "max_allowed_margin_exposure": max_allowed_margin,
+        "remaining_margin_capacity": remaining_exposure_margin,
         "current_exposure": existing_margin,
         "max_allowed_exposure": max_allowed_margin,
         "min_notional": min_notional,
@@ -153,7 +189,7 @@ def _normalize_signal(signal: dict[str, Any]) -> dict[str, Any] | None:
 
 def _stale_reason(value: Any) -> str:
     if not value:
-        return ""
+        return "Signal timestamp is required for safe position sizing"
 
     try:
         detected_at = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
@@ -162,9 +198,14 @@ def _stale_reason(value: Any) -> str:
 
     if detected_at.tzinfo is None:
         detected_at = detected_at.replace(tzinfo=UTC)
-    if datetime.now(UTC) - detected_at.astimezone(UTC) > timedelta(minutes=SIGNAL_MAX_AGE_MINUTES):
+    age = datetime.now(UTC) - detected_at.astimezone(UTC)
+    if age < timedelta(minutes=-1):
+        return "Signal timestamp is in the future"
+    if age > timedelta(minutes=SIGNAL_MAX_AGE_MINUTES):
         return "Signal is stale for position sizing"
     return ""
+
+
 def _current_margin(
     active_trades: list[dict[str, Any]],
     positions: list[dict[str, Any]],
@@ -173,7 +214,6 @@ def _current_margin(
     authoritative_positions = _normalize_open_positions(positions)
     if authoritative_positions:
         return _positions_margin(authoritative_positions, fallback_leverage)
-
     return _active_trades_margin(active_trades, fallback_leverage)
 
 
@@ -187,9 +227,16 @@ def _active_trades_margin(active_trades: list[dict[str, Any]], fallback_leverage
             margin += required_margin
             continue
 
+        metadata = trade.get("exchange_metadata") if isinstance(trade.get("exchange_metadata"), dict) else {}
+        sizing = metadata.get("position_sizing") if isinstance(metadata.get("position_sizing"), dict) else {}
+        persisted_margin = _positive_float(sizing.get("required_margin"))
+        if persisted_margin is not None:
+            margin += persisted_margin
+            continue
+
         quantity = _positive_float(trade.get("quantity")) or 0.0
         entry = _positive_float(trade.get("entry")) or 0.0
-        leverage = _positive_float(trade.get("leverage")) or fallback_leverage
+        leverage = _positive_float(trade.get("leverage")) or _positive_float(sizing.get("selected_leverage")) or fallback_leverage
         if leverage > 0:
             margin += abs(quantity * entry) / leverage
     return margin
@@ -213,7 +260,6 @@ def _positions_margin(positions: list[dict[str, Any]], fallback_leverage: float)
         mark_price = _positive_float(position.get("markPrice")) or 0.0
         if leverage > 0:
             margin += abs(size * mark_price) / leverage
-
     return margin
 
 
@@ -238,7 +284,6 @@ def _normalize_open_positions(positions: list[dict[str, Any]]) -> list[dict[str,
 
         seen_keys.add(key)
         normalized.append(position)
-
     return normalized
 
 

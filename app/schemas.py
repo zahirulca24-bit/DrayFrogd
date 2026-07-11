@@ -20,6 +20,7 @@ class RiskSignalRequest(BaseModel):
     symbol: str
     strategy_name: str | None = None
     strategy: str | None = None
+    trade_type: str | None = None
     direction: str | None = None
     entry: float
     stop_loss: float
@@ -33,6 +34,7 @@ class ExecuteSignalRequest(BaseModel):
     symbol: str
     strategy_name: str | None = None
     strategy: str | None = None
+    trade_type: str | None = None
     direction: str
     entry: float
     stop_loss: float
@@ -46,6 +48,7 @@ class PositionSizeRequest(BaseModel):
     symbol: str
     strategy_name: str | None = None
     strategy: str | None = None
+    trade_type: str | None = None
     direction: str
     entry: float
     stop_loss: float

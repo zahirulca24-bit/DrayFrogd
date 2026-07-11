@@ -75,6 +75,9 @@ def run_scan(client: BybitDemoClient) -> dict[str, Any]:
                 "symbol": symbol,
                 "strategy_name": result.get("strategy_name") or result.get("strategy"),
                 "strategy": result.get("strategy") or result.get("strategy_name"),
+                # The current registry is a 5m setup / 1m trigger pipeline.
+                # Future intraday strategies must emit trade_type explicitly.
+                "trade_type": result.get("trade_type") or "scalping",
                 "direction": result.get("direction"),
                 "entry": result.get("entry"),
                 "stop_loss": result.get("stop_loss"),
@@ -129,7 +132,6 @@ def _resolve_scan_universe(client: BybitDemoClient) -> list[str]:
         symbol = str(item.get("symbol", "")).upper()
         turnover = _to_float(item.get("turnover24h"))
         price_movement_ratio = _normalize_price_movement_ratio(item.get("price24hPcnt"))
-
         if not symbol or symbol in seen_symbols:
             continue
         if turnover < MIN_TURNOVER_24H:

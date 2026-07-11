@@ -24,10 +24,10 @@ class BotRuntimeConfig(Base):
     execution_mode: Mapped[str] = mapped_column(String(16), default="demo", nullable=False)
     auto_trading_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     risk_per_trade: Mapped[float] = mapped_column(Float, default=0.01, nullable=False)
-    leverage_cap: Mapped[float] = mapped_column(Float, default=5.0, nullable=False)
-    exposure_cap: Mapped[float] = mapped_column(Float, default=0.30, nullable=False)
-    max_open_trades: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
-    max_daily_trades: Mapped[int] = mapped_column(Integer, default=8, nullable=False)
+    leverage_cap: Mapped[float] = mapped_column(Float, default=20.0, nullable=False)
+    exposure_cap: Mapped[float] = mapped_column(Float, default=0.50, nullable=False)
+    max_open_trades: Mapped[int] = mapped_column(Integer, default=5, nullable=False)
+    max_daily_trades: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
 
@@ -38,7 +38,17 @@ class RiskRuntimeState(Base):
     trades_day: Mapped[str | None] = mapped_column(String(10), nullable=True)
     trades_today: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     active_symbols: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    active_trade_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     cooldown_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    symbol_cooldowns: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    day_start_equity: Mapped[float | None] = mapped_column(Float, nullable=True)
+    realized_pnl_today: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    live_risk: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    base_risk_pool: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    effective_risk_pool: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    available_risk: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    circuit_breaker_active: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    circuit_breaker_reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
 
