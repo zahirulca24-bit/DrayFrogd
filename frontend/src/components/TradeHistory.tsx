@@ -61,36 +61,26 @@ function numberValue(value: unknown) {
 }
 
 function formatMoney(value: number | null | undefined) {
-  if (value === null || value === undefined || Number.isNaN(value)) {
-    return "N/A";
-  }
+  if (value === null || value === undefined || Number.isNaN(value)) return "N/A";
   return `$${Number(value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })}`;
 }
 
 function calcRr(entry: number, stop: number, takeProfit: number) {
   const risk = Math.abs(entry - stop);
   const reward = Math.abs(takeProfit - entry);
-  if (risk <= 0 || reward <= 0) {
-    return null;
-  }
-  return reward / risk;
+  return risk > 0 && reward > 0 ? reward / risk : null;
 }
 
 function durationBetween(start?: string | null, end?: string | null) {
-  if (!start || !end) {
-    return "N/A";
-  }
+  if (!start || !end) return "N/A";
   const ms = new Date(end).getTime() - new Date(start).getTime();
-  if (!Number.isFinite(ms) || ms <= 0) {
-    return "N/A";
-  }
+  if (!Number.isFinite(ms) || ms <= 0) return "N/A";
   const minutes = Math.floor(ms / 60000);
   const hours = Math.floor(minutes / 60);
-  const remainingMinutes = minutes % 60;
-  return hours > 0 ? `${hours}h ${remainingMinutes}m` : `${remainingMinutes}m`;
+  return hours > 0 ? `${hours}h ${minutes % 60}m` : `${minutes}m`;
 }
 
-function normalizeDirection(value?: string | null) {
+function normalizeDirection(value?: string | null): "LONG" | "SHORT" {
   return String(value || "").toUpperCase() === "SHORT" ? "SHORT" : "LONG";
 }
 
@@ -101,23 +91,21 @@ function todayBdtDate() {
 function journalToRow(item: JournalTradeEntry, index: number): JournalRow {
   const financial = item as FinancialJournalTrade;
   const metadata = (item.exchange_metadata || {}) as Record<string, any>;
-  const management = (metadata.management || {}) as Record<string, any>;
   const entryPrice = numberValue(item.entry);
   const stopLoss = numberValue(item.stop_loss);
   const takeProfit = numberValue(item.take_profit);
-  const closedAt = item.closed_at || item.opened_at || item.detected_at || new Date().toISOString();
   const isClosed = String(item.status || "").toLowerCase() === "closed";
   const rawResult = String(item.result || "").toLowerCase();
-  const realizedPnl = financial.realized_pnl === null || financial.realized_pnl === undefined ? 0 : numberValue(financial.realized_pnl);
+  const realizedPnl = financial.realized_pnl == null ? 0 : numberValue(financial.realized_pnl);
   const outcome =
     realizedPnl > 0 || rawResult === "tp" || rawResult === "profit"
       ? "PROFIT"
       : realizedPnl < 0 || rawResult === "sl" || rawResult === "loss"
       ? "LOSS"
       : "UNKNOWN";
+  const exitPrice = financial.exit_price == null ? 0 : numberValue(financial.exit_price);
+  const closedAt = item.closed_at || item.opened_at || item.detected_at || new Date().toISOString();
   const leverage = metadata?.order_response?.leverage || metadata?.leverage || null;
-  const rrValue = calcRr(entryPrice, stopLoss, takeProfit);
-  const exitPrice = financial.exit_price === null || financial.exit_price === undefined ? 0 : numberValue(financial.exit_price);
 
   return {
     id: item.order_id || item.journal_id || `${item.symbol}-${index}`,
@@ -145,22 +133,15 @@ function journalToRow(item: JournalTradeEntry, index: number): JournalRow {
     executionMode: item.execution_mode || "demo",
     closedAt,
     slHitReason: item.sl_hit_reason ?? null,
-    managementTp1: Number(management.tp1 || 0) || undefined,
-    managementTp2: Number(management.tp2 || 0) || undefined,
-    managementRunner: Number(management.runner_target || 0) || undefined,
-    breakEvenSet: Boolean(management.break_even_set),
-    tp1Done: Boolean(management.tp1_done),
-    tp2Done: Boolean(management.tp2_done),
     exitPrice,
     pnl: isClosed ? realizedPnl : 0,
     result: outcome as TradeHistoryEntry["result"],
     reason: financial.close_reason || item.sl_hit_reason || (isClosed ? "unknown" : "open"),
     side: normalizeDirection(item.direction),
     leverageText: leverage ? `${leverage}x` : "N/A",
-    feesText: financial.fees !== null && financial.fees !== undefined ? formatMoney(numberValue(financial.fees)) : "N/A",
-    rrValue,
+    feesText: financial.fees == null ? "N/A" : formatMoney(numberValue(financial.fees)),
+    rrValue: calcRr(entryPrice, stopLoss, takeProfit),
     durationText: durationBetween(item.opened_at || item.detected_at, item.closed_at),
-    executionMode: item.execution_mode || "demo",
     timeline: [
       { label: "Detected", value: item.detected_at || null },
       { label: "Opened", value: item.opened_at || null },
@@ -193,9 +174,7 @@ export default function TradeHistory({ authToken, history }: TradeHistoryProps) 
   const bdtDayRef = useRef(todayBdtDate());
 
   const loadJournal = async () => {
-    if (!authToken) {
-      return;
-    }
+    if (!authToken) return;
     setLoading(true);
     try {
       const response = await api.getJournalTrades(authToken);
@@ -209,11 +188,8 @@ export default function TradeHistory({ authToken, history }: TradeHistoryProps) 
   };
 
   useEffect(() => {
-    if (!authToken) {
-      return;
-    }
+    if (!authToken) return;
     let cancelled = false;
-
     const refresh = async () => {
       try {
         const response = await api.getJournalTrades(authToken);
@@ -222,12 +198,9 @@ export default function TradeHistory({ authToken, history }: TradeHistoryProps) 
           setError(null);
         }
       } catch (err: any) {
-        if (!cancelled) {
-          setError(err?.message || "Failed to load journal trades");
-        }
+        if (!cancelled) setError(err?.message || "Failed to load journal trades");
       }
     };
-
     void refresh();
     const interval = setInterval(() => {
       const current = todayBdtDate();
@@ -237,7 +210,6 @@ export default function TradeHistory({ authToken, history }: TradeHistoryProps) 
       }
       void refresh();
     }, 10000);
-
     return () => {
       cancelled = true;
       clearInterval(interval);
@@ -245,10 +217,7 @@ export default function TradeHistory({ authToken, history }: TradeHistoryProps) 
   }, [authToken]);
 
   const rows = useMemo<JournalRow[]>(() => {
-    if (journalTrades.length > 0) {
-      return journalTrades.map(journalToRow);
-    }
-
+    if (journalTrades.length > 0) return journalTrades.map(journalToRow);
     return history.map((trade) => ({
       ...trade,
       side: normalizeDirection(trade.direction),
@@ -271,19 +240,16 @@ export default function TradeHistory({ authToken, history }: TradeHistoryProps) 
     }));
   }, [history, journalTrades]);
 
-  const filteredRows = useMemo(() => {
-    return rows.filter((row) => {
-      const closedDate = bdtDate(row.closedAt || row.timestamp);
-      if (filters.dateFrom && closedDate < filters.dateFrom) return false;
-      if (filters.dateTo && closedDate > filters.dateTo) return false;
-      if (filters.symbol && row.pair !== filters.symbol.toUpperCase()) return false;
-      if (filters.side !== "ALL" && row.side !== filters.side) return false;
-      if (filters.strategy !== "ALL" && row.strategy !== filters.strategy) return false;
-      if (filters.result !== "ALL" && String(row.result) !== filters.result) return false;
-      if (filters.exitReason !== "ALL" && (row.reason || "N/A") !== filters.exitReason) return false;
-      return true;
-    });
-  }, [filters, rows]);
+  const filteredRows = useMemo(() => rows.filter((row) => {
+    const date = bdtDate(row.closedAt || row.timestamp);
+    return !(filters.dateFrom && date < filters.dateFrom)
+      && !(filters.dateTo && date > filters.dateTo)
+      && !(filters.symbol && row.pair !== filters.symbol.toUpperCase())
+      && !(filters.side !== "ALL" && row.side !== filters.side)
+      && !(filters.strategy !== "ALL" && row.strategy !== filters.strategy)
+      && !(filters.result !== "ALL" && String(row.result) !== filters.result)
+      && !(filters.exitReason !== "ALL" && (row.reason || "N/A") !== filters.exitReason);
+  }), [filters, rows]);
 
   const selectedTrade = useMemo(
     () => filteredRows.find((row) => row.id === selectedId) || filteredRows[0] || null,
@@ -291,49 +257,36 @@ export default function TradeHistory({ authToken, history }: TradeHistoryProps) 
   );
 
   useEffect(() => {
-    if (!authToken || !selectedTrade) {
-      return;
-    }
+    if (!authToken || !selectedTrade) return;
     let cancelled = false;
-
     const loadCandles = async () => {
       setDetailLoading(true);
       try {
         const response = await api.getMarketCandles(authToken, selectedTrade.pair, "5", 90);
-        if (!cancelled) {
-          setCandles((response.candles || []).map((item) => ({
-            ...item,
-            open: numberValue(item.open),
-            high: numberValue(item.high),
-            low: numberValue(item.low),
-            close: numberValue(item.close),
-          })));
-        }
+        if (!cancelled) setCandles((response.candles || []).map((item) => ({
+          ...item,
+          open: numberValue(item.open),
+          high: numberValue(item.high),
+          low: numberValue(item.low),
+          close: numberValue(item.close),
+        })));
       } finally {
         if (!cancelled) setDetailLoading(false);
       }
     };
-
     void loadCandles();
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [authToken, selectedTrade]);
 
-  const symbolOptions = Array.from(new Set(rows.map((row) => row.pair))).sort();
-  const strategyOptions = Array.from(new Set(rows.map((row) => row.strategy))).sort();
-  const reasonOptions = Array.from(new Set(rows.map((row) => row.reason || "N/A"))).sort();
+  const symbols = Array.from(new Set(rows.map((row) => row.pair))).sort();
+  const strategies = Array.from(new Set(rows.map((row) => row.strategy))).sort();
+  const reasons = Array.from(new Set(rows.map((row) => row.reason || "N/A"))).sort();
 
   const exportCsv = () => {
-    const headers = ["BDT Time", "Symbol", "Side", "Strategy", "Entry", "Exit", "SL", "TP", "Size", "Leverage", "Fees", "RealizedPnL", "RR", "Duration", "Status", "Result", "ExitReason"];
-    const lines = filteredRows.map((row) => [
-      bdtDateTime(row.closedAt), row.pair, row.side, row.strategy, row.entryPrice, row.exitPrice,
-      row.stopLoss, row.takeProfit, row.size, row.leverageText, row.feesText, row.pnl,
-      row.rrValue ?? "N/A", row.durationText, row.rawStatus || row.status, String(row.result), row.reason,
-    ]);
-    const csv = [headers, ...lines].map((line) => line.map((cell) => `"${String(cell ?? "").replaceAll('"', '""')}"`).join(",")).join("\n");
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
+    const headers = ["BDT Time", "Symbol", "Side", "Strategy", "Entry", "Exit", "Fees", "RealizedPnL", "Result", "ExitReason"];
+    const data = filteredRows.map((row) => [bdtDateTime(row.closedAt), row.pair, row.side, row.strategy, row.entryPrice, row.exitPrice, row.feesText, row.pnl, String(row.result), row.reason]);
+    const csv = [headers, ...data].map((line) => line.map((cell) => `"${String(cell ?? "").replaceAll('"', '""')}"`).join(",")).join("\n");
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8;" }));
     const link = document.createElement("a");
     link.href = url;
     link.download = `journal-${filters.dateFrom || "all"}-${filters.dateTo || "all"}.csv`;
@@ -344,19 +297,8 @@ export default function TradeHistory({ authToken, history }: TradeHistoryProps) 
   const exportPdf = () => {
     const popup = window.open("", "_blank", "width=1100,height=800");
     if (!popup) return;
-    popup.document.write(`
-      <html><head><title>Journal Export</title></head>
-      <body style="font-family:Arial,sans-serif;padding:24px">
-        <h2>DayFrogd-ScalpingEngin Journal Export</h2>
-        <p>Range: ${filters.dateFrom || "All"} to ${filters.dateTo || "All"}</p>
-        <table border="1" cellspacing="0" cellpadding="6" style="border-collapse:collapse;width:100%;font-size:12px">
-          <thead><tr><th>BDT Time</th><th>Symbol</th><th>Side</th><th>Strategy</th><th>Entry</th><th>Exit</th><th>Fees</th><th>Realized PnL</th><th>Result</th></tr></thead>
-          <tbody>${filteredRows.map((row) => `<tr><td>${bdtDateTime(row.closedAt)}</td><td>${row.pair}</td><td>${row.side}</td><td>${row.strategy}</td><td>${row.entryPrice}</td><td>${row.exitPrice}</td><td>${row.feesText}</td><td>${row.pnl}</td><td>${String(row.result)}</td></tr>`).join("")}</tbody>
-        </table>
-      </body></html>
-    `);
+    popup.document.write(`<html><head><title>Journal Export</title></head><body style="font-family:Arial;padding:24px"><h2>DayFrogd Journal</h2><table border="1" cellspacing="0" cellpadding="6" style="border-collapse:collapse;width:100%;font-size:12px"><thead><tr><th>Time</th><th>Symbol</th><th>Side</th><th>Strategy</th><th>Exit</th><th>Fees</th><th>PnL</th><th>Result</th></tr></thead><tbody>${filteredRows.map((row) => `<tr><td>${bdtDateTime(row.closedAt)}</td><td>${row.pair}</td><td>${row.side}</td><td>${row.strategy}</td><td>${row.exitPrice || "N/A"}</td><td>${row.feesText}</td><td>${row.pnl}</td><td>${String(row.result)}</td></tr>`).join("")}</tbody></table></body></html>`);
     popup.document.close();
-    popup.focus();
     popup.print();
   };
 
@@ -364,60 +306,30 @@ export default function TradeHistory({ authToken, history }: TradeHistoryProps) 
     <div className="space-y-6" id="trade-history-section">
       <div className="bg-bento-card border border-slate-800 rounded-2xl p-6 shadow-md">
         <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-4">
-          <div>
-            <h3 className="text-sm font-semibold text-white tracking-tight font-sans">Journal / Trade History</h3>
-            <p className="text-xs text-slate-500 mt-1">Persisted entry, exit, fees and realized PnL. Unknown outcomes are not labelled as losses.</p>
-          </div>
-          <div className="flex items-center gap-3 text-[10px] font-mono text-slate-500">
-            <span>BDT {bdtDateTime(new Date().toISOString())}</span>
-            <button onClick={() => void loadJournal()} className="px-3 py-1.5 rounded-lg border border-slate-800 bg-[#0A0B0E] hover:text-white cursor-pointer"><RefreshCw className="w-3 h-3 inline mr-1" /> Refresh</button>
-            <button onClick={exportCsv} className="px-3 py-1.5 rounded-lg border border-slate-800 bg-[#0A0B0E] hover:text-white cursor-pointer"><Download className="w-3 h-3 inline mr-1" /> CSV</button>
-            <button onClick={exportPdf} className="px-3 py-1.5 rounded-lg border border-slate-800 bg-[#0A0B0E] hover:text-white cursor-pointer"><FileDown className="w-3 h-3 inline mr-1" /> PDF</button>
-          </div>
+          <div><h3 className="text-sm font-semibold text-white">Journal / Trade History</h3><p className="text-xs text-slate-500 mt-1">Persisted exit, fees and realized PnL. Unknown outcomes are not labelled as losses.</p></div>
+          <div className="flex items-center gap-3 text-[10px] font-mono text-slate-500"><span>BDT {bdtDateTime(new Date().toISOString())}</span><button onClick={() => void loadJournal()} className="action-btn"><RefreshCw className="w-3 h-3 inline mr-1" />Refresh</button><button onClick={exportCsv} className="action-btn"><Download className="w-3 h-3 inline mr-1" />CSV</button><button onClick={exportPdf} className="action-btn"><FileDown className="w-3 h-3 inline mr-1" />PDF</button></div>
         </div>
-
         {error && <div className="mt-4 text-xs font-mono text-rose-300">{error}</div>}
-
         <div className="grid grid-cols-2 xl:grid-cols-6 gap-3 mt-5">
-          <FilterField label="Date From"><input type="date" value={filters.dateFrom} onChange={(e) => setFilters((prev) => ({ ...prev, dateFrom: e.target.value }))} className="dashboard-input" /></FilterField>
-          <FilterField label="Date To"><input type="date" value={filters.dateTo} onChange={(e) => setFilters((prev) => ({ ...prev, dateTo: e.target.value }))} className="dashboard-input" /></FilterField>
-          <FilterField label="Symbol"><select value={filters.symbol} onChange={(e) => setFilters((prev) => ({ ...prev, symbol: e.target.value }))} className="dashboard-input"><option value="">All</option>{symbolOptions.map((symbol) => <option key={symbol}>{symbol}</option>)}</select></FilterField>
-          <FilterField label="Side"><select value={filters.side} onChange={(e) => setFilters((prev) => ({ ...prev, side: e.target.value }))} className="dashboard-input"><option value="ALL">All</option><option value="LONG">Long</option><option value="SHORT">Short</option></select></FilterField>
-          <FilterField label="Strategy"><select value={filters.strategy} onChange={(e) => setFilters((prev) => ({ ...prev, strategy: e.target.value }))} className="dashboard-input"><option value="ALL">All</option>{strategyOptions.map((strategy) => <option key={strategy}>{strategy}</option>)}</select></FilterField>
-          <FilterField label="Result"><select value={filters.result} onChange={(e) => setFilters((prev) => ({ ...prev, result: e.target.value }))} className="dashboard-input"><option value="ALL">All</option><option value="PROFIT">PROFIT</option><option value="LOSS">LOSS</option><option value="UNKNOWN">UNKNOWN</option></select></FilterField>
-          <FilterField label="Exit Reason"><select value={filters.exitReason} onChange={(e) => setFilters((prev) => ({ ...prev, exitReason: e.target.value }))} className="dashboard-input"><option value="ALL">All</option>{reasonOptions.map((reason) => <option key={reason}>{reason}</option>)}</select></FilterField>
+          <FilterField label="Date From"><input type="date" value={filters.dateFrom} onChange={(e) => setFilters((p) => ({ ...p, dateFrom: e.target.value }))} className="dashboard-input" /></FilterField>
+          <FilterField label="Date To"><input type="date" value={filters.dateTo} onChange={(e) => setFilters((p) => ({ ...p, dateTo: e.target.value }))} className="dashboard-input" /></FilterField>
+          <FilterField label="Symbol"><select value={filters.symbol} onChange={(e) => setFilters((p) => ({ ...p, symbol: e.target.value }))} className="dashboard-input"><option value="">All</option>{symbols.map((v) => <option key={v}>{v}</option>)}</select></FilterField>
+          <FilterField label="Side"><select value={filters.side} onChange={(e) => setFilters((p) => ({ ...p, side: e.target.value }))} className="dashboard-input"><option value="ALL">All</option><option value="LONG">Long</option><option value="SHORT">Short</option></select></FilterField>
+          <FilterField label="Strategy"><select value={filters.strategy} onChange={(e) => setFilters((p) => ({ ...p, strategy: e.target.value }))} className="dashboard-input"><option value="ALL">All</option>{strategies.map((v) => <option key={v}>{v}</option>)}</select></FilterField>
+          <FilterField label="Result"><select value={filters.result} onChange={(e) => setFilters((p) => ({ ...p, result: e.target.value }))} className="dashboard-input"><option value="ALL">All</option><option value="PROFIT">PROFIT</option><option value="LOSS">LOSS</option><option value="UNKNOWN">UNKNOWN</option></select></FilterField>
+          <FilterField label="Exit Reason"><select value={filters.exitReason} onChange={(e) => setFilters((p) => ({ ...p, exitReason: e.target.value }))} className="dashboard-input"><option value="ALL">All</option>{reasons.map((v) => <option key={v}>{v}</option>)}</select></FilterField>
         </div>
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-[1.45fr_0.55fr] gap-6">
         <div className="bg-bento-card border border-slate-800 rounded-2xl p-6 shadow-md overflow-hidden">
-          <div className="flex items-center justify-between mb-5"><h4 className="text-sm font-semibold text-white">Journal Trades Table</h4><span className="text-[10px] font-mono text-slate-500">{loading ? "Loading..." : `${filteredRows.length} rows`}</span></div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse whitespace-nowrap">
-              <thead><tr className="border-b border-slate-800 text-[10px] font-mono uppercase tracking-wider text-slate-500"><th className="py-3 px-3">BDT Time</th><th className="py-3 px-3">Symbol</th><th className="py-3 px-3">Side</th><th className="py-3 px-3">Strategy</th><th className="py-3 px-3 text-right">Entry</th><th className="py-3 px-3 text-right">Exit</th><th className="py-3 px-3 text-right">Fees</th><th className="py-3 px-3 text-right">Realized PnL</th><th className="py-3 px-3">Result</th><th className="py-3 px-3">Status</th></tr></thead>
-              <tbody className="divide-y divide-slate-800/30 text-xs font-mono">
-                {filteredRows.map((row) => (
-                  <tr key={row.id} onClick={() => setSelectedId(row.id)} className={`cursor-pointer hover:bg-slate-900/20 ${selectedTrade?.id === row.id ? "bg-emerald-500/5" : ""}`}>
-                    <td className="py-3 px-3 text-slate-300">{bdtDateTime(row.closedAt)}</td><td className="py-3 px-3 font-semibold text-white">{row.pair}</td><td className={`py-3 px-3 ${row.side === "LONG" ? "text-emerald-400" : "text-rose-400"}`}>{row.side}</td><td className="py-3 px-3 text-slate-400">{row.strategy}</td><td className="py-3 px-3 text-right">{formatMoney(row.entryPrice)}</td><td className="py-3 px-3 text-right">{row.exitPrice > 0 ? formatMoney(row.exitPrice) : "N/A"}</td><td className="py-3 px-3 text-right">{row.feesText}</td><td className={`py-3 px-3 text-right ${numberValue(row.pnl) > 0 ? "text-emerald-400" : numberValue(row.pnl) < 0 ? "text-rose-400" : "text-slate-400"}`}>{formatMoney(row.pnl)}</td><td className="py-3 px-3">{String(row.result)}</td><td className="py-3 px-3 text-slate-300">{row.rawStatus || row.status}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <div className="flex justify-between mb-5"><h4 className="text-sm font-semibold text-white">Journal Trades Table</h4><span className="text-[10px] font-mono text-slate-500">{loading ? "Loading..." : `${filteredRows.length} rows`}</span></div>
+          <div className="overflow-x-auto"><table className="w-full whitespace-nowrap"><thead><tr className="border-b border-slate-800 text-[10px] font-mono uppercase text-slate-500"><th className="p-3 text-left">Time</th><th className="p-3 text-left">Symbol</th><th className="p-3 text-left">Side</th><th className="p-3 text-left">Strategy</th><th className="p-3 text-right">Entry</th><th className="p-3 text-right">Exit</th><th className="p-3 text-right">Fees</th><th className="p-3 text-right">Realized PnL</th><th className="p-3 text-left">Result</th></tr></thead><tbody className="divide-y divide-slate-800/30 text-xs font-mono">{filteredRows.map((row) => <tr key={row.id} onClick={() => setSelectedId(row.id)} className="cursor-pointer hover:bg-slate-900/20"><td className="p-3">{bdtDateTime(row.closedAt)}</td><td className="p-3 text-white">{row.pair}</td><td className={`p-3 ${row.side === "LONG" ? "text-emerald-400" : "text-rose-400"}`}>{row.side}</td><td className="p-3">{row.strategy}</td><td className="p-3 text-right">{formatMoney(row.entryPrice)}</td><td className="p-3 text-right">{row.exitPrice > 0 ? formatMoney(row.exitPrice) : "N/A"}</td><td className="p-3 text-right">{row.feesText}</td><td className={`p-3 text-right ${row.pnl > 0 ? "text-emerald-400" : row.pnl < 0 ? "text-rose-400" : "text-slate-400"}`}>{formatMoney(row.pnl)}</td><td className="p-3">{String(row.result)}</td></tr>)}</tbody></table></div>
           {filteredRows.length === 0 && <div className="py-10 text-center text-xs font-mono text-slate-500">No journal trades matched the selected filters.</div>}
         </div>
 
         <div className="bg-bento-card border border-slate-800 rounded-2xl p-6 shadow-md">
-          {selectedTrade ? (
-            <>
-              <div className="flex items-center justify-between mb-4"><div><h4 className="text-sm font-semibold text-white">{selectedTrade.pair} Trade Detail</h4><p className="text-xs text-slate-500 mt-1">{selectedTrade.strategy} | {selectedTrade.side} | {selectedTrade.executionMode.toUpperCase()}</p></div><span className="text-[10px] font-mono text-slate-500">{detailLoading ? "Loading..." : String(selectedTrade.result)}</span></div>
-              <div className="grid grid-cols-2 gap-3 mb-4"><MiniMetric label="Fees" value={selectedTrade.feesText} /><MiniMetric label="Realized PnL" value={formatMoney(selectedTrade.pnl)} /><MiniMetric label="RR" value={selectedTrade.rrValue ? `${selectedTrade.rrValue.toFixed(2)}R` : "N/A"} /><MiniMetric label="Duration" value={selectedTrade.durationText} /></div>
-              <div className="rounded-2xl border border-slate-800 bg-[#0A0B0E] p-4 mb-4"><div className="text-[10px] font-mono text-slate-500 mb-2">Trade Timeline</div><div className="space-y-2">{selectedTrade.timeline.map((item) => <div key={item.label} className="flex items-center justify-between text-xs"><span className="text-slate-500">{item.label}</span><span className="text-slate-200 font-mono">{bdtDateTime(item.value)}</span></div>)}</div></div>
-              <div className="rounded-2xl border border-slate-800 bg-[#0A0B0E] p-4 mb-4"><div className="text-[10px] font-mono text-slate-500 mb-2">Chart Markers</div><JournalChart candles={candles} trade={selectedTrade} /></div>
-              <div className="rounded-2xl border border-slate-800 bg-[#0A0B0E] p-4 mb-4"><div className="text-[10px] font-mono text-slate-500 mb-2">Execution Log</div><div className="space-y-2">{selectedTrade.executionLog.map((line, index) => <div key={index} className="text-xs font-mono text-slate-300">{line}</div>)}</div></div>
-              <div className="rounded-2xl border border-slate-800 bg-[#0A0B0E] p-4"><div className="text-[10px] font-mono text-slate-500 mb-2">Close Analysis</div><div className="text-xs text-slate-300 leading-relaxed">{String(selectedTrade.result) === "LOSS" ? `Trade closed with a loss. Exit reason: ${selectedTrade.reason || "unknown"}.` : String(selectedTrade.result) === "PROFIT" ? "Trade closed in profit based on persisted realized PnL." : "The exchange close outcome or exact fill data is not yet available."}</div></div>
-            </>
-          ) : <div className="py-12 text-center text-xs font-mono text-slate-500">Select a row to inspect trade detail.</div>}
+          {selectedTrade ? <><div className="flex justify-between mb-4"><div><h4 className="text-sm font-semibold text-white">{selectedTrade.pair} Trade Detail</h4><p className="text-xs text-slate-500 mt-1">{selectedTrade.strategy} | {selectedTrade.side}</p></div><span className="text-[10px] font-mono text-slate-500">{detailLoading ? "Loading..." : String(selectedTrade.result)}</span></div><div className="grid grid-cols-2 gap-3 mb-4"><MiniMetric label="Fees" value={selectedTrade.feesText} /><MiniMetric label="Realized PnL" value={formatMoney(selectedTrade.pnl)} /><MiniMetric label="RR" value={selectedTrade.rrValue ? `${selectedTrade.rrValue.toFixed(2)}R` : "N/A"} /><MiniMetric label="Duration" value={selectedTrade.durationText} /></div><div className="panel"><div className="panel-title">Timeline</div>{selectedTrade.timeline.map((item) => <div key={item.label} className="flex justify-between text-xs py-1"><span className="text-slate-500">{item.label}</span><span>{bdtDateTime(item.value)}</span></div>)}</div><div className="panel"><div className="panel-title">Chart Markers</div><JournalChart candles={candles} trade={selectedTrade} /></div><div className="panel"><div className="panel-title">Execution Log</div>{selectedTrade.executionLog.map((line, i) => <div key={i} className="text-xs font-mono py-1">{line}</div>)}</div><div className="text-xs text-slate-300">{String(selectedTrade.result) === "UNKNOWN" ? "Exact close outcome is not available; it has not been counted as a loss." : `Exit reason: ${selectedTrade.reason}`}</div></> : <div className="py-12 text-center text-xs font-mono text-slate-500">Select a row to inspect trade detail.</div>}
         </div>
       </div>
     </div>
@@ -425,11 +337,11 @@ export default function TradeHistory({ authToken, history }: TradeHistoryProps) 
 }
 
 function FilterField({ label, children }: { label: string; children: React.ReactNode }) {
-  return <label className="space-y-2 block"><span className="text-[10px] font-mono uppercase tracking-wider text-slate-500"><Filter className="w-3 h-3 inline mr-1" />{label}</span>{children}</label>;
+  return <label className="space-y-2 block"><span className="text-[10px] font-mono uppercase text-slate-500"><Filter className="w-3 h-3 inline mr-1" />{label}</span>{children}</label>;
 }
 
 function MiniMetric({ label, value }: { label: string; value: string }) {
-  return <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-3"><div className="text-[10px] font-mono uppercase tracking-wider text-slate-500">{label}</div><div className="mt-2 text-xs font-semibold text-white">{value}</div></div>;
+  return <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-3"><div className="text-[10px] font-mono uppercase text-slate-500">{label}</div><div className="mt-2 text-xs font-semibold text-white">{value}</div></div>;
 }
 
 function JournalChart({ candles, trade }: { candles: MarketCandle[]; trade: JournalRow }) {
@@ -445,15 +357,5 @@ function JournalChart({ candles, trade }: { candles: MarketCandle[]; trade: Jour
   const plotHeight = height - padding * 2;
   const candleWidth = Math.max(plotWidth / candles.length - 2, 2);
   const getY = (value: number) => padding + ((high - value) / range) * plotHeight;
-  const lines = [{ value: trade.entryPrice, color: "#94a3b8" }, { value: trade.stopLoss, color: "#f43f5e" }, { value: trade.takeProfit, color: "#10b981" }, ...(trade.exitPrice > 0 ? [{ value: trade.exitPrice, color: "#f59e0b" }] : [])];
-  return (
-    <svg viewBox={`0 0 ${width} ${height}`} className="w-full">
-      {lines.map((line, index) => <line key={index} x1={padding} x2={width - padding} y1={getY(line.value)} y2={getY(line.value)} stroke={line.color} strokeDasharray="5 5" strokeWidth="1" />)}
-      {candles.map((candle, index) => {
-        const x = padding + index * (plotWidth / candles.length);
-        const openY = getY(candle.open); const closeY = getY(candle.close); const highY = getY(candle.high); const lowY = getY(candle.low); const isBull = candle.close >= candle.open;
-        return <g key={`${candle.timestamp}-${index}`}><line x1={x + candleWidth / 2} x2={x + candleWidth / 2} y1={highY} y2={lowY} stroke={isBull ? "#10b981" : "#f43f5e"} strokeWidth="1.1" /><rect x={x} y={Math.min(openY, closeY)} width={candleWidth} height={Math.max(Math.abs(closeY - openY), 1.5)} rx="1" fill={isBull ? "#10b981" : "#f43f5e"} /></g>;
-      })}
-    </svg>
-  );
+  return <svg viewBox={`0 0 ${width} ${height}`} className="w-full">{candles.map((candle, index) => { const x = padding + index * (plotWidth / candles.length); const openY = getY(candle.open); const closeY = getY(candle.close); const highY = getY(candle.high); const lowY = getY(candle.low); const bull = candle.close >= candle.open; return <g key={`${candle.timestamp}-${index}`}><line x1={x + candleWidth / 2} x2={x + candleWidth / 2} y1={highY} y2={lowY} stroke={bull ? "#10b981" : "#f43f5e"} /><rect x={x} y={Math.min(openY, closeY)} width={candleWidth} height={Math.max(Math.abs(closeY - openY), 1.5)} fill={bull ? "#10b981" : "#f43f5e"} /></g>; })}</svg>;
 }
