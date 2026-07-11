@@ -22,6 +22,7 @@ class RiskRewardPolicyAlignmentTests(unittest.TestCase):
             risk._trades_today = 0
             risk._trades_day = None
             risk._cooldown_until = None
+            risk._state_loaded = True
 
     def test_strategy_generated_one_point_five_r_signal_passes_risk_gate(self) -> None:
         timestamp = datetime(2026, 7, 12, 0, 0, tzinfo=UTC)
@@ -42,7 +43,7 @@ class RiskRewardPolicyAlignmentTests(unittest.TestCase):
         self.assertIsNotNone(signal)
         self.assertEqual(signal.risk_reward, 1.5)
 
-        with patch("app.risk.get_risk_settings", return_value=RISK_SETTINGS):
+        with patch("app.risk.get_risk_settings", return_value=RISK_SETTINGS), patch("app.risk._persist_state_locked"):
             validation = risk.validate_trade(signal.to_dict())
 
         self.assertTrue(validation["allowed"])
@@ -65,7 +66,7 @@ class RiskRewardPolicyAlignmentTests(unittest.TestCase):
         self.assertEqual(validation["reason"], "Risk reward below minimum 1.5")
 
     def test_risk_state_exposes_aligned_minimum(self) -> None:
-        with patch("app.risk.get_risk_settings", return_value=RISK_SETTINGS):
+        with patch("app.risk.get_risk_settings", return_value=RISK_SETTINGS), patch("app.risk._persist_state_locked"):
             state = risk.get_risk_state()
 
         self.assertEqual(state["min_risk_reward"], 1.5)
