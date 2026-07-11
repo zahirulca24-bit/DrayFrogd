@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from math import isfinite
 from threading import Lock
 from typing import Any
 
@@ -137,6 +138,8 @@ def execute_signal(client: BybitClient, signal: dict[str, Any], auto_triggered: 
                 "status": "closed",
                 "result": RESULT_PROTECTION_FAILED,
                 "close_reason": "PROTECTION_FAILED",
+                "realized_pnl": None,
+                "fees": None,
                 "closed_at": _utc_now_iso(),
                 "exchange_metadata": {
                     **trade["exchange_metadata"],
@@ -151,6 +154,9 @@ def execute_signal(client: BybitClient, signal: dict[str, Any], auto_triggered: 
             {
                 "status": "closed",
                 "result": RESULT_PROTECTION_FAILED,
+                "close_reason": "PROTECTION_FAILED",
+                "realized_pnl": None,
+                "fees": None,
                 "closed_at": trade["closed_at"],
                 "exchange_metadata": trade["exchange_metadata"],
             },
@@ -220,10 +226,23 @@ def close_trade(journal_id: str, close_fields: dict[str, Any]) -> dict[str, Any]
         if trade is None:
             return None
 
+        exit_price = _optional_float(close_fields.get("exit_price"))
+        fees = _optional_float(close_fields.get("fees"))
+        realized_pnl = _optional_float(close_fields.get("realized_pnl"))
+        if realized_pnl is None and exit_price is not None:
+            realized_pnl = _calculate_realized_pnl(trade, exit_price=exit_price, fees=fees or 0.0)
+
         closed_trade = dict(trade)
         closed_trade.update(close_fields)
-        closed_trade["status"] = "closed"
-        closed_trade["closed_at"] = close_fields.get("closed_at") or _utc_now_iso()
+        closed_trade.update(
+            {
+                "status": "closed",
+                "closed_at": close_fields.get("closed_at") or _utc_now_iso(),
+                "exit_price": exit_price,
+                "realized_pnl": realized_pnl,
+                "fees": fees,
+            }
+        )
         _active_trades[:] = [item for item in _active_trades if item.get("journal_id") != journal_id]
         _closed_trades.append(closed_trade)
         if closed_trade.get("order_id"):
@@ -235,6 +254,10 @@ def close_trade(journal_id: str, close_fields: dict[str, Any]) -> dict[str, Any]
             "status": "closed",
             "result": closed_trade.get("result"),
             "sl_hit_reason": closed_trade.get("sl_hit_reason"),
+            "close_reason": closed_trade.get("close_reason"),
+            "exit_price": closed_trade.get("exit_price"),
+            "realized_pnl": closed_trade.get("realized_pnl"),
+            "fees": closed_trade.get("fees"),
             "closed_at": closed_trade.get("closed_at"),
             "exchange_metadata": closed_trade.get("exchange_metadata"),
         },
@@ -324,6 +347,26 @@ def _build_management_state(entry: float, stop_loss: float, take_profit: float, 
         "last_momentum_check": None,
         "last_state_change": _utc_now_iso(),
     }
+
+
+def _calculate_realized_pnl(trade: dict[str, Any], *, exit_price: float, fees: float = 0.0) -> float | None:
+    entry = _optional_float(trade.get("entry"))
+    quantity = _optional_float(trade.get("remaining_quantity") or trade.get("quantity"))
+    direction = str(trade.get("direction", "")).lower()
+    if entry is None or quantity is None or quantity <= 0 or direction not in {"long", "short"}:
+        return None
+
+    gross = (exit_price - entry) * quantity if direction == "long" else (entry - exit_price) * quantity
+    net = gross - max(fees, 0.0)
+    return round(net, 8)
+
+
+def _optional_float(value: Any) -> float | None:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    return numeric if isfinite(numeric) else None
 
 
 def _to_float(value: Any, fallback: float) -> float:
