@@ -43,7 +43,9 @@ def calculate_position_size(
     if available_balance is None:
         return _reject("Available balance is unavailable")
 
-    target_risk_amount = _positive_float(settings.get("risk_amount"))
+    supplied_fixed_risk = _positive_float(settings.get("risk_amount"))
+    fixed_risk_mode = supplied_fixed_risk is not None
+    target_risk_amount = supplied_fixed_risk
     legacy_risk_percent = _positive_float(settings.get("risk_per_trade"))
     if target_risk_amount is None and legacy_risk_percent is not None:
         target_risk_amount = equity * legacy_risk_percent
@@ -97,24 +99,39 @@ def calculate_position_size(
 
     existing_margin = _current_margin(active_trades, positions, leverage_cap)
     max_allowed_margin = equity * exposure_cap
-    remaining_exposure_margin = max_allowed_margin - existing_margin
     margin_buffer = available_balance * 0.95
-    usable_margin = min(remaining_exposure_margin, margin_buffer)
-    if usable_margin <= 0:
-        return _reject("No margin capacity remains under the 50% capital exposure cap")
 
-    minimum_required_leverage = max(notional / usable_margin, 1.0)
-    selected_leverage = ceil(minimum_required_leverage * 100) / 100
-    if selected_leverage > leverage_cap + 1e-9:
-        return _reject(
-            f"Required leverage {selected_leverage:.2f}x exceeds {leverage_cap:.2f}x profile cap"
-        )
+    if not fixed_risk_mode:
+        # Backward-compatible percentage mode keeps the former fixed-leverage
+        # calculations and error precedence for existing API consumers/tests.
+        selected_leverage = leverage_cap
+        minimum_required_leverage = selected_leverage
+        required_margin = notional / selected_leverage
+        if required_margin > margin_buffer + 1e-9:
+            return _reject("Required margin exceeds available balance")
+        if existing_margin + required_margin > max_allowed_margin + 1e-9:
+            return _reject("Exposure cap exceeded")
+        remaining_exposure_margin = max_allowed_margin - existing_margin
+    else:
+        # Locked Risk Engine mode selects only the leverage needed to fit the
+        # position safely inside available margin and the 50% exposure budget.
+        remaining_exposure_margin = max_allowed_margin - existing_margin
+        usable_margin = min(remaining_exposure_margin, margin_buffer)
+        if usable_margin <= 0:
+            return _reject("Capital exposure cap exceeded")
 
-    required_margin = notional / selected_leverage
-    if required_margin > margin_buffer + 1e-9:
-        return _reject("Required margin exceeds available balance")
-    if existing_margin + required_margin > max_allowed_margin + 1e-9:
-        return _reject("Capital exposure cap exceeded")
+        minimum_required_leverage = max(notional / usable_margin, 1.0)
+        selected_leverage = ceil(minimum_required_leverage * 100) / 100
+        if selected_leverage > leverage_cap + 1e-9:
+            return _reject(
+                f"Required leverage {selected_leverage:.2f}x exceeds {leverage_cap:.2f}x profile cap"
+            )
+
+        required_margin = notional / selected_leverage
+        if required_margin > margin_buffer + 1e-9:
+            return _reject("Required margin exceeds available balance")
+        if existing_margin + required_margin > max_allowed_margin + 1e-9:
+            return _reject("Capital exposure cap exceeded")
 
     return {
         "allowed": True,
@@ -127,6 +144,7 @@ def calculate_position_size(
         "risk_percent": actual_risk_amount / equity,
         "risk_amount": actual_risk_amount,
         "target_risk_amount": target_risk_amount,
+        "risk_mode": "fixed_usdt" if fixed_risk_mode else "legacy_percent",
         "notional": notional,
         "required_margin": required_margin,
         "equity": equity,
