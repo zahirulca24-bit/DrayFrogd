@@ -102,6 +102,17 @@ type BackendTrade = {
   exit_price?: number | null;
   realized_pnl?: number | null;
   fees?: number | null;
+  mark_price?: number | null;
+  leverage?: number | null;
+  position_value?: number | null;
+  position_margin?: number | null;
+  unrealized_pnl?: number | null;
+  pnl_percent?: number | null;
+  liquidation_price?: number | null;
+  position_synced?: boolean;
+  live_metrics_available?: boolean;
+  close_allowed?: boolean;
+  close_blocked_reason?: string | null;
   exchange_metadata?: Record<string, unknown>;
 };
 
@@ -110,6 +121,24 @@ type FinancialTrade = Trade & {
   realizedPnl: number | null;
   fees: number | null;
   closeReason: string | null;
+  liveMetricsAvailable: boolean;
+  closeAllowed: boolean;
+  closeBlockedReason: string | null;
+  liquidationPrice: number | null;
+  positionValue: number | null;
+};
+
+
+type MarketCloseResponse = {
+  ok: boolean;
+  duplicate?: boolean;
+  status?: string;
+  request_id?: string;
+  message?: string;
+  error?: string;
+  detail?: string | null;
+  trade?: Record<string, unknown>;
+  order?: Record<string, unknown>;
 };
 
 
@@ -123,6 +152,21 @@ type RiskPayload = {
   detected_at?: string | null;
   status: string;
 };
+
+
+function finiteNumber(value: unknown, fallback = 0) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : fallback;
+}
+
+
+function nullableNumber(value: unknown): number | null {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+}
 
 
 function toUiSignal(item: BackendSignal, index: number): ExecutableSignal {
@@ -165,18 +209,27 @@ function toUiSignal(item: BackendSignal, index: number): ExecutableSignal {
 
 
 function toUiTrade(item: BackendTrade, index: number): FinancialTrade {
-  const entryPrice = Number(item.entry || 0);
-  const stopLoss = Number(item.stop_loss || 0);
-  const takeProfit = Number(item.take_profit || 0);
-  const size = Number(item.quantity || 0);
+  const entryPrice = finiteNumber(item.entry);
+  const stopLoss = finiteNumber(item.stop_loss);
+  const takeProfit = finiteNumber(item.take_profit);
+  const size = finiteNumber(item.quantity);
   const direction = item.direction?.toUpperCase() === "SHORT" ? "SHORT" : "LONG";
   const rawResult = String(item.result || "").toUpperCase();
   const exchangeMetadata = (item.exchange_metadata || {}) as Record<string, any>;
   const management = (exchangeMetadata.management || {}) as Record<string, any>;
-  const exitPrice = item.exit_price === null || item.exit_price === undefined ? 0 : Number(item.exit_price);
-  const markPrice = Number(exchangeMetadata.mark_price || exchangeMetadata.markPrice || 0);
-  const realizedPnl = item.realized_pnl === null || item.realized_pnl === undefined ? null : Number(item.realized_pnl);
-  const fees = item.fees === null || item.fees === undefined ? null : Number(item.fees);
+  const exitPrice = nullableNumber(item.exit_price) || 0;
+  const markPrice = nullableNumber(item.mark_price ?? exchangeMetadata.mark_price ?? exchangeMetadata.markPrice);
+  const realizedPnl = nullableNumber(item.realized_pnl);
+  const fees = nullableNumber(item.fees);
+  const margin = nullableNumber(item.position_margin);
+  const leverage = nullableNumber(item.leverage);
+  const unrealizedPnl = nullableNumber(item.unrealized_pnl);
+  const pnlPercent = nullableNumber(item.pnl_percent);
+  const positionValue = nullableNumber(item.position_value);
+  const liquidationPrice = nullableNumber(item.liquidation_price);
+  const positionSynced = Boolean(item.position_synced);
+  const liveMetricsAvailable = Boolean(item.live_metrics_available);
+  const closeAllowed = item.close_allowed === true;
 
   return {
     id: item.order_id || item.journal_id || `${item.symbol}-${index}`,
@@ -188,16 +241,17 @@ function toUiTrade(item: BackendTrade, index: number): FinancialTrade {
     stopLoss,
     takeProfit,
     size,
-    margin: 0,
-    leverage: 1,
-    unrealizedPnl: 0,
-    pnlPercent: 0,
+    margin: margin || 0,
+    leverage: leverage || 0,
+    unrealizedPnl: unrealizedPnl || 0,
+    pnlPercent: pnlPercent || 0,
     status: item.status === "closed" ? "CLOSED" : "OPEN",
     timestamp: item.opened_at || item.detected_at || item.closed_at || new Date().toISOString(),
     orderConfirmed: Boolean(item.order_id),
     slVerified: item.status !== "protection_pending",
     tpVerified: item.status !== "protection_pending",
-    positionSynced: true,
+    positionSynced,
+    isUnsafe: !closeAllowed,
     orderId: item.order_id,
     rawStatus: item.status,
     journalId: item.journal_id,
@@ -215,6 +269,11 @@ function toUiTrade(item: BackendTrade, index: number): FinancialTrade {
     breakEvenSet: Boolean(management.break_even_set),
     tp1Done: Boolean(management.tp1_done),
     tp2Done: Boolean(management.tp2_done),
+    liveMetricsAvailable,
+    closeAllowed,
+    closeBlockedReason: item.close_blocked_reason ?? null,
+    liquidationPrice,
+    positionValue,
   };
 }
 
@@ -281,6 +340,12 @@ export const api = {
     const response = await request<{ trades: BackendTrade[] }>("/active-trades", {}, token);
     return response.trades.map(toUiTrade);
   },
+  marketCloseTrade: (token: string, journalId: string) =>
+    request<MarketCloseResponse>(
+      `/active-trades/${encodeURIComponent(journalId)}/market-close`,
+      { method: "POST" },
+      token,
+    ),
   getTradeHistory: async (token: string) => {
     const response = await request<{ trades: BackendTrade[] }>("/trade-history", {}, token);
     return response.trades.map((item, index) => toTradeHistoryEntry(toUiTrade(item, index)));
