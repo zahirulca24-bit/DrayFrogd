@@ -1,16 +1,20 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   Activity,
   AlertTriangle,
   Bot,
+  CheckCircle2,
+  Clock3,
   Database,
   Play,
-  Radio,
   RefreshCw,
   Server,
   ShieldAlert,
+  ShieldCheck,
   Square,
+  Stethoscope,
   Wallet,
+  XCircle,
 } from "lucide-react";
 import {
   AccountResponse,
@@ -24,6 +28,8 @@ import {
   SystemReadiness,
   Trade,
   TradeHistoryEntry,
+  WatchdogIncident,
+  WatchdogModuleStatus,
   WatchdogSnapshot,
 } from "../types";
 
@@ -72,30 +78,42 @@ const BDT_DATE_TIME = new Intl.DateTimeFormat("en-BD", {
   hour12: true,
 });
 
+const CRITICAL_MODULES = new Set(["backend", "bybit", "database", "worker", "wallet"]);
+const HEALTHY_MODULE_STATUSES = new Set(["ONLINE", "READY", "IDLE"]);
+
 function formatTime(value?: string | null) {
-  if (!value) {
-    return "N/A";
-  }
-  return BDT_DATE_TIME.format(new Date(value));
+  if (!value) return "N/A";
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? "N/A" : BDT_DATE_TIME.format(parsed);
 }
 
 function formatPercent(value: number) {
-  return `${(value * 100).toFixed(2)}%`;
+  return `${(Number(value || 0) * 100).toFixed(2)}%`;
+}
+
+function readable(value?: string | null, fallback = "Not confirmed") {
+  if (!value) return fallback;
+  return value
+    .replaceAll("_", " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/^./, (character) => character.toUpperCase());
+}
+
+function incidentEvidence(value: unknown) {
+  if (value === null || value === undefined || value === "") return "No technical evidence recorded.";
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
 }
 
 export default function ControlPanel({
   botStatus,
   readiness,
-  exchangeStatus,
-  account,
-  metrics,
-  portfolio,
   riskState,
-  signals,
-  scannerResults,
-  activeTrades,
-  tradeHistory,
-  botEvents,
   watchdog,
   healthStatus,
   loading,
@@ -107,10 +125,6 @@ export default function ControlPanel({
   onRefresh,
   onRiskSettingsChange,
 }: ControlPanelProps) {
-  const activityLogs = botEvents.slice(0, 10);
-  const queueRows = scannerResults.slice(0, 8);
-  const moduleCards = watchdog.modules;
-  const latestIncident = watchdog.incidents[0];
   const [riskForm, setRiskForm] = useState({
     riskPercent: String((riskState.risk_per_trade * 100).toFixed(2)),
     leverageCap: String(riskState.leverage_cap),
@@ -118,6 +132,7 @@ export default function ControlPanel({
     maxOpenTrades: String(riskState.max_open_trades),
     maxDailyTrades: String(riskState.max_trades_per_day),
   });
+  const [riskFormError, setRiskFormError] = useState<string | null>(null);
 
   useEffect(() => {
     setRiskForm({
@@ -129,381 +144,278 @@ export default function ControlPanel({
     });
   }, [riskState]);
 
+  const criticalModules = useMemo(
+    () => watchdog.modules.filter((module) => CRITICAL_MODULES.has(module.module)),
+    [watchdog.modules],
+  );
+  const incidents = useMemo(() => watchdog.incidents.slice(0, 20), [watchdog.incidents]);
+  const lastIncident = incidents[0] || null;
+  const criticalHealthy =
+    healthStatus === "ONLINE" &&
+    criticalModules.length > 0 &&
+    criticalModules.every((module) => HEALTHY_MODULE_STATUSES.has(module.status));
+
+  const saveRiskSettings = async () => {
+    const parsed = {
+      riskPercent: Number(riskForm.riskPercent),
+      leverageCap: Number(riskForm.leverageCap),
+      exposureCap: Number(riskForm.exposureCap),
+      maxOpenTrades: Number(riskForm.maxOpenTrades),
+      maxDailyTrades: Number(riskForm.maxDailyTrades),
+    };
+
+    if (Object.values(parsed).some((value) => !Number.isFinite(value) || value <= 0)) {
+      setRiskFormError("All risk settings must be valid positive numbers.");
+      return;
+    }
+
+    setRiskFormError(null);
+    await onRiskSettingsChange({
+      risk_per_trade: parsed.riskPercent / 100,
+      leverage_cap: parsed.leverageCap,
+      exposure_cap: parsed.exposureCap / 100,
+      max_open_trades: Math.floor(parsed.maxOpenTrades),
+      max_daily_trades: Math.floor(parsed.maxDailyTrades),
+    });
+  };
+
   return (
-    <div className="space-y-6">
-      <div className={`bg-bento-card border ${healthStatus === "ONLINE" ? "border-emerald-500/25" : "border-rose-500/25"} rounded-2xl p-4 sm:p-6 shadow-md`}>
-        <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-4">
+    <div className="space-y-4" id="control-center-root">
+      <section className="rounded-2xl border border-slate-800/80 bg-bento-card-sec/40 p-5 shadow-lg backdrop-blur-md">
+        <div className="flex flex-col gap-5 xl:flex-row xl:items-center xl:justify-between">
           <div>
-            <h3 className="text-sm font-semibold text-white tracking-tight font-sans">Control Panel</h3>
-            <p className="text-xs text-slate-500 mt-1">
-              One-click engine start for demo mode, automatic scanning, and immediate trade execution attempts.
-            </p>
+            <div className="flex items-center gap-3">
+              <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/10 p-2.5 text-emerald-300">
+                <ShieldCheck className="h-5 w-5" />
+              </div>
+              <div>
+                <h1 className="text-xl font-bold tracking-tight text-white">Control Center</h1>
+                <p className="mt-1 text-xs text-slate-400">
+                  Engine control, risk configuration, critical health and incident investigation in one page.
+                </p>
+              </div>
+            </div>
+            <div className="mt-4 flex flex-wrap gap-2 text-[10px] font-mono">
+              <StatusPill label="BOT" value={botStatus.status.toUpperCase()} tone={botStatus.status === "running" ? "good" : "neutral"} />
+              <StatusPill label="READINESS" value={readiness.ready_for_execution ? "READY" : "BLOCKED"} tone={readiness.ready_for_execution ? "good" : "bad"} />
+              <StatusPill label="MODE" value={(botStatus.execution_mode || "demo").toUpperCase()} tone={botStatus.execution_mode === "live" ? "warn" : "good"} />
+              <StatusPill label="AUTO" value={botStatus.auto_trading_enabled ? "ENABLED" : "DISABLED"} tone={botStatus.auto_trading_enabled ? "good" : "bad"} />
+            </div>
           </div>
-          <div className="flex flex-wrap items-center gap-3 text-[10px] font-mono text-slate-500">
-            <span className="hidden sm:inline">BDT {formatTime(new Date().toISOString())}</span>
+
+          <div className="flex flex-col items-start gap-2 sm:items-end">
             <button
+              type="button"
               onClick={onRefresh}
               disabled={loading}
-              className="px-3 py-1.5 rounded-lg border border-slate-800 bg-[#0A0B0E] hover:text-white cursor-pointer"
+              className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-800 bg-[#0A0B0E] px-5 py-3 text-xs font-semibold text-slate-300 transition-colors hover:border-slate-700 hover:text-white disabled:opacity-50"
             >
-              <RefreshCw className={`w-3 h-3 inline mr-1 ${loading ? "animate-spin" : ""}`} />
-              Refresh
+              <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+              {loading ? "REFRESHING..." : "REFRESH STATUS"}
             </button>
+            <span className="inline-flex items-center gap-1 text-[10px] font-mono text-slate-500">
+              <Clock3 className="h-3.5 w-3.5" /> Generated {formatTime(watchdog.generated_at)}
+            </span>
           </div>
         </div>
-      </div>
+      </section>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-4">
-        <SummaryCard label="Backend" value={healthStatus} tone={healthStatus === "ONLINE" ? "good" : "bad"} />
-        <SummaryCard label="Bybit" value={exchangeStatus.reachable ? "CONNECTED" : "DEGRADED"} tone={exchangeStatus.reachable ? "good" : "warn"} />
-        <SummaryCard label="Wallet" value={account.wallet.ok ? "LIVE" : "FAILED"} tone={account.wallet.ok ? "good" : "warn"} />
-        <SummaryCard label="Scanner" value={`${scannerResults.length} results`} tone={scannerResults.length > 0 ? "good" : "neutral"} />
-        <SummaryCard label="Worker" value={watchdog.modules.find((item) => item.module === "worker")?.status || "N/A"} tone={watchdog.modules.find((item) => item.module === "worker")?.status === "ONLINE" ? "good" : "warn"} />
-      </div>
+      <section className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <SummaryCard
+          label="Operational Health"
+          value={criticalHealthy ? "HEALTHY" : "DEGRADED"}
+          helper={`${criticalModules.length} critical modules checked`}
+          icon={<Stethoscope className="h-4 w-4" />}
+          tone={criticalHealthy ? "good" : "warn"}
+        />
+        <SummaryCard
+          label="Open Incidents"
+          value={String(watchdog.summary.open_incidents)}
+          helper={`${watchdog.summary.total_incidents} persisted incidents`}
+          icon={<ShieldAlert className="h-4 w-4" />}
+          tone={watchdog.summary.open_incidents === 0 ? "good" : "bad"}
+        />
+        <SummaryCard
+          label="Last Incident"
+          value={lastIncident ? formatTime(lastIncident.timestamp) : "NONE"}
+          helper={lastIncident ? `${lastIncident.affected_module} · ${lastIncident.error_code}` : "No incident evidence recorded"}
+          icon={<Clock3 className="h-4 w-4" />}
+          tone={lastIncident ? "warn" : "good"}
+        />
+      </section>
 
-      <div className="grid grid-cols-1 xl:grid-cols-[1.4fr_0.6fr] gap-6">
-        <div className="bg-bento-card border border-slate-800 rounded-2xl p-4 sm:p-6 shadow-md">
-          <div className="flex items-center justify-between mb-5">
-            <div>
-              <h4 className="text-sm font-semibold text-white tracking-tight font-sans">Execution Setup & Status</h4>
-              <p className="text-xs text-slate-500 mt-1">Real status for backend, exchange, persistence, worker, and safety modules.</p>
-            </div>
-            <Server className="w-4 h-4 text-emerald-400" />
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
-            {moduleCards.map((module) => (
-              <ModuleCard
-                key={module.module}
-                module={module.module}
-                status={module.status}
-                reason={module.reason}
-                endpoint={module.endpoint}
-                errorCode={module.error_code}
-                actionLabel="Retest"
-                onAction={onRefresh}
-                loading={loading}
+      <section className="grid grid-cols-1 gap-4 xl:grid-cols-[0.9fr_1.1fr]">
+        <div className="space-y-4">
+          <Panel title="Engine Controls" subtitle="Primary controls only—scanner and execution details stay on their own pages." icon={<Bot className="h-4 w-4 text-emerald-400" />}>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <ControlAction
+                title="Start Engine"
+                description="Starts demo automation, scans and attempts validated execution."
+                label={botStatus.status === "running" ? "RUNNING" : "START"}
+                icon={<Play className="h-4 w-4" />}
+                tone="good"
+                onClick={onStart}
+                disabled={botStatus.status === "running" || actionLoading === "bot-start"}
+                loading={actionLoading === "bot-start"}
               />
-            ))}
-          </div>
-        </div>
-
-        <div className="space-y-6">
-          <PanelCard title="Latest Failure" icon={<AlertTriangle className="w-4 h-4 text-amber-400" />}>
-            {latestIncident ? (
-              <div className="space-y-3 text-xs">
-                <KeyValue label="Module" value={latestIncident.affected_module} />
-                <KeyValue label="Error Code" value={latestIncident.error_code} />
-                <KeyValue label="Endpoint" value={latestIncident.endpoint || "N/A"} />
-                <KeyValue label="Evidence" value={String(latestIncident.technical_evidence || "Cause Not Confirmed")} />
-                <KeyValue label="Root Cause" value={latestIncident.root_cause || "Cause Not Confirmed"} />
-              </div>
-            ) : (
-              <EmptyNote text="No persisted incidents yet." />
-            )}
-          </PanelCard>
-
-          <PanelCard title="System Gates" icon={<ShieldAlert className="w-4 h-4 text-rose-400" />}>
-            <div className="space-y-3 text-xs">
-              <KeyValue label="Readiness" value={readiness.ready_for_execution ? "READY" : "BLOCKED"} />
-              <KeyValue label="Execution Mode" value={(botStatus.execution_mode || "demo").toUpperCase()} />
-              <KeyValue label="Emergency Stop" value={botStatus.emergency_stop ? "ACTIVE" : "CLEAR"} />
-              <KeyValue label="Auto Trading" value={botStatus.auto_trading_enabled ? "ENABLED" : "DISABLED"} />
-              <KeyValue label="Open Incidents" value={String(watchdog.summary.open_incidents)} />
+              <ControlAction
+                title="Stop Engine"
+                description="Stops normal automation without setting the emergency lock."
+                label="STOP"
+                icon={<Square className="h-4 w-4" />}
+                tone="warn"
+                onClick={onStop}
+                disabled={actionLoading === "bot-stop"}
+                loading={actionLoading === "bot-stop"}
+              />
+              <ControlAction
+                title="Emergency Stop"
+                description="Immediately blocks new execution until manually resumed."
+                label={botStatus.emergency_stop ? "ACTIVE" : "ACTIVATE"}
+                icon={<AlertTriangle className="h-4 w-4" />}
+                tone="bad"
+                onClick={onEmergencyStop}
+                disabled={botStatus.emergency_stop || actionLoading === "bot-emergency"}
+                loading={actionLoading === "bot-emergency"}
+              />
+              {botStatus.emergency_stop && (
+                <ControlAction
+                  title="Resume Engine"
+                  description="Clears the emergency lock and restores execution eligibility."
+                  label="RESUME"
+                  icon={<Play className="h-4 w-4" />}
+                  tone="good"
+                  onClick={onResume}
+                  disabled={actionLoading === "bot-resume"}
+                  loading={actionLoading === "bot-resume"}
+                />
+              )}
             </div>
-          </PanelCard>
+          </Panel>
+
+          <Panel title="System Gates" subtitle="Current execution blockers and operating limits." icon={<ShieldAlert className="h-4 w-4 text-amber-400" />}>
+            <div className="space-y-2">
+              <GateRow label="Backend service" value={healthStatus} passed={healthStatus === "ONLINE"} />
+              <GateRow label="Admin authentication" value={readiness.checks.admin_auth_configured ? "READY" : "BLOCKED"} passed={readiness.checks.admin_auth_configured} />
+              <GateRow label="Exchange connection" value={readiness.checks.exchange_reachable ? "CONNECTED" : "BLOCKED"} passed={readiness.checks.exchange_reachable} />
+              <GateRow label="Wallet synchronization" value={readiness.checks.wallet_fetch_success ? "READY" : "BLOCKED"} passed={readiness.checks.wallet_fetch_success} />
+              <GateRow label="Emergency stop" value={botStatus.emergency_stop ? "ACTIVE" : "CLEAR"} passed={!botStatus.emergency_stop} />
+              <GateRow label="Loss cooldown" value={riskState.cooldown_until ? formatTime(riskState.cooldown_until) : "CLEAR"} passed={!riskState.cooldown_until} />
+            </div>
+          </Panel>
         </div>
-      </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-        <PanelCard title="Bot Controls" icon={<Bot className="w-4 h-4 text-emerald-400" />}>
-          <div className="space-y-4">
-            <ActionRow
-              title="Full Engine Start"
-              description="Starts the bot in demo mode, enables auto trading, runs the scan, and instantly tries to execute active signals."
-              buttonLabel="START ENGINE"
-              onClick={onStart}
-              loading={actionLoading === "bot-start"}
-              accent="emerald"
-              icon={<Play className="w-3 h-3" />}
-            />
-            <ActionRow title="Stop Engine" description="Stop the running engine without activating emergency lock." buttonLabel="STOP" onClick={onStop} loading={actionLoading === "bot-stop"} accent="amber" icon={<Square className="w-3 h-3" />} />
-            <ActionRow title="Emergency Stop" description="Immediately block all execution." buttonLabel="ACTIVATE" onClick={onEmergencyStop} loading={actionLoading === "bot-emergency"} accent="red" icon={<AlertTriangle className="w-3 h-3" />} />
-            <ActionRow title="Resume Engine" description="Clear emergency stop and allow automation again." buttonLabel="RESUME" onClick={onResume} loading={actionLoading === "bot-resume"} accent="emerald" icon={<Play className="w-3 h-3" />} />
+        <Panel title="Risk Settings" subtitle="Review the active policy, then save only deliberate changes." icon={<ShieldCheck className="h-4 w-4 text-sky-400" />}>
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+            <Metric label="Risk / Trade" value={formatPercent(riskState.risk_per_trade)} />
+            <Metric label="Leverage Cap" value={`${riskState.leverage_cap}x`} />
+            <Metric label="Exposure Cap" value={formatPercent(riskState.exposure_cap)} />
+            <Metric label="Minimum RR" value={`${riskState.min_risk_reward.toFixed(1)}R`} />
+            <Metric label="Max Open" value={String(riskState.max_open_trades)} />
+            <Metric label="Trades Today" value={`${riskState.trades_today} / ${riskState.max_trades_per_day}`} />
+            <Metric label="Active Symbols" value={riskState.active_symbols.length ? riskState.active_symbols.join(", ") : "None"} />
+            <Metric label="Cooldown" value={riskState.cooldown_until ? formatTime(riskState.cooldown_until) : "CLEAR"} />
           </div>
-        </PanelCard>
 
-        <PanelCard title="Risk Settings" icon={<ShieldAlert className="w-4 h-4 text-amber-400" />}>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <MiniMetric label="Risk / Trade" value={formatPercent(riskState.risk_per_trade)} />
-            <MiniMetric label="Leverage Cap" value={`${riskState.leverage_cap}x`} />
-            <MiniMetric label="Exposure Cap" value={formatPercent(riskState.exposure_cap)} />
-            <MiniMetric label="Min RR" value={`${riskState.min_risk_reward.toFixed(1)}R`} />
-            <MiniMetric label="Max Open Trades" value={String(riskState.max_open_trades)} />
-            <MiniMetric label="Trades Today" value={`${riskState.trades_today} / ${riskState.max_trades_per_day}`} />
-            <MiniMetric label="Active Symbols" value={riskState.active_symbols.length > 0 ? riskState.active_symbols.join(", ") : "None"} />
-            <MiniMetric label="Cooldown" value={riskState.cooldown_until ? formatTime(riskState.cooldown_until) : "CLEAR"} />
-          </div>
-          <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className="my-5 border-t border-slate-800" />
+
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
             <RiskInput label="Risk %" value={riskForm.riskPercent} onChange={(value) => setRiskForm((current) => ({ ...current, riskPercent: value }))} />
             <RiskInput label="Leverage Cap" value={riskForm.leverageCap} onChange={(value) => setRiskForm((current) => ({ ...current, leverageCap: value }))} />
             <RiskInput label="Exposure %" value={riskForm.exposureCap} onChange={(value) => setRiskForm((current) => ({ ...current, exposureCap: value }))} />
-            <RiskInput label="Max Open" value={riskForm.maxOpenTrades} onChange={(value) => setRiskForm((current) => ({ ...current, maxOpenTrades: value }))} />
-            <RiskInput label="Max Daily" value={riskForm.maxDailyTrades} onChange={(value) => setRiskForm((current) => ({ ...current, maxDailyTrades: value }))} />
+            <RiskInput label="Max Open Trades" value={riskForm.maxOpenTrades} onChange={(value) => setRiskForm((current) => ({ ...current, maxOpenTrades: value }))} />
+            <RiskInput label="Max Daily Trades" value={riskForm.maxDailyTrades} onChange={(value) => setRiskForm((current) => ({ ...current, maxDailyTrades: value }))} />
             <button
-              onClick={() => onRiskSettingsChange({
-                risk_per_trade: Number(riskForm.riskPercent) / 100,
-                leverage_cap: Number(riskForm.leverageCap),
-                exposure_cap: Number(riskForm.exposureCap) / 100,
-                max_open_trades: Number(riskForm.maxOpenTrades),
-                max_daily_trades: Number(riskForm.maxDailyTrades),
-              })}
+              type="button"
+              onClick={() => void saveRiskSettings()}
               disabled={actionLoading === "bot-config-risk"}
-              className="rounded-xl border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-xs font-semibold text-emerald-300 cursor-pointer disabled:opacity-50"
+              className="mt-auto inline-flex h-[42px] items-center justify-center rounded-xl border border-emerald-500/20 bg-emerald-500/10 px-4 text-xs font-semibold text-emerald-300 transition-colors hover:bg-emerald-500/20 disabled:opacity-50"
             >
-              {actionLoading === "bot-config-risk" ? "Saving..." : "Save Settings"}
+              {actionLoading === "bot-config-risk" ? "SAVING..." : "SAVE RISK SETTINGS"}
             </button>
           </div>
-        </PanelCard>
-      </div>
+          {riskFormError && <div className="mt-3 text-xs text-rose-300">{riskFormError}</div>}
+        </Panel>
+      </section>
 
-      <div className="grid grid-cols-1 xl:grid-cols-[0.9fr_1.1fr] gap-6">
-        <PanelCard title="Scanner Monitor" icon={<Radio className="w-4 h-4 text-violet-400" />}>
-          <div className="space-y-4">
-            <div className="rounded-xl border border-slate-800 bg-[#0A0B0E] p-4 text-xs leading-relaxed text-slate-400">
-              The engine start button already handles demo mode, scan, and immediate execution attempt. This panel is now read-first instead of click-heavy.
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <MiniMetric label="Active Signals" value={String(signals.length)} />
-              <MiniMetric label="Latest Results" value={String(scannerResults.length)} />
-              <MiniMetric label="Win Rate" value={formatPercent(metrics.win_rate)} />
-              <MiniMetric label="Closed Trades" value={String(tradeHistory.length)} />
-            </div>
+      <section className="grid grid-cols-1 gap-4 xl:grid-cols-[0.75fr_1.25fr]">
+        <Panel title="Critical Health" subtitle="Only operational dependencies that can stop the bot." icon={<Server className="h-4 w-4 text-cyan-400" />}>
+          <div className="space-y-3">
+            {criticalModules.map((module) => <ModuleRow key={module.module} module={module} />)}
+            {criticalModules.length === 0 && <EmptyNote text="Critical module telemetry is unavailable." />}
           </div>
-        </PanelCard>
+        </Panel>
 
-        <PanelCard title="Execution Queue" icon={<Activity className="w-4 h-4 text-emerald-400" />}>
-          {queueRows.length > 0 ? (
-            <div className="space-y-3">
-              {queueRows.map((signal) => (
-                <div key={signal.id} className="rounded-xl border border-slate-800 bg-[#0A0B0E] p-3">
-                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                    <div className="min-w-0">
-                      <div className="text-xs font-semibold text-white">{signal.pair} {signal.direction}</div>
-                      <div className="mt-1 text-[10px] font-mono text-slate-500">
-                        {signal.executionStatus} | RR {signal.rr.toFixed(2)} | Score {signal.score}
-                      </div>
-                    </div>
-                    <span className={`text-[10px] font-mono ${signal.executionStatus === "READY" ? "text-emerald-400" : "text-amber-300"}`}>
-                      {signal.executionStatus}
-                    </span>
-                  </div>
-                  <div className="mt-2 text-[10px] text-slate-500">
-                    {signal.rejectionReason || "No blocking reason from backend."}
-                  </div>
-                </div>
-              ))}
+        <Panel title="Incident Center" subtitle="Error, evidence, root cause, recovery state and recommended action in one record." icon={<Database className="h-4 w-4 text-violet-400" />}>
+          {incidents.length > 0 ? (
+            <div className="max-h-[720px] space-y-3 overflow-y-auto pr-1">
+              {incidents.map((incident) => <IncidentCard key={incident.id} incident={incident} />)}
             </div>
           ) : (
-            <EmptyNote text="No queued scan results available." />
+            <EmptyNote text="No persisted warning or error incidents are available." />
           )}
-        </PanelCard>
-      </div>
-
-      <div className="grid grid-cols-1 xl:grid-cols-[0.7fr_1.3fr] gap-6">
-        <PanelCard title="Runtime Snapshot" icon={<Wallet className="w-4 h-4 text-cyan-400" />}>
-          <div className="space-y-4">
-            <MiniMetric label="Available Balance" value={String(account.wallet.data?.totalAvailableBalance ?? account.wallet.data?.totalWalletBalance ?? "N/A")} />
-            <MiniMetric label="Open Positions" value={String(activeTrades.length)} />
-            <MiniMetric label="Portfolio Mode" value={(portfolio.execution_mode || botStatus.execution_mode || "demo").toUpperCase()} />
-            <MiniMetric label="Bot Status" value={botStatus.status.toUpperCase()} />
-          </div>
-        </PanelCard>
-
-        <PanelCard title="Live Activity Logs" icon={<Database className="w-4 h-4 text-cyan-400" />}>
-          {activityLogs.length > 0 ? (
-            <div className="space-y-3 max-h-[420px] overflow-y-auto pr-1">
-              {activityLogs.map((event) => (
-                <div key={event.id} className="rounded-xl border border-slate-800 bg-[#0A0B0E] p-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="text-xs font-semibold text-white">{event.event_type}</div>
-                    <span className={`text-[10px] font-mono ${event.level === "error" ? "text-rose-400" : event.level === "warning" ? "text-amber-300" : "text-emerald-400"}`}>
-                      {event.level.toUpperCase()}
-                    </span>
-                  </div>
-                  <div className="mt-2 text-xs text-slate-300">{event.message}</div>
-                  <div className="mt-2 text-[10px] font-mono text-slate-500">
-                    {formatTime(event.created_at)} | {(event.metadata?.["affected_module"] as string) || "backend"} | {(event.metadata?.["endpoint"] as string) || "N/A"}
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <EmptyNote text="No bot event logs persisted yet." />
-          )}
-        </PanelCard>
-      </div>
+        </Panel>
+      </section>
     </div>
   );
 }
 
-function SummaryCard({ label, value, tone }: { label: string; value: string; tone: "good" | "warn" | "bad" | "neutral" }) {
-  const toneClass = {
-    good: "text-emerald-400",
-    warn: "text-amber-300",
-    bad: "text-rose-400",
-    neutral: "text-slate-200",
-  }[tone];
-
-  return (
-    <div className="bg-bento-card border border-slate-800 rounded-2xl p-5 shadow-md">
-      <div className="text-[10px] font-mono uppercase tracking-wider text-slate-500">{label}</div>
-      <div className={`mt-3 text-lg font-semibold ${toneClass}`}>{value}</div>
-    </div>
-  );
+function StatusPill({ label, value, tone }: { label: string; value: string; tone: "good" | "warn" | "bad" | "neutral" }) {
+  const toneClass = tone === "good" ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-300" : tone === "warn" ? "border-amber-500/20 bg-amber-500/10 text-amber-300" : tone === "bad" ? "border-rose-500/20 bg-rose-500/10 text-rose-300" : "border-slate-800 bg-[#0A0B0E] text-slate-300";
+  return <span className={`rounded-lg border px-2.5 py-1.5 ${toneClass}`}><span className="text-slate-500">{label}: </span>{value}</span>;
 }
 
-function PanelCard({ title, icon, children }: { title: string; icon: ReactNode; children: ReactNode }) {
-  return (
-    <div className="bg-bento-card border border-slate-800 rounded-2xl p-4 sm:p-6 shadow-md">
-      <div className="mb-4 flex items-center gap-2">
-        {icon}
-        <h4 className="text-sm font-semibold text-white tracking-tight font-sans">{title}</h4>
-      </div>
-      {children}
-    </div>
-  );
+function SummaryCard({ label, value, helper, icon, tone }: { label: string; value: string; helper: string; icon: ReactNode; tone: "good" | "warn" | "bad" }) {
+  const toneClass = tone === "good" ? "border-emerald-500/10 bg-emerald-500/10 text-emerald-300" : tone === "warn" ? "border-amber-500/10 bg-amber-500/10 text-amber-300" : "border-rose-500/10 bg-rose-500/10 text-rose-300";
+  return <div className="rounded-2xl border border-slate-800 bg-bento-card p-4 shadow-md"><div className="flex items-center justify-between gap-3"><span className="text-[10px] font-mono font-semibold uppercase tracking-wider text-slate-500">{label}</span><span className={`rounded-xl border p-2 ${toneClass}`}>{icon}</span></div><div className="mt-3 text-lg font-bold text-white">{value}</div><div className="mt-1 text-[10px] text-slate-500">{helper}</div></div>;
 }
 
-function ModuleCard({
-  module,
-  status,
-  reason,
-  endpoint,
-  errorCode,
-  actionLabel,
-  onAction,
-  loading,
-}: {
-  module: string;
-  status: string;
-  reason: string;
-  endpoint: string | null;
-  errorCode: string;
-  actionLabel: string;
-  onAction: () => Promise<void>;
-  loading: boolean;
-}) {
-  const tone = status === "ONLINE" || status === "READY"
-    ? "text-emerald-400"
-    : status === "IDLE" || status === "NOT_CONFIGURED"
-      ? "text-slate-300"
-      : "text-amber-300";
-
-  const icon = module === "backend" ? <Server className="w-4 h-4 text-emerald-400" />
-    : module === "wallet" ? <Wallet className="w-4 h-4 text-cyan-400" />
-      : <Activity className="w-4 h-4 text-slate-300" />;
-
-  return (
-    <div className="rounded-2xl border border-slate-800 bg-[#0A0B0E] p-4">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div className="flex items-center gap-2">
-          {icon}
-          <div>
-            <div className="text-xs font-semibold text-white capitalize">{module}</div>
-            <div className={`text-[10px] font-mono mt-1 ${tone}`}>{status}</div>
-          </div>
-        </div>
-        <button
-          onClick={onAction}
-          disabled={loading}
-          className="w-full px-2.5 py-1 text-[10px] font-mono rounded-lg border border-slate-800 bg-slate-950 hover:text-white cursor-pointer sm:w-auto"
-        >
-          {loading ? "..." : actionLabel}
-        </button>
-      </div>
-      <div className="mt-3 text-xs text-slate-400 leading-relaxed">{reason}</div>
-      <div className="mt-3 flex items-center justify-between gap-3 text-[10px] font-mono text-slate-500">
-        <span>{errorCode}</span>
-        <span>{endpoint || "No endpoint"}</span>
-      </div>
-    </div>
-  );
+function Panel({ title, subtitle, icon, children }: { title: string; subtitle: string; icon: ReactNode; children: ReactNode }) {
+  return <div className="rounded-2xl border border-slate-800 bg-bento-card p-5 shadow-md"><div className="mb-4 flex items-start gap-3">{icon}<div><h2 className="text-sm font-semibold text-white">{title}</h2><p className="mt-1 text-xs text-slate-500">{subtitle}</p></div></div>{children}</div>;
 }
 
-function ActionRow({
-  title,
-  description,
-  buttonLabel,
-  onClick,
-  loading,
-  accent,
-  icon,
-}: {
-  title: string;
-  description: string;
-  buttonLabel: string;
-  onClick: () => Promise<void>;
-  loading: boolean;
-  accent: "emerald" | "amber" | "rose" | "red";
-  icon: ReactNode;
-}) {
-  const styles = {
-    emerald: "bg-emerald-500/10 text-emerald-400 border-emerald-500/20 hover:bg-emerald-500/20",
-    amber: "bg-amber-500/10 text-amber-400 border-amber-500/20 hover:bg-amber-500/20",
-    rose: "bg-rose-500/10 text-rose-400 border-rose-500/20 hover:bg-rose-500/20",
-    red: "bg-red-500/10 text-red-400 border-red-500/20 hover:bg-red-500/20",
-  }[accent];
-
-  return (
-    <div className="rounded-xl border border-slate-800/65 bg-[#0A0B0E] p-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-      <div className="min-w-0">
-        <h4 className="text-xs font-semibold text-slate-200">{title}</h4>
-        <p className="text-[10px] text-slate-500 mt-1">{description}</p>
-      </div>
-      <button
-        onClick={onClick}
-        disabled={loading}
-        className={`w-full sm:w-auto px-3 py-2 sm:py-1.5 text-xs font-semibold rounded-lg transition-all border flex items-center justify-center space-x-1.5 ${styles} disabled:opacity-50 cursor-pointer`}
-      >
-        {icon}
-        <span>{loading ? "..." : buttonLabel}</span>
-      </button>
-    </div>
-  );
+function ControlAction({ title, description, label, icon, tone, onClick, disabled, loading }: { title: string; description: string; label: string; icon: ReactNode; tone: "good" | "warn" | "bad"; onClick: () => Promise<void>; disabled: boolean; loading: boolean }) {
+  const toneClass = tone === "good" ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20" : tone === "warn" ? "border-amber-500/20 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20" : "border-rose-500/20 bg-rose-500/10 text-rose-300 hover:bg-rose-500/20";
+  return <div className="rounded-xl border border-slate-800 bg-[#0A0B0E] p-4"><div className="text-xs font-semibold text-white">{title}</div><p className="mt-1 min-h-[32px] text-[10px] leading-4 text-slate-500">{description}</p><button type="button" onClick={() => void onClick()} disabled={disabled} className={`mt-3 inline-flex w-full items-center justify-center gap-2 rounded-lg border px-3 py-2 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${toneClass}`}>{icon}{loading ? "..." : label}</button></div>;
 }
 
-function MiniMetric({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-3">
-      <div className="text-[10px] font-mono uppercase tracking-wider text-slate-500">{label}</div>
-      <div className="mt-2 text-xs font-semibold text-white break-words">{value}</div>
-    </div>
-  );
+function GateRow({ label, value, passed }: { label: string; value: string; passed: boolean }) {
+  return <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-800 bg-[#0A0B0E] px-3 py-2.5"><span className="text-xs text-slate-300">{label}</span><span className={`inline-flex items-center gap-1 text-[10px] font-mono ${passed ? "text-emerald-400" : "text-rose-400"}`}>{passed ? <CheckCircle2 className="h-3.5 w-3.5" /> : <XCircle className="h-3.5 w-3.5" />}{value}</span></div>;
+}
+
+function Metric({ label, value }: { label: string; value: string }) {
+  return <div className="rounded-xl border border-slate-800 bg-[#0A0B0E] p-3"><div className="text-[10px] font-mono uppercase tracking-wider text-slate-500">{label}</div><div className="mt-2 break-words text-xs font-semibold text-white">{value}</div></div>;
 }
 
 function RiskInput({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
-  return (
-    <label className="space-y-2 block">
-      <span className="text-[10px] font-mono uppercase tracking-wider text-slate-500">{label}</span>
-      <input
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        className="dashboard-input"
-      />
-    </label>
-  );
+  return <label className="block space-y-2"><span className="text-[10px] font-mono uppercase tracking-wider text-slate-500">{label}</span><input type="number" min="0" step="any" value={value} onChange={(event) => onChange(event.target.value)} className="dashboard-input" /></label>;
 }
 
-function KeyValue({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex items-start justify-between gap-3">
-      <span className="text-slate-500">{label}</span>
-      <span className="text-right text-slate-200">{value}</span>
-    </div>
-  );
+function ModuleRow({ module }: { module: WatchdogModuleStatus }) {
+  const healthy = HEALTHY_MODULE_STATUSES.has(module.status);
+  const Icon = module.module === "backend" ? Server : module.module === "wallet" ? Wallet : module.module === "database" ? Database : Activity;
+  return <div className="rounded-xl border border-slate-800 bg-[#0A0B0E] p-4"><div className="flex items-start justify-between gap-3"><div className="flex items-start gap-3"><span className={`rounded-lg border p-2 ${healthy ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-300" : "border-rose-500/20 bg-rose-500/10 text-rose-300"}`}><Icon className="h-4 w-4" /></span><div><div className="text-xs font-semibold capitalize text-white">{module.module}</div><div className="mt-1 text-xs leading-5 text-slate-500">{module.reason}</div></div></div><span className={`shrink-0 text-[10px] font-mono ${healthy ? "text-emerald-400" : "text-rose-400"}`}>{module.status}</span></div><div className="mt-3 flex flex-wrap justify-between gap-2 border-t border-slate-800 pt-3 text-[10px] font-mono text-slate-600"><span>{module.error_code}</span><span>{module.endpoint || "Internal check"}</span></div></div>;
+}
+
+function IncidentCard({ incident }: { incident: WatchdogIncident }) {
+  const error = incident.level === "error";
+  return <div className={`rounded-xl border p-4 ${error ? "border-rose-500/20 bg-rose-500/5" : "border-amber-500/20 bg-amber-500/5"}`}><div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between"><div><div className="flex flex-wrap items-center gap-2"><span className={`rounded-md border px-2 py-1 text-[9px] font-mono ${error ? "border-rose-500/20 bg-rose-500/10 text-rose-300" : "border-amber-500/20 bg-amber-500/10 text-amber-300"}`}>{incident.level.toUpperCase()}</span><span className="text-xs font-semibold capitalize text-white">{incident.affected_module}</span><span className="text-[10px] font-mono text-slate-500">{incident.error_code}</span></div><p className="mt-2 text-xs leading-5 text-slate-300">{incident.message}</p></div><span className="shrink-0 text-[10px] font-mono text-slate-500">{formatTime(incident.timestamp)}</span></div><div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-2"><IncidentField label="Technical Evidence" value={incidentEvidence(incident.technical_evidence)} /><IncidentField label="Root Cause" value={readable(incident.root_cause)} /><IncidentField label="Recovery Status" value={readable(incident.recovery_status)} /><IncidentField label="Recommended Action" value={suggestAction(incident.affected_module, incident.root_cause || incident.message)} /></div><div className="mt-3 flex flex-wrap gap-4 text-[10px] font-mono text-slate-600"><span>Endpoint: {incident.endpoint || "N/A"}</span><span>Retry count: {incident.retry_count}</span></div></div>;
+}
+
+function IncidentField({ label, value }: { label: string; value: string }) {
+  return <div className="rounded-lg border border-slate-800 bg-[#0A0B0E] p-3"><div className="text-[9px] font-mono uppercase tracking-wider text-slate-600">{label}</div><div className="mt-2 break-words text-xs leading-5 text-slate-400">{value}</div></div>;
+}
+
+function suggestAction(module: string, reason: string) {
+  const combined = `${module} ${reason}`.toLowerCase();
+  if (combined.includes("wallet")) return "Refresh account connectivity and confirm the selected Bybit environment has a reachable wallet.";
+  if (combined.includes("exchange") || combined.includes("bybit")) return "Verify exchange reachability and current API-key permissions, then refresh status.";
+  if (combined.includes("database")) return "Inspect PostgreSQL availability and validate DATABASE_URL before restarting the service.";
+  if (combined.includes("worker")) return "Restart the backend service and confirm the background worker returns ONLINE.";
+  if (combined.includes("execution")) return "Resolve the blocking readiness or risk condition before allowing another execution attempt.";
+  return "Review the evidence and root cause, correct the affected dependency, then refresh Control Center status.";
 }
 
 function EmptyNote({ text }: { text: string }) {
-  return <div className="py-10 text-center text-xs font-mono text-slate-500">{text}</div>;
+  return <div className="rounded-xl border border-dashed border-slate-800 bg-[#0A0B0E] px-6 py-12 text-center text-xs text-slate-500">{text}</div>;
 }
