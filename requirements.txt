@@ -1,4 +1,5 @@
 fastapi
 itsdangerous
+psycopg[binary]>=3.2,<4
 sqlalchemy
 uvicorn
