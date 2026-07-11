@@ -107,6 +107,12 @@ class BybitClient:
         except ExchangeError as exc:
             return False, [], str(exc)
 
+    def safe_set_leverage(self, symbol: str, leverage: float, category: str = "linear") -> tuple[bool, dict[str, Any] | None, str | None]:
+        try:
+            return True, self.set_leverage(symbol=symbol, leverage=leverage, category=category), None
+        except ExchangeError as exc:
+            return False, None, str(exc)
+
     def fetch_wallet_balance(self, account_type: str = "UNIFIED") -> dict[str, Any]:
         payload = self._private_get("/v5/account/wallet-balance", {"accountType": account_type})
         items = payload.get("list", [])
@@ -193,6 +199,18 @@ class BybitClient:
             "bids": [{"price": item[0], "size": item[1]} for item in payload.get("b", [])],
             "asks": [{"price": item[0], "size": item[1]} for item in payload.get("a", [])],
         }
+
+    def set_leverage(self, symbol: str, leverage: float, category: str = "linear") -> dict[str, Any]:
+        normalized = _format_leverage(leverage)
+        return self._private_post(
+            "/v5/position/set-leverage",
+            {
+                "category": category,
+                "symbol": symbol,
+                "buyLeverage": normalized,
+                "sellLeverage": normalized,
+            },
+        )
 
     def place_market_order(
         self,
@@ -364,3 +382,8 @@ def _format_decimal(value: float, step: str) -> str:
     if decimal_step != 0:
         normalized = normalized - (normalized % decimal_step)
     return format(normalized.normalize(), "f")
+
+
+def _format_leverage(value: float) -> str:
+    decimal_value = Decimal(str(value)).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
+    return format(decimal_value.normalize(), "f")
