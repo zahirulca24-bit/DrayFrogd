@@ -66,6 +66,8 @@ async function request<T>(path: string, options: RequestInit = {}, token?: strin
 
 type BackendSignal = {
   symbol: string;
+  strategy_name?: string | null;
+  strategy?: string | null;
   direction: string | null;
   entry: number | null;
   stop_loss: number | null;
@@ -80,6 +82,8 @@ type BackendSignal = {
 
 type BackendTrade = {
   symbol: string;
+  strategy_name?: string | null;
+  strategy?: string | null;
   direction: string;
   entry: number;
   stop_loss: number;
@@ -89,14 +93,25 @@ type BackendTrade = {
   status: string;
   result?: string | null;
   sl_hit_reason?: string | null;
+  close_reason?: string | null;
   closed_at?: string | null;
   opened_at?: string | null;
   detected_at?: string | null;
   execution_mode?: "demo" | "live";
   journal_id?: string;
   exit_price?: number | null;
+  realized_pnl?: number | null;
+  fees?: number | null;
   exchange_metadata?: Record<string, unknown>;
 };
+
+
+type FinancialTrade = Trade & {
+  realizedPnl: number | null;
+  fees: number | null;
+  closeReason: string | null;
+};
+
 
 type RiskPayload = {
   symbol: string;
@@ -115,6 +130,7 @@ function toUiSignal(item: BackendSignal, index: number): ExecutableSignal {
   const rr = Number(item.risk_reward || 0);
   const confidence = Number(item.confidence_score || 0);
   const backendStatus = String(item.status || "").toLowerCase();
+  const strategyName = String(item.strategy_name || item.strategy || "unknown");
   const executionStatus =
     backendStatus === "active"
       ? "READY"
@@ -126,11 +142,11 @@ function toUiSignal(item: BackendSignal, index: number): ExecutableSignal {
   const grade = executionStatus === "READY" ? "A" : executionStatus === "NEAR_SETUP" ? "B+" : "REJECT";
 
   return {
-    id: `${item.symbol}-${item.detected_at || index}`,
+    id: `${item.symbol}-${strategyName}-${item.detected_at || index}`,
     pair: item.symbol,
     timeframe: "5M bias / 1M trigger",
     direction,
-    indicator: "EMA Pullback",
+    indicator: strategyName,
     price: Number(item.entry || 0),
     strength: executionStatus === "READY" ? "STRONG" : executionStatus === "NEAR_SETUP" ? "MEDIUM" : "WEAK",
     timestamp: item.detected_at || new Date().toISOString(),
@@ -148,7 +164,7 @@ function toUiSignal(item: BackendSignal, index: number): ExecutableSignal {
 }
 
 
-function toUiTrade(item: BackendTrade, index: number): Trade {
+function toUiTrade(item: BackendTrade, index: number): FinancialTrade {
   const entryPrice = Number(item.entry || 0);
   const stopLoss = Number(item.stop_loss || 0);
   const takeProfit = Number(item.take_profit || 0);
@@ -157,14 +173,18 @@ function toUiTrade(item: BackendTrade, index: number): Trade {
   const rawResult = String(item.result || "").toUpperCase();
   const exchangeMetadata = (item.exchange_metadata || {}) as Record<string, any>;
   const management = (exchangeMetadata.management || {}) as Record<string, any>;
+  const exitPrice = item.exit_price === null || item.exit_price === undefined ? 0 : Number(item.exit_price);
+  const markPrice = Number(exchangeMetadata.mark_price || exchangeMetadata.markPrice || 0);
+  const realizedPnl = item.realized_pnl === null || item.realized_pnl === undefined ? null : Number(item.realized_pnl);
+  const fees = item.fees === null || item.fees === undefined ? null : Number(item.fees);
 
   return {
     id: item.order_id || item.journal_id || `${item.symbol}-${index}`,
     pair: item.symbol,
-    strategy: "EMA Pullback",
+    strategy: String(item.strategy_name || item.strategy || exchangeMetadata.strategy_name || exchangeMetadata.strategy || "unknown"),
     direction,
     entryPrice,
-    currentPrice: entryPrice,
+    currentPrice: item.status === "closed" && exitPrice > 0 ? exitPrice : markPrice || entryPrice,
     stopLoss,
     takeProfit,
     size,
@@ -185,7 +205,10 @@ function toUiTrade(item: BackendTrade, index: number): Trade {
     result: rawResult === "TP" ? "TP" : rawResult === "SL" ? "SL" : "UNKNOWN",
     closedAt: item.closed_at || undefined,
     slHitReason: item.sl_hit_reason ?? null,
-    exitPrice: Number(item.exit_price || 0),
+    exitPrice,
+    realizedPnl,
+    fees,
+    closeReason: item.close_reason ?? null,
     managementTp1: Number(management.tp1 || 0) || undefined,
     managementTp2: Number(management.tp2 || 0) || undefined,
     managementRunner: Number(management.runner_target || 0) || undefined,
@@ -196,17 +219,22 @@ function toUiTrade(item: BackendTrade, index: number): Trade {
 }
 
 
-function toTradeHistoryEntry(trade: Trade): TradeHistoryEntry {
-  const isProfit = trade.result === "TP";
+function toTradeHistoryEntry(trade: FinancialTrade): TradeHistoryEntry {
   const exitPrice = Number(trade.exitPrice || 0);
-  const pnlValue = trade.result === "SL" ? -1 : trade.result === "TP" ? 2 : 0;
+  const pnlValue = trade.realizedPnl !== null && Number.isFinite(trade.realizedPnl) ? trade.realizedPnl : 0;
+  const outcome =
+    pnlValue > 0 || trade.result === "TP"
+      ? "PROFIT"
+      : pnlValue < 0 || trade.result === "SL"
+      ? "LOSS"
+      : "UNKNOWN";
 
   return {
     ...trade,
     exitPrice,
     pnl: pnlValue,
-    result: isProfit ? "PROFIT" : "LOSS",
-    reason: trade.slHitReason || "n/a",
+    result: outcome as TradeHistoryEntry["result"],
+    reason: trade.closeReason || trade.slHitReason || "n/a",
     closedAt: trade.closedAt || trade.timestamp,
   };
 }
