@@ -46,7 +46,7 @@ class RiskRewardPolicyAlignmentTests(unittest.TestCase):
 
         self.assertTrue(validation["allowed"])
         self.assertEqual(validation["reason"], "")
-        self.assertEqual(validation["authoritative_risk_reward"], 1.5)
+        self.assertAlmostEqual(validation["authoritative_risk_reward"], 1.5, places=9)
         self.assertEqual(validation["trade_type"], "scalping")
 
     def test_signal_below_one_point_five_r_is_rejected(self) -> None:
