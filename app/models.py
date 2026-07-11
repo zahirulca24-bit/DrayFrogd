@@ -28,12 +28,18 @@ class BotRuntimeConfig(Base):
     exposure_cap: Mapped[float] = mapped_column(Float, default=0.30, nullable=False)
     max_open_trades: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
     max_daily_trades: Mapped[int] = mapped_column(Integer, default=8, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        server_default=func.now(),
-        onupdate=func.now(),
-        nullable=False,
-    )
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+
+class RiskRuntimeState(Base):
+    __tablename__ = "risk_runtime_state"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    trades_day: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    trades_today: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    active_symbols: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    cooldown_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
 
 class TradeJournal(Base):
@@ -62,12 +68,7 @@ class TradeJournal(Base):
     closed_at: Mapped[str | None] = mapped_column(String(64), nullable=True)
     exchange_metadata: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        server_default=func.now(),
-        onupdate=func.now(),
-        nullable=False,
-    )
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
 
 class BotEvent(Base):
