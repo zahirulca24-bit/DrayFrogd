@@ -6,7 +6,6 @@ from sqlalchemy import text
 
 from app.auth import is_auth_configured
 from app.bot_controls import can_execute, get_execution_mode
-from app.config import settings
 from app.database import SessionLocal
 from app.execution import get_active_trades
 from app.exchange import get_exchange_client
@@ -27,6 +26,7 @@ def get_watchdog_snapshot(worker_running: bool) -> dict[str, Any]:
     active_trades = get_active_trades()
     trade_history = get_trade_history()
     bot_events = get_bot_events(100)
+    database_ok = _database_ok()
 
     modules = [
         _module_status(
@@ -42,22 +42,6 @@ def get_watchdog_snapshot(worker_running: bool) -> dict[str, Any]:
             selected_exchange.get("error") or "Exchange reachable.",
             "/exchange/status",
             "BYBIT_REACHABLE" if selected_exchange.get("reachable") else "BYBIT_UNREACHABLE",
-        ),
-        _module_status(
-            "supabase",
-            "ONLINE" if settings.supabase_url and settings.supabase_service_role_key else "NOT_CONFIGURED",
-            "Supabase journaling credentials detected."
-            if settings.supabase_url and settings.supabase_service_role_key
-            else "Supabase credentials are missing.",
-            "/journal/trades",
-            "SUPABASE_READY" if settings.supabase_url and settings.supabase_service_role_key else "SUPABASE_MISSING",
-        ),
-        _module_status(
-            "telegram",
-            "NOT_CONFIGURED",
-            "No backend Telegram integration detected.",
-            None,
-            "TELEGRAM_UNAVAILABLE",
         ),
         _module_status(
             "wallet",
@@ -103,10 +87,10 @@ def get_watchdog_snapshot(worker_running: bool) -> dict[str, Any]:
         ),
         _module_status(
             "database",
-            "ONLINE" if _database_ok() else "OFFLINE",
-            "Database connection check succeeded." if _database_ok() else "Database connection check failed.",
+            "ONLINE" if database_ok else "OFFLINE",
+            "Database connection check succeeded." if database_ok else "Database connection check failed.",
             None,
-            "DATABASE_OK" if _database_ok() else "DATABASE_OFFLINE",
+            "DATABASE_OK" if database_ok else "DATABASE_OFFLINE",
         ),
         _module_status(
             "worker",
@@ -118,8 +102,13 @@ def get_watchdog_snapshot(worker_running: bool) -> dict[str, Any]:
     ]
 
     incidents = [_to_incident(item) for item in bot_events if item.get("level") in {"warning", "error"}]
+    degraded_module_names = {
+        module["module"]
+        for module in modules
+        if module["status"] in {"DEGRADED", "OFFLINE", "BLOCKED"}
+    }
     open_incidents = [
-        item for item in incidents if item["affected_module"] in {module["module"] for module in modules if module["status"] in {"DEGRADED", "OFFLINE", "BLOCKED"}}
+        item for item in incidents if item["affected_module"] in degraded_module_names
     ]
 
     return {
@@ -129,7 +118,9 @@ def get_watchdog_snapshot(worker_running: bool) -> dict[str, Any]:
         "modules": modules,
         "incidents": incidents,
         "summary": {
-            "overall_status": "HEALTHY" if all(module["status"] in {"ONLINE", "READY", "IDLE", "NOT_CONFIGURED"} for module in modules) else "DEGRADED",
+            "overall_status": "HEALTHY"
+            if all(module["status"] in {"ONLINE", "READY", "IDLE"} for module in modules)
+            else "DEGRADED",
             "open_incidents": len(open_incidents),
             "total_incidents": len(incidents),
             "affected_modules": sorted({item["affected_module"] for item in open_incidents}),
