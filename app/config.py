@@ -23,7 +23,8 @@ _load_env_file()
 @dataclass(frozen=True)
 class Settings:
     app_name: str = "FastAPI Backend"
-    database_url: str = os.getenv("DATABASE_URL", "sqlite:///./app.db")
+    app_env: str = os.getenv("APP_ENV", "development").strip().lower()
+    database_url: str = os.getenv("DATABASE_URL", "sqlite:///./app.db").strip()
     admin_username: str = os.getenv("ADMIN_USERNAME", "")
     admin_password_hash: str = os.getenv("ADMIN_PASSWORD_HASH", "")
     session_secret: str = os.getenv("SESSION_SECRET", "")
