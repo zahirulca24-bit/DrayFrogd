@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - fix-trade-management-demo-ci
+      - "fix/**"
   pull_request:
     branches:
       - main
