@@ -8,6 +8,7 @@ from app.config import settings
 from app.exchange import get_exchange_client
 from app.execution import execute_signal
 from app.journal import log_bot_event
+from app.reconciliation import reconcile_state
 from app.scanner import get_active_signals, run_scan
 from app.trade_management import manage_open_trades
 
@@ -22,11 +23,25 @@ def _safe_log_bot_event(event_type: str, message: str, *, level: str = "info", m
         logger.exception("Failed to persist bot event: %s", event_type)
 
 
-
 async def auto_trading_loop() -> None:
     while True:
         try:
             client = get_exchange_client(get_execution_mode())
+            reconciliation_result = await asyncio.to_thread(reconcile_state, client)
+            if not reconciliation_result.get("ok"):
+                _safe_log_bot_event(
+                    "reconciliation_failed",
+                    reconciliation_result.get("error", "Reconciliation failed"),
+                    level="warning",
+                    metadata={
+                        "endpoint": "background:reconciliation",
+                        "affected_module": "reconciliation",
+                        "error_code": "RECONCILIATION_FAILED",
+                        "retry_count": 1,
+                        "result": reconciliation_result,
+                    },
+                )
+
             management_result = await asyncio.to_thread(manage_open_trades, client)
             if not management_result.get("ok"):
                 _safe_log_bot_event(

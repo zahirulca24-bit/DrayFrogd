@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.active_trade_control import enrich_active_trades, request_market_close
 from app.auth import authenticate_admin, create_session_token, is_auth_configured
 from app.background_worker import auto_trading_loop
 from app.bot_controls import (
@@ -381,12 +382,25 @@ def active_trades(_: dict = Depends(require_authenticated)) -> dict:
         trades = get_open_trade_history()
         if trades:
             replace_active_trades(trades)
-    client = get_exchange_client(get_execution_mode())
-    ok_positions, positions, _ = client.safe_fetch_positions()
-    if ok_positions:
-        trades = _merge_exchange_positions_into_trades(trades, positions, get_execution_mode())
-        replace_active_trades(trades)
-    return {"trades": trades}
+
+    mode = get_execution_mode()
+    client = get_exchange_client(mode)
+    ok_positions, positions, positions_error = client.safe_fetch_positions()
+    trades = enrich_active_trades(trades, positions if ok_positions else [], mode)
+    replace_active_trades(trades)
+    return {
+        "trades": trades,
+        "positions_synced": ok_positions,
+        "error": positions_error,
+    }
+
+
+@app.post("/active-trades/{journal_id}/market-close")
+def active_trade_market_close(journal_id: str, _: dict = Depends(require_authenticated)) -> dict:
+    return request_market_close(
+        get_exchange_client(get_execution_mode()),
+        journal_id,
+    )
 
 
 @app.get("/trade-history")
