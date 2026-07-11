@@ -10,7 +10,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.database import Base
-from app.models import TradeJournal
+from app.models import RiskRuntimeState, TradeJournal
 from app.risk_cooldown_sync import sync_loss_cooldowns
 
 
@@ -62,18 +62,6 @@ class RiskCooldownSyncTests(unittest.TestCase):
 
             self.assertEqual(result["applied_count"], 1)
             self.assertEqual(result["applied"][0]["symbol"], "BTCUSDT")
-
-            db = TestSession()
-            try:
-                row = db.execute(test_engine.dialect.statement_compiler)
-            except Exception:
-                # Query the ORM state directly; this block only protects older
-                # SQLAlchemy dialect implementations in local environments.
-                pass
-            finally:
-                db.close()
-
-            from app.models import RiskRuntimeState
 
             db = TestSession()
             try:
