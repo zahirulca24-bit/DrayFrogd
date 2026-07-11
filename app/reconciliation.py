@@ -3,7 +3,8 @@ from __future__ import annotations
 from math import isfinite
 from typing import Any
 
-from app.execution import SL_REASON_EXCHANGE_CLOSE, SL_REASON_UNKNOWN, close_trade, get_active_trades, replace_active_trades
+from app.close_fill_sync import fetch_exact_close_result
+from app.execution import close_trade, get_active_trades, replace_active_trades
 from app.exchange import BybitClient
 from app.journal import append_trade_event, update_trade_entry
 from app.risk import release_active_trade
@@ -48,31 +49,59 @@ def reconcile_state(client: BybitClient) -> dict[str, Any]:
         position = positions_by_symbol.get(symbol)
 
         if position is None and open_order is None:
-            # REPAIR: Verify position is truly missing (check twice)
-            ok_recheck, positions_recheck, _ = client.safe_fetch_positions()
+            ok_recheck, positions_recheck, recheck_error = client.safe_fetch_positions()
             position_recheck = None
             if ok_recheck:
                 position_recheck = next(
-                    (p for p in positions_recheck if str(p.get("symbol", "")).upper() == symbol and _position_is_open(p)),
-                    None
+                    (
+                        item
+                        for item in positions_recheck
+                        if str(item.get("symbol", "")).upper() == symbol and _position_is_open(item)
+                    ),
+                    None,
                 )
-            
+
             if position_recheck is None:
-                # Position confirmed missing on exchange - safe to close
-                close_result = _resolve_close_result(trade, ticker_prices.get(symbol))
-                closed_trade = close_trade(journal_id, close_result) if journal_id else None
+                exact_close, close_sync_error = fetch_exact_close_result(client, trade)
+                if exact_close is None:
+                    pending_trade = _mark_close_pending_sync(
+                        trade,
+                        error=close_sync_error or recheck_error or "exact close data is unavailable",
+                    )
+                    updated_trades.append(pending_trade)
+                    updates.append(
+                        {
+                            "symbol": symbol,
+                            "status": "close_pending_sync",
+                            "reason": pending_trade["close_sync_error"],
+                        }
+                    )
+                    _persist_pending_close_sync(journal_id, pending_trade)
+                    continue
+
+                closed_trade = close_trade(journal_id, exact_close) if journal_id else None
                 if closed_trade is None:
                     closed_trade = dict(trade)
-                    closed_trade.update(close_result)
+                    closed_trade.update(exact_close)
                     closed_trade["status"] = "closed"
                 closed_symbols.append(symbol)
                 closed_trades.append(closed_trade)
-                updates.append({"symbol": symbol, "status": "closed", "reason": close_result.get("close_reason", "Position not found on exchange")})
-                _persist_reconciliation_event(journal_id, "RECONCILED_CLOSED_VERIFIED", "Exchange position verified missing twice; trade closed safely.", close_result)
+                updates.append(
+                    {
+                        "symbol": symbol,
+                        "status": "closed",
+                        "reason": "Exact Bybit closed PnL synchronized",
+                    }
+                )
+                _persist_reconciliation_event(
+                    journal_id,
+                    "RECONCILED_CLOSED_EXACT",
+                    "Exchange position is absent and exact Bybit close fill/PnL/fees were synchronized.",
+                    exact_close,
+                )
                 continue
-            else:
-                # Position exists on recheck - use it
-                position = position_recheck
+
+            position = position_recheck
 
         if position is None and open_order is not None:
             reconciled = dict(trade)
@@ -85,17 +114,32 @@ def reconcile_state(client: BybitClient) -> dict[str, Any]:
             else:
                 reconciled["status"] = "pending"
             updated_trades.append(reconciled)
-            updates.append({"symbol": symbol, "status": reconciled["status"], "reason": "Position pending; kept from open order"})
-            _persist_reconciliation_event(journal_id, "RECONCILED_PENDING", "Open order exists but position is not open yet.", reconciled)
+            updates.append(
+                {
+                    "symbol": symbol,
+                    "status": reconciled["status"],
+                    "reason": "Position pending; kept from open order",
+                }
+            )
+            _persist_reconciliation_event(
+                journal_id,
+                "RECONCILED_PENDING",
+                "Open order exists but position is not open yet.",
+                reconciled,
+            )
             continue
 
         reconciled = dict(trade)
         reconciled["quantity"] = position.get("size", trade.get("quantity"))
-        reconciled["remaining_quantity"] = position.get("size", trade.get("remaining_quantity", trade.get("quantity")))
+        reconciled["remaining_quantity"] = position.get(
+            "size",
+            trade.get("remaining_quantity", trade.get("quantity")),
+        )
         reconciled["entry"] = _coerce_float(position.get("avgPrice"), trade.get("entry"))
         reconciled["status"] = "active"
         reconciled["mark_price"] = _coerce_float(position.get("markPrice"), ticker_prices.get(symbol))
         reconciled["sl_tp_orders"] = open_orders_by_symbol.get(symbol, [])
+        reconciled.pop("close_sync_error", None)
 
         if open_order is not None:
             order_qty = _coerce_float(open_order.get("qty"), None)
@@ -104,12 +148,29 @@ def reconcile_state(client: BybitClient) -> dict[str, Any]:
                 reconciled["status"] = "partial_fill"
                 reconciled["filled_quantity"] = executed_qty
             reconciled["order_status"] = open_order.get("orderStatus")
-            updates.append({"symbol": symbol, "status": reconciled["status"], "reason": "Updated from open order and position"})
+            updates.append(
+                {
+                    "symbol": symbol,
+                    "status": reconciled["status"],
+                    "reason": "Updated from open order and position",
+                }
+            )
         else:
-            updates.append({"symbol": symbol, "status": "active", "reason": "Open order not found; position kept as exchange truth"})
+            updates.append(
+                {
+                    "symbol": symbol,
+                    "status": "active",
+                    "reason": "Open order not found; position kept as exchange truth",
+                }
+            )
 
         updated_trades.append(reconciled)
-        _persist_reconciliation_event(journal_id, "RECONCILED_ACTIVE", "Local trade synchronized from exchange position and orders.", reconciled)
+        _persist_reconciliation_event(
+            journal_id,
+            "RECONCILED_ACTIVE",
+            "Local trade synchronized from exchange position and orders.",
+            reconciled,
+        )
 
     replace_active_trades(updated_trades)
 
@@ -125,38 +186,41 @@ def reconcile_state(client: BybitClient) -> dict[str, Any]:
     }
 
 
-def _resolve_close_result(trade: dict[str, Any], market_price: float | None) -> dict[str, Any]:
-    direction = str(trade.get("direction", "")).lower()
-    stop_loss = _coerce_float(trade.get("stop_loss"), None)
-    take_profit = _coerce_float(trade.get("take_profit"), None)
-    result = "unknown"
-    sl_hit_reason: str | None = None
-    close_reason = "position_not_found_on_exchange"
-
-    if market_price is not None and stop_loss is not None and take_profit is not None:
-        if direction == "long":
-            if market_price <= stop_loss:
-                result = "sl"
-                sl_hit_reason = SL_REASON_EXCHANGE_CLOSE
-            elif market_price >= take_profit:
-                result = "tp"
-        elif direction == "short":
-            if market_price >= stop_loss:
-                result = "sl"
-                sl_hit_reason = SL_REASON_EXCHANGE_CLOSE
-            elif market_price <= take_profit:
-                result = "tp"
-
-    if result == "unknown":
-        sl_hit_reason = SL_REASON_UNKNOWN if close_reason else None
-
-    return {
-        "result": result,
-        "sl_hit_reason": sl_hit_reason if result == "sl" else None,
-        "close_reason": close_reason,
-        "closed_at": None,
-        "exit_price": market_price,
+def _mark_close_pending_sync(trade: dict[str, Any], error: str) -> dict[str, Any]:
+    metadata = trade.get("exchange_metadata") if isinstance(trade.get("exchange_metadata"), dict) else {}
+    pending = dict(trade)
+    pending["status"] = "close_pending_sync"
+    pending["close_sync_error"] = error
+    pending["exchange_metadata"] = {
+        **metadata,
+        "close_sync": {
+            **(metadata.get("close_sync") if isinstance(metadata.get("close_sync"), dict) else {}),
+            "status": "pending",
+            "error": error,
+        },
     }
+    return pending
+
+
+def _persist_pending_close_sync(journal_id: str, trade: dict[str, Any]) -> None:
+    if not journal_id:
+        return
+    update_trade_entry(
+        journal_id,
+        {
+            "status": "close_pending_sync",
+            "exchange_metadata": trade.get("exchange_metadata"),
+        },
+    )
+    append_trade_event(
+        journal_id,
+        "CLOSE_SYNC_PENDING",
+        "Exchange position is absent, but exact Bybit close fill/PnL/fees are not available yet.",
+        {
+            "symbol": trade.get("symbol"),
+            "error": trade.get("close_sync_error"),
+        },
+    )
 
 
 def _position_is_open(position: dict[str, Any]) -> bool:
@@ -193,7 +257,12 @@ def _orders_by_symbol(open_orders: list[dict[str, Any]]) -> dict[str, list[dict[
     return grouped
 
 
-def _persist_reconciliation_event(journal_id: str, event_type: str, message: str, payload: dict[str, Any]) -> None:
+def _persist_reconciliation_event(
+    journal_id: str,
+    event_type: str,
+    message: str,
+    payload: dict[str, Any],
+) -> None:
     if not journal_id:
         return
     status = payload.get("status")
