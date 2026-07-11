@@ -8,7 +8,7 @@ from typing import Any
 from app.bot_controls import get_risk_settings
 
 
-MIN_RISK_REWARD = 2.0
+MIN_RISK_REWARD = 1.5
 LOSS_COOLDOWN_MINUTES = 15
 
 _risk_lock = Lock()
@@ -40,7 +40,7 @@ def validate_trade(signal: dict[str, Any]) -> dict[str, Any]:
         return {"allowed": False, "reason": "Invalid entry/stop_loss/take_profit values"}
 
     if risk_reward < MIN_RISK_REWARD:
-        return {"allowed": False, "reason": "Risk reward below minimum 2.0"}
+        return {"allowed": False, "reason": f"Risk reward below minimum {MIN_RISK_REWARD:.1f}"}
 
     settings = get_risk_settings()
     now = datetime.now(UTC)
