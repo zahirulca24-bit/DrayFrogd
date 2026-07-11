@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import app.execution as execution_module
 from app.execution import execute_signal as execute_signal_core
 from app.execution import get_active_trades
 from app.position_sizing import calculate_position_size
@@ -91,3 +92,10 @@ def execute_signal(client: Any, signal: dict[str, Any], auto_triggered: bool = F
         outcome.setdefault("selected_leverage", selected_leverage)
         outcome.setdefault("leverage_response", response)
     return outcome
+
+
+# app.main imports app.background_worker before importing execute_signal from
+# app.execution. background_worker imports this module, so the runtime binding is
+# replaced before route handlers capture it. Tests that import app.execution in
+# isolation still exercise the durable core directly.
+execution_module.execute_signal = execute_signal
