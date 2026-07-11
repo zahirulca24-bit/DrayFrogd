@@ -1,0 +1,239 @@
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from math import isfinite
+from typing import Any
+
+
+BYBIT_MAX_WINDOW_MS = 7 * 24 * 60 * 60 * 1000 - 1
+BYBIT_PAGE_LIMIT = 100
+
+
+def fetch_exact_close_result(
+    client: Any,
+    trade: dict[str, Any],
+    now: datetime | None = None,
+) -> tuple[dict[str, Any] | None, str | None]:
+    symbol = str(trade.get("symbol") or "").upper().strip()
+    opened_at = trade.get("opened_at") or trade.get("detected_at")
+    if not symbol:
+        return None, "trade symbol is missing"
+    start_ms = _timestamp_ms(opened_at)
+    if start_ms is None:
+        return None, "trade opened_at is missing or invalid"
+
+    current = now or datetime.now(UTC)
+    end_ms = int(current.astimezone(UTC).timestamp() * 1000)
+    ok, records, error = _safe_fetch_closed_pnl(client, symbol=symbol, start_ms=start_ms, end_ms=end_ms)
+    if not ok:
+        return None, error or "Bybit closed PnL query failed"
+
+    return aggregate_closed_pnl_records(trade, records, opened_ms=start_ms)
+
+
+def aggregate_closed_pnl_records(
+    trade: dict[str, Any],
+    records: list[dict[str, Any]],
+    opened_ms: int | None = None,
+) -> tuple[dict[str, Any] | None, str | None]:
+    symbol = str(trade.get("symbol") or "").upper().strip()
+    direction = str(trade.get("direction") or "").lower().strip()
+    expected_side = "Sell" if direction == "long" else "Buy" if direction == "short" else ""
+    target_qty = _initial_quantity(trade)
+    opened_ms = opened_ms if opened_ms is not None else _timestamp_ms(trade.get("opened_at") or trade.get("detected_at"))
+
+    if not symbol or not expected_side:
+        return None, "trade direction or symbol is invalid"
+    if target_qty is None or target_qty <= 0:
+        return None, "initial trade quantity is unavailable"
+    if opened_ms is None:
+        return None, "trade opened_at is missing or invalid"
+
+    candidates: list[dict[str, Any]] = []
+    for record in records:
+        if str(record.get("symbol") or "").upper() != symbol:
+            continue
+        side = str(record.get("side") or "")
+        if side and side != expected_side:
+            continue
+        event_ms = _record_time_ms(record)
+        if event_ms is None or event_ms < opened_ms:
+            continue
+        closed_size = _number(record.get("closedSize") or record.get("qty"))
+        exit_price = _number(record.get("avgExitPrice"))
+        closed_pnl = _number(record.get("closedPnl"))
+        open_fee = _number(record.get("openFee"))
+        close_fee = _number(record.get("closeFee"))
+        if closed_size is None or closed_size <= 0:
+            continue
+        if exit_price is None or closed_pnl is None:
+            continue
+        if open_fee is None or close_fee is None:
+            return None, "Bybit close record is missing exact openFee/closeFee fields"
+        candidates.append(record)
+
+    if not candidates:
+        return None, "exact Bybit closed PnL record is not available yet"
+
+    candidates.sort(key=lambda item: _record_time_ms(item) or 0)
+    selected: list[dict[str, Any]] = []
+    total_size = 0.0
+    tolerance = max(abs(target_qty) * 1e-8, 1e-12)
+
+    for record in candidates:
+        selected.append(record)
+        total_size += float(record.get("closedSize") or record.get("qty"))
+        if total_size >= target_qty - tolerance:
+            break
+
+    if total_size < target_qty - tolerance:
+        return None, f"partial close data only: {total_size} of {target_qty}"
+    if total_size > target_qty + tolerance:
+        return None, f"closed PnL records exceed expected quantity: {total_size} > {target_qty}"
+
+    weighted_exit = 0.0
+    realized_pnl = 0.0
+    open_fee_total = 0.0
+    close_fee_total = 0.0
+    fill_count = 0
+    close_time_ms = 0
+
+    for record in selected:
+        size = float(record.get("closedSize") or record.get("qty"))
+        weighted_exit += float(record["avgExitPrice"]) * size
+        realized_pnl += float(record["closedPnl"])
+        open_fee_total += float(record["openFee"])
+        close_fee_total += float(record["closeFee"])
+        fill_count += int(float(record.get("fillCount") or 0))
+        close_time_ms = max(close_time_ms, _record_time_ms(record) or 0)
+
+    avg_exit_price = weighted_exit / total_size
+    total_fees = open_fee_total + close_fee_total
+    result = "profit" if realized_pnl > 0 else "loss" if realized_pnl < 0 else "flat"
+    closed_at = datetime.fromtimestamp(close_time_ms / 1000, tz=UTC).isoformat() if close_time_ms else datetime.now(UTC).isoformat()
+    existing_metadata = trade.get("exchange_metadata") if isinstance(trade.get("exchange_metadata"), dict) else {}
+
+    close_sync = {
+        "source": "bybit_position_closed_pnl",
+        "authoritative_pnl_field": "closedPnl",
+        "closed_size": total_size,
+        "avg_exit_price": avg_exit_price,
+        "realized_pnl": realized_pnl,
+        "open_fee": open_fee_total,
+        "close_fee": close_fee_total,
+        "fees": total_fees,
+        "fill_count": fill_count,
+        "record_count": len(selected),
+        "close_order_ids": [str(item.get("orderId") or "") for item in selected if item.get("orderId")],
+        "synced_at": datetime.now(UTC).isoformat(),
+        "records": selected,
+    }
+
+    return {
+        "result": result,
+        "sl_hit_reason": None,
+        "close_reason": "exchange_closed_pnl",
+        "closed_at": closed_at,
+        "exit_price": avg_exit_price,
+        "realized_pnl": realized_pnl,
+        "fees": total_fees,
+        "exchange_metadata": {**existing_metadata, "close_sync": close_sync},
+    }, None
+
+
+def _safe_fetch_closed_pnl(
+    client: Any,
+    *,
+    symbol: str,
+    start_ms: int,
+    end_ms: int,
+) -> tuple[bool, list[dict[str, Any]], str | None]:
+    public_method = getattr(client, "safe_fetch_closed_pnl", None)
+    if callable(public_method):
+        try:
+            return public_method(symbol=symbol, start_time=start_ms, end_time=end_ms)
+        except TypeError:
+            return public_method(symbol, start_ms, end_ms)
+        except Exception as exc:
+            return False, [], str(exc)
+
+    private_get = getattr(client, "_private_get", None)
+    if not callable(private_get):
+        return False, [], "Bybit closed PnL client method is unavailable"
+
+    records: list[dict[str, Any]] = []
+    window_start = start_ms
+    try:
+        while window_start <= end_ms:
+            window_end = min(end_ms, window_start + BYBIT_MAX_WINDOW_MS)
+            cursor: str | None = None
+            while True:
+                params = {
+                    "category": "linear",
+                    "symbol": symbol,
+                    "startTime": str(window_start),
+                    "endTime": str(window_end),
+                    "limit": str(BYBIT_PAGE_LIMIT),
+                }
+                if cursor:
+                    params["cursor"] = cursor
+                payload = private_get("/v5/position/closed-pnl", params)
+                records.extend(payload.get("list", []) or [])
+                cursor = str(payload.get("nextPageCursor") or "").strip() or None
+                if not cursor:
+                    break
+            window_start = window_end + 1
+    except Exception as exc:
+        return False, [], str(exc)
+
+    return True, records, None
+
+
+def _initial_quantity(trade: dict[str, Any]) -> float | None:
+    management = trade.get("management") if isinstance(trade.get("management"), dict) else {}
+    metadata = trade.get("exchange_metadata") if isinstance(trade.get("exchange_metadata"), dict) else {}
+    metadata_management = metadata.get("management") if isinstance(metadata.get("management"), dict) else {}
+    for value in (
+        management.get("initial_quantity"),
+        metadata_management.get("initial_quantity"),
+        trade.get("quantity"),
+        trade.get("remaining_quantity"),
+    ):
+        numeric = _number(value)
+        if numeric is not None and numeric > 0:
+            return numeric
+    return None
+
+
+def _record_time_ms(record: dict[str, Any]) -> int | None:
+    for key in ("updatedTime", "createdTime"):
+        value = record.get(key)
+        try:
+            numeric = int(value)
+        except (TypeError, ValueError):
+            continue
+        if numeric > 0:
+            return numeric
+    return None
+
+
+def _timestamp_ms(value: Any) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return int(value)
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return int(parsed.astimezone(UTC).timestamp() * 1000)
+
+
+def _number(value: Any) -> float | None:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    return numeric if isfinite(numeric) else None
