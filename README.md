@@ -4,12 +4,12 @@ Bybit-first automated trading terminal built with **FastAPI, React, PostgreSQL a
 
 The project is currently in **Demo Beta / Engineering Verification**. Live-capital trading is not approved.
 
-> **Last documentation update:** 13 July 2026, 12:10 AM BDT (`Asia/Dhaka`)  
+> **Last documentation update:** 13 July 2026, 12:26 AM BDT (`Asia/Dhaka`)  
 > **Latest `main` commit:** `22e6f2d4f3b13442cf85c8ae067a4af5dfe30169` — README PR #31 merged  
-> **Active branch:** `fix/partial-close-journal-pnl-sync`  
-> **Active pull request:** PR #33 — stacked on Step 1 PR #32  
-> **Current task:** Step 2 — Partial-close Journal, fees and realized-PnL synchronization  
-> **Next task:** Step 3 — Authoritative strategy/profile metadata recovery  
+> **Active branch:** `fix/signal-page-summary-guard`  
+> **Active pull request:** PR #34 — stacked on Step 2 PR #33 and Step 1 PR #32  
+> **Current task:** Urgent Step 5 hotfix — Signal Engine initial-render white screen  
+> **Next task:** Step 3 — Authoritative strategy/profile metadata recovery after hotfix closure  
 > **Live trading:** blocked by default
 
 ---
@@ -207,13 +207,13 @@ A green CI run does not prove exchange/runtime behavior.
 | 2 | Fix partial-fill reconciliation, fees and realized PnL | **Automated PASS — PR #33 merge/deploy pending** |
 | 3 | Recover authoritative strategy/profile metadata | Pending |
 | 4 | Correct TP labels and Risk/daily-trade UI values | Pending |
-| 5 | Reproduce and fix blank-page failure | Pending |
+| 5 | Reproduce and fix blank-page failure | **Active hotfix — exact root cause confirmed; PR #34 CI/deploy pending** |
 | 6 | Run complete Scalping Demo re-verification | Pending |
 | 7 | Run complete Intraday Demo verification | Pending |
 | 8 | Verify restart, close cleanup and orphan orders | Pending |
 | 9 | Begin historical data/backtesting only after runtime closure | Pending |
 
-Only one step may be active at a time. PASS/FAIL evidence belongs in Part C.
+Only one step may be active at a time. A confirmed blocking runtime defect may temporarily interrupt the numeric sequence. PASS/FAIL evidence belongs in Part C.
 
 ---
 
@@ -291,6 +291,9 @@ Implemented in PR #32:
 - **12:06 AM BDT:** Partial-close Journal/PnL synchronization implementation and focused tests added.
 - **12:09 AM BDT:** GitHub Actions CI run #246 completed successfully.
 - **12:10 AM BDT:** README synchronized with final automated Step 2 evidence.
+- **12:21 AM BDT:** Chrome Console captured exact Signal Engine failure: `Cannot read properties of undefined (reading 'sidewaysRejectedProfiles')`.
+- **12:24 AM BDT:** PR #34 created with a bounded null/undefined summary guard.
+- **12:26 AM BDT:** README synchronized with the confirmed blank-screen root cause and hotfix status.
 
 ### Step 2 — Partial-close Journal, fees and realized-PnL repair
 
@@ -328,6 +331,34 @@ Implemented in PR #33:
 | Product Owner merge approval | **PENDING** | No merge requested or performed |
 | Deployed Bybit Demo verification | **PENDING** | Required after Step 1 and Step 2 merge/deploy |
 
+### Urgent Step 5 hotfix — Signal Engine initial-render white screen
+
+**Exact browser evidence:** all relevant API requests returned HTTP `200`, while the Console showed:
+
+```text
+Uncaught TypeError: Cannot read properties of undefined
+(reading 'sidewaysRejectedProfiles')
+```
+
+**Confirmed root cause:** `truth` is `null` during the first render while Signal data loads. The `Sideways / stale` summary condition used optional chaining, but the final arithmetic branch directly dereferenced `summary.sidewaysRejectedProfiles`. Both optional checks evaluated false when `summary` was undefined, so React entered the arithmetic branch and crashed the entire page.
+
+Implemented in PR #34:
+
+- Explicitly blocks arithmetic while `summary` is null or undefined.
+- Treats null or undefined rejection totals as `N/A`.
+- Adds totals only after both values are available.
+- Does not alter scanner, signal, risk, execution or backend logic.
+
+### Signal hotfix evidence
+
+| Check | Result | Evidence |
+|---|---|---|
+| Browser error captured | **PASS** | Chrome Console screenshot at 12:21 AM BDT |
+| Exact failing field confirmed | **PASS** | `sidewaysRejectedProfiles` undefined dereference |
+| Bounded frontend fix committed | **PASS** | PR #34, `SignalEngine.tsx` only before README update |
+| TypeScript/build/full CI | **PENDING** | Current-head workflow not completed yet |
+| Render browser verification | **PENDING** | Requires approved merge and deployment |
+
 ### Current gate-based progress
 
 | Work item | Completed gates | Progress | Current status |
@@ -336,16 +367,16 @@ Implemented in PR #33:
 | Scalping deployed lifecycle verification | 4/10 | **40%** | Runtime repair/deployment still required |
 | Step 1 TP2 profit-lock repair | 7/8 | **87.5%** | Code and CI passed; merge/deploy pending |
 | Step 2 Journal, fees and realized-PnL repair | 8/10 | **80%** | Code and CI passed; merge/deploy verification pending |
-| Step 3 metadata recovery | 0/5 | **0%** | Not started |
+| Step 3 metadata recovery | 0/5 | **0%** | Paused until urgent hotfix closure |
 | Step 4 TP-stage/Risk UI consistency | 0/5 | **0%** | Not started |
-| Step 5 blank-page stability | 0/4 | **0%** | Root cause not confirmed |
+| Step 5 Signal page blank-screen hotfix | 3/5 | **60%** | Root cause and code fix complete; CI/deploy pending |
 | Intraday lifecycle verification | 0/8 | **0%** | Not started |
 | Restart/cleanup/orphan-order verification | 0/6 | **0%** | Not started |
 
 ### Current verdict
 
-Step 2 implementation and automated verification are **PASS**. Runtime verification remains **PENDING** because PR #32 and PR #33 have not been merged and deployed. `main` remains unchanged.
+Step 2 implementation and automated verification are **PASS**. Signal Engine blank-screen root cause is now **CONFIRMED**, and the bounded hotfix is committed in PR #34. CI, merge, Render deployment and browser verification remain **PENDING**. `main` remains unchanged.
 
 ### Next task
 
-> **Step 3 — Recover authoritative strategy/profile metadata and lifecycle timestamps after Step 2 merge/deployment approval.**
+> **Complete PR #34 CI and deployed Signal Engine verification; then resume Step 3 metadata recovery.**
