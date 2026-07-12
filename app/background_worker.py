@@ -6,6 +6,7 @@ import logging
 from app.bot_controls import can_execute, get_execution_mode
 from app.config import settings
 from app.exchange import get_exchange_client
+from app.intraday_protection_guard import enforce_intraday_protection
 from app.journal import log_bot_event
 from app.native_profit_reconcile import reconcile_native_profit_orders
 from app.reconciliation import reconcile_state
@@ -29,7 +30,7 @@ def _safe_log_bot_event(event_type: str, message: str, *, level: str = "info", m
 
 
 async def native_profit_monitor_loop() -> None:
-    """Reconcile exchange-native TP fills independently of the scan cadence."""
+    """Reconcile native fills and verify protection independently of scan cadence."""
 
     while True:
         try:
@@ -37,6 +38,10 @@ async def native_profit_monitor_loop() -> None:
             result = await asyncio.to_thread(reconcile_native_profit_orders, client)
             if not result.get("ok") and result.get("errors"):
                 logger.debug("Native TP reconciliation pending: %s", result.get("errors"))
+
+            protection_result = await asyncio.to_thread(enforce_intraday_protection, client)
+            if not protection_result.get("ok") and protection_result.get("errors"):
+                logger.debug("Intraday protection verification pending: %s", protection_result.get("errors"))
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # pragma: no cover - defensive watcher guard

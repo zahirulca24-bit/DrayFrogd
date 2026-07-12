@@ -85,6 +85,7 @@ export default function ActiveTrades({ authToken, trades, tradeHistory, account,
   const [closingId, setClosingId] = useState<string | null>(null);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [reportedRealized, setReportedRealized] = useState<number | null>(null);
 
   const todayClosedTrades = useMemo(() => tradeHistory.filter((trade) => isTodayInBdt(trade.closedAt)), [tradeHistory]);
   const liveTrades = trades as LiveTrade[];
@@ -92,7 +93,8 @@ export default function ActiveTrades({ authToken, trades, tradeHistory, account,
   const todaysClosed = todayClosedTrades.length;
   const todaysSlHit = todayClosedTrades.filter((trade) => trade.result === "LOSS").length;
   const todaysTpHit = todayClosedTrades.filter((trade) => trade.result === "PROFIT").length;
-  const todaysRealized = todayClosedTrades.reduce((sum, trade) => sum + numberValue(trade.pnl), 0);
+  const closedOnlyRealized = todayClosedTrades.reduce((sum, trade) => sum + numberValue(trade.pnl), 0);
+  const todaysRealized = reportedRealized ?? closedOnlyRealized;
   const todaysUnrealized = liveTrades.reduce((sum, trade) => sum + numberValue(trade.unrealizedPnl), 0);
   const totalExposure = liveTrades.reduce(
     (sum, trade) => sum + (hasNumber(trade.positionValue) ? Math.abs(Number(trade.positionValue)) : 0),
@@ -111,6 +113,28 @@ export default function ActiveTrades({ authToken, trades, tradeHistory, account,
 
     return () => clearInterval(interval);
   }, [onRefresh]);
+
+  useEffect(() => {
+    if (!authToken) return;
+    let cancelled = false;
+
+    const loadDailyFinancials = async () => {
+      try {
+        const response = (await api.getMetrics(authToken)) as { today_realized_pnl?: number };
+        const value = Number(response.today_realized_pnl);
+        if (!cancelled) setReportedRealized(Number.isFinite(value) ? value : null);
+      } catch {
+        if (!cancelled) setReportedRealized(null);
+      }
+    };
+
+    void loadDailyFinancials();
+    const interval = setInterval(loadDailyFinancials, 10000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [authToken, trades.length, tradeHistory.length]);
 
   const handleMarketClose = async (trade: LiveTrade) => {
     setActionMessage(null);

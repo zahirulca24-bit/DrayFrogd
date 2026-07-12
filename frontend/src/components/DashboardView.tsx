@@ -139,14 +139,16 @@ export default function DashboardView({
   );
   const unrealizedPnl = resolveUnrealizedPnl(wallet, account);
   const exposure = resolveExposure(account);
+  const [reportedRealizedPnl, setReportedRealizedPnl] = useState<number | null>(null);
 
-  const todayRealizedPnl = useMemo(
+  const closedOnlyTodayRealizedPnl = useMemo(
     () =>
       tradeHistory
         .filter((trade) => isTodayInBdt(trade.closedAt))
         .reduce((sum, trade) => sum + numberValue(trade.pnl), 0),
     [tradeHistory],
   );
+  const todayRealizedPnl = reportedRealizedPnl ?? closedOnlyTodayRealizedPnl;
   const todayNetPnl = todayRealizedPnl + unrealizedPnl;
   const recentTrades = useMemo(() => activeTrades.slice(0, 4), [activeTrades]);
 
@@ -213,6 +215,28 @@ export default function DashboardView({
       clearInterval(interval);
     };
   }, [authToken]);
+
+  useEffect(() => {
+    if (!authToken) return;
+    let cancelled = false;
+
+    const loadDailyFinancials = async () => {
+      try {
+        const response = (await api.getMetrics(authToken)) as { today_realized_pnl?: number };
+        const value = Number(response.today_realized_pnl);
+        if (!cancelled) setReportedRealizedPnl(Number.isFinite(value) ? value : null);
+      } catch {
+        if (!cancelled) setReportedRealizedPnl(null);
+      }
+    };
+
+    void loadDailyFinancials();
+    const interval = setInterval(loadDailyFinancials, 10_000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [authToken, activeTrades.length, tradeHistory.length]);
 
   const running = botStatus.status === "running";
   const ready = readiness.ready_for_execution;
@@ -281,7 +305,7 @@ export default function DashboardView({
       <section className="grid grid-cols-2 gap-3 xl:grid-cols-6" id="dashboard-kpi-grid">
         <KpiCard label="Total Equity" value={formatMoney(totalEquity)} icon={<Wallet className="h-4 w-4" />} tone="neutral" helper="Exchange account equity" />
         <KpiCard label="Available" value={formatMoney(availableBalance)} icon={<Coins className="h-4 w-4" />} tone="good" helper="Free trading balance" />
-        <KpiCard label="Today's Realized" value={formatMoney(todayRealizedPnl)} icon={todayRealizedPnl >= 0 ? <ArrowUpRight className="h-4 w-4" /> : <ArrowDownRight className="h-4 w-4" />} tone={todayRealizedPnl >= 0 ? "good" : "bad"} helper="Closed trades today" />
+        <KpiCard label="Today's Realized" value={formatMoney(todayRealizedPnl)} icon={todayRealizedPnl >= 0 ? <ArrowUpRight className="h-4 w-4" /> : <ArrowDownRight className="h-4 w-4" />} tone={todayRealizedPnl >= 0 ? "good" : "bad"} helper="Closed trades + open partial fills today" />
         <KpiCard label="Unrealized" value={formatMoney(unrealizedPnl)} icon={<Layers3 className="h-4 w-4" />} tone={unrealizedPnl >= 0 ? "good" : "bad"} helper="Open-position PnL" />
         <KpiCard label="Today's Net" value={formatMoney(todayNetPnl)} icon={<Zap className="h-4 w-4" />} tone={todayNetPnl >= 0 ? "good" : "bad"} helper="Realized + unrealized" />
         <KpiCard label="Exposure" value={formatMoney(exposure)} icon={<ShieldCheck className="h-4 w-4" />} tone="warn" helper={`${activeTrades.length} active trade${activeTrades.length === 1 ? "" : "s"}`} />
