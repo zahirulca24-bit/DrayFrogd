@@ -14,6 +14,7 @@ from app.journal import (
     serialize_trade_entry,
 )
 from app.models import RiskRuntimeState, TradeJournal
+from app.trade_state import CAPACITY_BLOCKING_STATUSES
 
 
 def reserve_execution_capacity(
@@ -85,7 +86,7 @@ def reserve_execution_capacity(
                 "trade": None,
             }
 
-        open_rows = db.query(TradeJournal).filter(TradeJournal.status != "closed").all()
+        open_rows = db.query(TradeJournal).filter(TradeJournal.status.in_(sorted(CAPACITY_BLOCKING_STATUSES))).all()
         if any(str(row.symbol or "").upper() == symbol for row in open_rows):
             return {"reserved": False, "reason": "SYMBOL_ALREADY_ACTIVE", "trade": None}
         if len(open_rows) >= active_limit:
