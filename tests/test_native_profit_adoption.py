@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from decimal import Decimal, ROUND_DOWN
 from unittest.mock import patch
 
 from app.native_profit_reconcile import reconcile_native_profit_orders
@@ -31,14 +32,16 @@ class AdoptionClient:
         }], None
 
     def normalize_quantity(self, value: float, qty_step: str):
-        step = float(qty_step)
-        normalized = int(value / step) * step
-        return f"{normalized:.8f}".rstrip("0").rstrip(".")
+        decimal_value = Decimal(str(value))
+        step = Decimal(str(qty_step))
+        normalized = (decimal_value / step).to_integral_value(rounding=ROUND_DOWN) * step
+        return format(normalized.normalize(), "f")
 
     def normalize_price(self, value: float, tick_size: str):
-        step = float(tick_size)
-        normalized = int(value / step) * step
-        return f"{normalized:.8f}".rstrip("0").rstrip(".")
+        decimal_value = Decimal(str(value))
+        step = Decimal(str(tick_size))
+        normalized = (decimal_value / step).to_integral_value(rounding=ROUND_DOWN) * step
+        return format(normalized.normalize(), "f")
 
     def place_reduce_only_limit_order(self, symbol: str, side: str, qty: str, price: str, order_link_id: str):
         order = {
