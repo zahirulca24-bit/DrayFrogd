@@ -14,6 +14,7 @@ from app.scanner_trend import (
     direction_allowed,
     score_market_candidate,
 )
+from app.signal_grade import GRADE_A, GRADE_A_PLUS, GRADE_B_PLUS, grade_signal
 from app.strategy import evaluate_registered_strategies
 
 
@@ -34,6 +35,7 @@ MIN_PRICE_MOVEMENT_RATIO = 0.005
 
 _signals_lock = Lock()
 _latest_signals: list[dict[str, Any]] = []
+_latest_watchlist_signals: list[dict[str, Any]] = []
 _latest_scan_results: list[dict[str, Any]] = []
 _latest_ranked_markets: list[dict[str, Any]] = []
 _latest_universe_metadata: dict[str, dict[str, Any]] = {}
@@ -42,6 +44,7 @@ _latest_universe_metadata: dict[str, dict[str, Any]] = {}
 def run_scan(client: BybitDemoClient) -> dict[str, Any]:
     universe = _resolve_scan_universe(client)
     signals: list[dict[str, Any]] = []
+    watchlist: list[dict[str, Any]] = []
     scan_results: list[dict[str, Any]] = []
     ranked_markets: list[dict[str, Any]] = []
     skipped: list[dict[str, str]] = []
@@ -119,16 +122,22 @@ def run_scan(client: BybitDemoClient) -> dict[str, Any]:
                 scanner_logic=scanner_logic,
             )
             scan_results.append(normalized)
-            if normalized.get("direction") and normalized.get("status") == "active":
+            if normalized.get("executable") and normalized.get("status") == "active":
                 signals.append(normalized)
+            elif normalized.get("watchlist_only") and normalized.get("grade") == GRADE_B_PLUS:
+                watchlist.append(normalized)
 
     signals.sort(key=_signal_sort_key)
+    watchlist.sort(key=_signal_sort_key)
     scan_results.sort(key=_result_sort_key)
     ranked_markets.sort(key=lambda item: (-float(item.get("score") or 0.0), str(item.get("symbol") or "")))
 
+    grade_counts = _grade_counts(scan_results)
     with _signals_lock:
         _latest_signals.clear()
         _latest_signals.extend(signals)
+        _latest_watchlist_signals.clear()
+        _latest_watchlist_signals.extend(watchlist)
         _latest_scan_results.clear()
         _latest_scan_results.extend(scan_results)
         _latest_ranked_markets.clear()
@@ -139,8 +148,12 @@ def run_scan(client: BybitDemoClient) -> dict[str, Any]:
         "symbols_scanned": len(universe),
         "universe": universe,
         "signals_found": len(signals),
+        "executable_signals_found": len(signals),
+        "watchlist_signals_found": len(watchlist),
         "signals": list(signals),
+        "watchlist": list(watchlist),
         "results": list(scan_results),
+        "grade_counts": grade_counts,
         "ranked_markets": list(ranked_markets),
         "skipped": skipped,
         "max_spread_bps": MAX_SPREAD_BPS,
@@ -149,6 +162,12 @@ def run_scan(client: BybitDemoClient) -> dict[str, Any]:
             "setup": "15m",
             "trigger": "5m",
             "open_candle_confirmation": False,
+        },
+        "grade_contract": {
+            "A+": "execute",
+            "A": "execute",
+            "B+": "watchlist_only",
+            "others": "reject",
         },
     }
 
@@ -160,7 +179,18 @@ def get_latest_signals() -> list[dict[str, Any]]:
 
 def get_active_signals() -> list[dict[str, Any]]:
     with _signals_lock:
-        return [signal for signal in _latest_signals if signal.get("status") == "active"]
+        return [
+            signal
+            for signal in _latest_signals
+            if signal.get("status") == "active"
+            and signal.get("executable") is True
+            and signal.get("grade") in {GRADE_A_PLUS, GRADE_A}
+        ]
+
+
+def get_watchlist_signals() -> list[dict[str, Any]]:
+    with _signals_lock:
+        return list(_latest_watchlist_signals)
 
 
 def get_ranked_markets() -> list[dict[str, Any]]:
@@ -212,11 +242,10 @@ def _normalize_strategy_result(
         normalized["original_status"] = original_status
         normalized["status"] = "blocked"
         normalized["rejection_reason"] = _trend_block_reason(str(trend.get("state") or ""), str(direction))
-        return normalized
-
-    if strategy_name.lower() in STRUCTURE_STRATEGIES and direction and original_status in {"active", "near_setup"}:
+    elif strategy_name.lower() in STRUCTURE_STRATEGIES and direction and original_status in {"active", "near_setup"}:
         _apply_structure_gate(normalized, scanner_logic)
 
+    normalized.update(grade_signal(normalized))
     return normalized
 
 
@@ -319,8 +348,19 @@ def _trend_block_reason(trend_state: str, direction: str) -> str:
     return "trend_not_aligned"
 
 
-def _signal_sort_key(item: dict[str, Any]) -> tuple[float, float, str, str]:
+def _grade_counts(results: list[dict[str, Any]]) -> dict[str, int]:
+    counts = {GRADE_A_PLUS: 0, GRADE_A: 0, GRADE_B_PLUS: 0, "REJECT": 0}
+    for item in results:
+        grade = str(item.get("grade") or "REJECT")
+        counts[grade if grade in counts else "REJECT"] += 1
+    return counts
+
+
+def _signal_sort_key(item: dict[str, Any]) -> tuple[int, float, float, float, str, str]:
+    grade_priority = {GRADE_A_PLUS: 0, GRADE_A: 1, GRADE_B_PLUS: 2, "REJECT": 3}
     return (
+        grade_priority.get(str(item.get("grade") or "REJECT"), 9),
+        -float(item.get("grade_score") or 0.0),
         -float(item.get("market_score") or 0.0),
         -float(item.get("confidence_score") or 0.0),
         str(item.get("symbol") or ""),
@@ -328,12 +368,14 @@ def _signal_sort_key(item: dict[str, Any]) -> tuple[float, float, str, str]:
     )
 
 
-def _result_sort_key(item: dict[str, Any]) -> tuple[int, float, float, str, str]:
-    priority = {"active": 0, "near_setup": 1, "blocked": 2, "rejected": 3, "expired": 4}
+def _result_sort_key(item: dict[str, Any]) -> tuple[int, int, float, float, str, str]:
+    grade_priority = {GRADE_A_PLUS: 0, GRADE_A: 1, GRADE_B_PLUS: 2, "REJECT": 3}
+    status_priority = {"active": 0, "near_setup": 1, "blocked": 2, "rejected": 3, "expired": 4}
     return (
-        priority.get(str(item.get("status") or ""), 9),
+        grade_priority.get(str(item.get("grade") or "REJECT"), 9),
+        status_priority.get(str(item.get("status") or ""), 9),
+        -float(item.get("grade_score") or 0.0),
         -float(item.get("market_score") or 0.0),
-        -float(item.get("confidence_score") or 0.0),
         str(item.get("symbol") or ""),
         str(item.get("strategy_name") or ""),
     )
