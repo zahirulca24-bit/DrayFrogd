@@ -6,11 +6,11 @@ Bybit-first automated trading terminal built with **FastAPI, React, PostgreSQL a
 
 The project is in **Demo Beta / Engineering Verification**. Live-capital trading is not approved.
 
-> **Last documentation update:** 13 July 2026, 2:50 AM BDT (`Asia/Dhaka`)  
-> **Latest `main` commit:** `94a6282ecac582b5f7e5e206f16f3e7861b0ae4b` — PR #39 merged  
-> **Current engineering phase:** deployed runtime verification for `STATE-SYNC-001 + WS-001`  
-> **Automated verification:** backend **205/205 PASS**, frontend TypeScript/build **PASS**, GitHub Actions **PASS**  
-> **Runtime status:** Render deployment and fresh Bybit Demo verification **PENDING**  
+> **Last documentation update:** 13 July 2026, 3:00 AM BDT (`Asia/Dhaka`)  
+> **Latest `main` commit:** `d01b3aabde94f2d2013f9945026cc8c716433fd0` — PR #40 README merge  
+> **Active engineering task:** `WS-RUNTIME-001` — independent private/public supervisors and truthful connection diagnostics  
+> **Automated verification:** focused WebSocket tests **9/9 PASS**; uploaded-ZIP backend suite **203/203 PASS**; frontend TypeScript/build **PASS**; GitHub CI pending  
+> **Runtime status:** `PRIVATE WS` and `PUBLIC WS` both displayed `RECONNECTING`; exact failing channel/error was not visible  
 > **Runtime tracker:** Issue #37  
 > **Live trading:** blocked by default
 
@@ -178,8 +178,9 @@ An unknown or conflicting profile must not silently inherit Scalping or Intraday
 | 5 | Blank-page stability | Signal page browser verification **PASS** |
 | 6 | Complete Scalping Demo re-verification | Pending |
 | 7 | Complete Intraday Demo re-verification | In progress |
-| 8A | `STATE-SYNC-001` authoritative exchange position reconciliation | **Merged in PR #39 — runtime pending** |
-| 8B | `WS-001` Bybit private/public streams and browser connection status | **Merged in PR #39 — runtime pending** |
+| 8A | `STATE-SYNC-001` authoritative exchange position reconciliation | **Merged in PR #39 — runtime verification in progress** |
+| 8B | `WS-001` Bybit private/public streams and browser connection status | **Runtime FAIL — both channels displayed reconnecting** |
+| 8B.1 | `WS-RUNTIME-001` independent channel supervision and exact errors | **Local verification PASS — PR/CI pending** |
 | 8C | Restart, close cleanup and orphan-order verification | Pending deployed verification |
 | 9 | ACTIVE-signal execution decision visibility | Audit complete; implementation pending after state-sync runtime check |
 | 10 | Historical data/backtesting after runtime closure | Pending |
@@ -229,6 +230,8 @@ Only one bounded repair package may be active at a time. Runtime PASS requires e
 - **After fresh ZIP audit:** `STATE-SYNC-001 + WS-001` was implemented on `fix/authoritative-state-bybit-websocket`.
 - **PR #39:** Backend **205/205 PASS**, frontend TypeScript/build **PASS**, and GitHub Actions run #296 **PASS**.
 - **2:50 AM BDT:** Product Owner approved and PR #39 merged into `main` at commit `94a6282ecac582b5f7e5e206f16f3e7861b0ae4b`.
+- **2:57 AM BDT:** Deployed Dashboard showed `PRIVATE WS · RECONNECTING` and `PUBLIC WS · RECONNECTING` while REST account/state values remained available.
+- **After runtime evidence:** Product Owner approved `WS-RUNTIME-001` hotfix.
 
 ### PR #36 automated verification
 
@@ -255,7 +258,7 @@ Only one bounded repair package may be active at a time. Runtime PASS requires e
 | Final close synchronization | **PASS** | Position disappeared from Dashboard active trades |
 | Dashboard Today's Realized | **PASS** | `$27.64` displayed |
 | Dashboard Today's Net | **PASS** | `$27.64` displayed with zero unrealized PnL |
-| Active Trades Realized PnL | **PASS** | `$27.6431` displayed |
+| Active Trades realized PnL | **PASS** | `$27.6431` displayed |
 | Account equity/available balance refresh | **PASS** | Dashboard refreshed after close |
 | Signal Engine browser stability | **PASS** | Page loads and displays ranked markets/signals |
 | Journal exact exit price | **PENDING EVIDENCE** | Final Journal screenshot still required |
@@ -356,14 +359,39 @@ The refresh mismatch was traced to conflicting active-trade authorities: exchang
 - Partial fill, fees, realized PnL and TP lifecycle remain correct after WS/REST reconciliation.
 - Disconnect/reconnect and REST fallback do not duplicate trades or erase the last valid snapshot.
 
+### `WS-RUNTIME-001` runtime defect and hotfix scope
+
+The first deployed WebSocket check showed both badges as `RECONNECTING`. The original service used one shared supervisor: any exception marked both channels reconnecting and closed both clients. It also marked the private stream connected immediately after construction instead of waiting for pybit's confirmed authentication flag.
+
+The approved hotfix establishes these rules:
+
+- Private and public streams run in independent supervisor tasks and independent exponential backoff loops.
+- A private failure cannot change or close the public channel; a public failure cannot change or close the private channel.
+- `CONNECTED` requires the underlying pybit `is_connected()` check.
+- Private `CONNECTED` additionally requires pybit's successful `auth` state.
+- Status exposes endpoint, connect attempts, reconnect count, health-check time, next retry and exact exception text.
+- The browser visibly displays exact private/public errors instead of hiding them only in a tooltip.
+- WebSocket-triggered reconciliation remains separate and REST remains the accounting/state authority.
+
+#### Hotfix automated evidence
+
+| Check | Result |
+|---|---|
+| Focused WebSocket tests | **9/9 PASS** |
+| Uploaded-ZIP backend suite | **203/203 PASS with 5 subtests** |
+| Python compile | **PASS** |
+| Frontend TypeScript check | **PASS** |
+| Frontend production build | **PASS** |
+| GitHub Actions | **PENDING** |
+
 ### Current verdict
 
-PR #39 is merged into `main`. The code and automated verification for `STATE-SYNC-001 + WS-001` are **PASS**, but deployment and real Bybit Demo runtime behavior remain **PENDING**; no runtime PASS is claimed yet. PR #36 realized-PnL evidence remains valid, while TP1 break-even, TP2 trailing, Journal fee/exit, restart and cleanup evidence remain open in Issue #37.
+PR #39 is merged into `main`. `STATE-SYNC-001` remains under deployed verification. `WS-001` is **RUNTIME FAIL** on the first connection check because both channels remained reconnecting and the exact failing channel was not observable. `WS-RUNTIME-001` is the active bounded repair; no WebSocket runtime PASS is claimed yet.
 
 ### Next tasks
 
-1. Confirm Render deployed merge commit `94a6282ecac582b5f7e5e206f16f3e7861b0ae4b` with the `pybit` dependency.
-2. Verify `PRIVATE WS` and `PUBLIC WS` connection status in the deployed browser.
-3. Run the exchange ↔ authoritative snapshot ↔ Journal ↔ Dashboard repeated-refresh and restart test matrix.
-4. Verify partial fills, fees, realized PnL, TP protection and orphan-order cleanup.
-5. After state-sync runtime verification, implement execution-decision visibility for `EXEC-QUEUE-001`.
+1. Complete `WS-RUNTIME-001` implementation, tests and CI on its feature branch.
+2. Obtain Product Owner approval before merge.
+3. Deploy and verify private authentication and public market connectivity independently.
+4. Run repeated refresh, disconnect/reconnect and restart checks while REST reconciliation remains active.
+5. Continue partial-fill, TP protection, Journal fee/exit and cleanup verification in Issue #37.
