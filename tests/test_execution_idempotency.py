@@ -5,7 +5,7 @@ from unittest.mock import patch
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-import app.execution as execution
+import app.execution_core as execution
 import app.journal as journal
 from app.database import Base
 from app.exchange import ExchangeError
@@ -87,13 +87,13 @@ class ExecutionIdempotencyTests(unittest.TestCase):
 
     def _patch_common(self):
         return (
-            patch("app.execution.can_execute", return_value=(True, "")),
-            patch("app.execution.validate_trade", return_value=VALIDATION),
-            patch("app.execution.calculate_position_size", return_value=SIZING),
-            patch("app.execution.get_execution_mode", return_value="demo"),
-            patch("app.execution.append_trade_event"),
-            patch("app.execution.log_bot_event"),
-            patch("app.execution.register_active_trade"),
+            patch("app.execution_core.can_execute", return_value=(True, "")),
+            patch("app.execution_core.validate_trade", return_value=VALIDATION),
+            patch("app.execution_core.calculate_position_size", return_value=SIZING),
+            patch("app.execution_core.get_execution_mode", return_value="demo"),
+            patch("app.execution_core.append_trade_event"),
+            patch("app.execution_core.log_bot_event"),
+            patch("app.execution_core.register_active_trade"),
         )
 
     def test_execution_key_is_deterministic_and_signal_specific(self) -> None:
@@ -137,7 +137,7 @@ class ExecutionIdempotencyTests(unittest.TestCase):
         client = FakeClient()
         patches = self._patch_common()
         with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patch(
-            "app.execution.reserve_trade_execution", side_effect=RuntimeError("database offline")
+            "app.execution_core.reserve_trade_execution", side_effect=RuntimeError("database offline")
         ):
             result = execution.execute_signal(client, SIGNAL)
 
@@ -150,7 +150,7 @@ class ExecutionIdempotencyTests(unittest.TestCase):
         existing = {"journal_id": "exec-existing", "status": "active", "execution_key": "x" * 64}
         patches = self._patch_common()
         with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patch(
-            "app.execution.reserve_trade_execution", return_value={"reserved": False, "trade": existing}
+            "app.execution_core.reserve_trade_execution", return_value={"reserved": False, "trade": existing}
         ):
             result = execution.execute_signal(client, SIGNAL)
 
@@ -165,8 +165,8 @@ class ExecutionIdempotencyTests(unittest.TestCase):
         reserved = {"journal_id": "exec-recovered", "status": "pending_execution", "execution_key": "x" * 64}
         patches = self._patch_common()
         with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patch(
-            "app.execution.reserve_trade_execution", return_value={"reserved": True, "trade": reserved}
-        ), patch("app.execution.update_trade_entry", return_value={"journal_id": "exec-recovered"}):
+            "app.execution_core.reserve_trade_execution", return_value={"reserved": True, "trade": reserved}
+        ), patch("app.execution_core.update_trade_entry", return_value={"journal_id": "exec-recovered"}):
             result = execution.execute_signal(client, SIGNAL)
 
         self.assertTrue(result["ok"])
@@ -182,8 +182,8 @@ class ExecutionIdempotencyTests(unittest.TestCase):
         reserved = {"journal_id": "exec-uncertain", "status": "pending_execution", "execution_key": "x" * 64}
         patches = self._patch_common()
         with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patch(
-            "app.execution.reserve_trade_execution", return_value={"reserved": True, "trade": reserved}
-        ), patch("app.execution.update_trade_entry", return_value={"journal_id": "exec-uncertain"}):
+            "app.execution_core.reserve_trade_execution", return_value={"reserved": True, "trade": reserved}
+        ), patch("app.execution_core.update_trade_entry", return_value={"journal_id": "exec-uncertain"}):
             result = execution.execute_signal(client, SIGNAL)
 
         self.assertFalse(result["ok"])
@@ -196,8 +196,8 @@ class ExecutionIdempotencyTests(unittest.TestCase):
         reserved = {"journal_id": "exec-journal-fail", "status": "pending_execution", "execution_key": "x" * 64}
         patches = self._patch_common()
         with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patch(
-            "app.execution.reserve_trade_execution", return_value={"reserved": True, "trade": reserved}
-        ), patch("app.execution.update_trade_entry", side_effect=RuntimeError("database write failed")):
+            "app.execution_core.reserve_trade_execution", return_value={"reserved": True, "trade": reserved}
+        ), patch("app.execution_core.update_trade_entry", side_effect=RuntimeError("database write failed")):
             result = execution.execute_signal(client, SIGNAL)
 
         self.assertFalse(result["ok"])

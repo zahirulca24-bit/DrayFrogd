@@ -9,7 +9,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.database import Base
-from app.execution import execute_signal, replace_active_trades
+from app.execution_core import execute_signal, replace_active_trades
 from app.journal import create_trade_entry, get_closed_trade_history, get_open_trade_history, serialize_trade_entry, update_trade_entry
 from app.models import TradeJournal
 
@@ -69,12 +69,12 @@ class StrategyPersistenceTests(unittest.TestCase):
         }
 
         with (
-            patch("app.execution.can_execute", return_value=(True, None)),
-            patch("app.execution.validate_trade", return_value={"allowed": True, "risk_per_trade": 0.01, "leverage_cap": 5, "exposure_cap": 0.3}),
-            patch("app.execution.calculate_position_size", return_value={"allowed": True, "quantity": "1", "notional": 100.0}),
-            patch("app.execution.get_execution_mode", return_value="demo"),
-            patch("app.execution._attach_protection_with_retry", return_value=None),
-            patch("app.execution.register_active_trade", return_value=None),
+            patch("app.execution_core.can_execute", return_value=(True, None)),
+            patch("app.execution_core.validate_trade", return_value={"allowed": True, "risk_per_trade": 0.01, "leverage_cap": 5, "exposure_cap": 0.3}),
+            patch("app.execution_core.calculate_position_size", return_value={"allowed": True, "quantity": "1", "notional": 100.0}),
+            patch("app.execution_core.get_execution_mode", return_value="demo"),
+            patch("app.execution_core._attach_protection_with_retry", return_value=None),
+            patch("app.execution_core.register_active_trade", return_value=None),
         ):
             result = execute_signal(FakeExecutionClient(), signal, auto_triggered=True)
 
