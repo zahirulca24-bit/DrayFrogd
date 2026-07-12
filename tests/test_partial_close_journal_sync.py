@@ -211,6 +211,48 @@ class PartialCloseJournalSyncTests(unittest.TestCase):
         journal_update.assert_not_called()
         append_event.assert_not_called()
 
+    def test_tp1_and_tp2_records_accumulate_without_double_counting(self) -> None:
+        trade = active_trade(quantity=2.5, remaining_quantity=2.5)
+        trade["management"]["remaining_quantity"] = 2.5
+        trade["management"]["tp2_done"] = True
+        tp2_time = CLOSED_MS + 60_000
+        client = FakeClosedPnlClient(
+            [
+                partial_record(),
+                partial_record(
+                    orderId="tp2-order",
+                    closedSize="2.5",
+                    avgExitPrice="104",
+                    closedPnl="9.25",
+                    openFee="0.20",
+                    closeFee="0.25",
+                    updatedTime=str(tp2_time),
+                ),
+                partial_record(),
+            ]
+        )
+        journal_updates: list[dict] = []
+        events: list[tuple[str, str, str, dict]] = []
+
+        with (
+            patch("app.risk_sync.get_active_trades", return_value=[trade]),
+            patch("app.risk_sync.update_active_trade"),
+            patch("app.risk_sync.update_trade_entry", side_effect=lambda journal_id, updates: journal_updates.append(updates) or {"journal_id": journal_id}),
+            patch("app.risk_sync.append_trade_event", side_effect=lambda *args: events.append(args)),
+        ):
+            result = sync_partial_realized_pnl(client, now=NOW)
+
+        self.assertTrue(result["ok"])
+        persisted = journal_updates[0]
+        self.assertEqual(persisted["quantity"], 2.5)
+        self.assertAlmostEqual(persisted["exit_price"], (103.0 * 5.0 + 104.0 * 2.5) / 7.5)
+        self.assertAlmostEqual(persisted["realized_pnl"], 23.35)
+        self.assertAlmostEqual(persisted["fees"], 1.35)
+        progress = persisted["exchange_metadata"]["partial_close_sync"]
+        self.assertEqual(progress["record_count"], 2)
+        self.assertEqual(progress["record_keys"], ["order:tp1-order", "order:tp2-order"])
+        self.assertEqual([event[1] for event in events].count("PARTIAL_CLOSE_FILL_SYNCED"), 2)
+
 
 if __name__ == "__main__":
     unittest.main()
