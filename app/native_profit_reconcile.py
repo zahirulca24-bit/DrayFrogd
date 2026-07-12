@@ -17,6 +17,12 @@ from app.native_profit_orders import (
     _utc_now_iso,
     install_native_profit_orders,
 )
+from app.trade_management_profiles import (
+    break_even_stop,
+    is_scalping_management,
+    post_tp2_stop,
+    progress_r,
+)
 
 
 def reconcile_native_profit_orders(client: Any) -> dict[str, Any]:
@@ -120,6 +126,50 @@ def reconcile_native_profit_orders(client: Any) -> dict[str, Any]:
         position_quantity = _positive_float(position.get("size")) or 0.0
         qty_step = _positive_float(management.get("native_tp_qty_step")) or 1e-12
         tolerance = max(qty_step, initial_quantity * 1e-8, 1e-12)
+        entry = _positive_float(position.get("avgPrice") or trade.get("entry")) or 0.0
+        original_stop = _positive_float(trade.get("stop_loss")) or entry
+        mark_price = _positive_float(position.get("markPrice")) or entry
+        direction = str(trade.get("direction") or "").lower()
+        tick_size = _positive_float(management.get("native_tp_tick_size")) or 1e-8
+        runner_target = _positive_float(management.get("runner_target") or trade.get("take_profit")) or 0.0
+
+        changed = False
+
+        # Scalping has an early 1R protection gate. This runs in the dedicated
+        # two-second native watcher rather than the slower scanner loop.
+        if is_scalping_management(management) and not bool(management.get("break_even_set")):
+            current_r = progress_r(
+                entry=entry,
+                stop_loss=original_stop,
+                direction=direction,
+                mark_price=mark_price,
+            )
+            if current_r + 1e-9 >= float(management.get("break_even_trigger_r") or 1.0):
+                target_stop = break_even_stop(trade, management, entry)
+                protection = _set_and_verify_protection(
+                    client,
+                    trade=trade,
+                    position=position,
+                    stop_loss=target_stop,
+                    take_profit=runner_target,
+                    tick_size=tick_size,
+                )
+                if protection.get("ok"):
+                    management["break_even_set"] = True
+                    management["break_even_stop"] = target_stop
+                    management["last_state_change"] = _utc_now_iso()
+                    changed = True
+                    _safe_event(
+                        journal_id,
+                        "SCALPING_1R_BREAK_EVEN_SET",
+                        "Scalping reached 1R; break-even plus observed-fee buffer was verified.",
+                        {"symbol": symbol, "progress_r": current_r, "stop_loss": target_stop, "protection": protection},
+                    )
+                    actions.append({"symbol": symbol, "action": "SCALPING_1R_BREAK_EVEN_SET"})
+                else:
+                    management["break_even_error"] = protection.get("error")
+                    management["last_state_change"] = _utc_now_iso()
+                    changed = True
 
         tp1_snapshot, tp1_error = _order_snapshot(client, symbol, management.get("tp1_order_link_id"))
         tp2_snapshot, tp2_error = _order_snapshot(client, symbol, management.get("tp2_order_link_id"))
@@ -128,7 +178,7 @@ def reconcile_native_profit_orders(client: Any) -> dict[str, Any]:
         if tp2_error:
             errors.append(f"{symbol} TP2: {tp2_error}")
 
-        changed = _store_snapshot_if_changed(management, "tp1", tp1_snapshot)
+        changed = _store_snapshot_if_changed(management, "tp1", tp1_snapshot) or changed
         changed = _store_snapshot_if_changed(management, "tp2", tp2_snapshot) or changed
 
         tp1_status = str((tp1_snapshot or {}).get("orderStatus") or "").lower()
@@ -162,15 +212,17 @@ def reconcile_native_profit_orders(client: Any) -> dict[str, Any]:
             management["tp1_fill_source"] = "exchange_order" if tp1_status in FILLED_STATUSES else "position_size_reconciliation"
             management["remaining_quantity"] = position_quantity
             management["last_state_change"] = _utc_now_iso()
+            target_stop = break_even_stop(trade, management, entry)
             protection = _set_and_verify_protection(
                 client,
                 trade=trade,
                 position=position,
-                stop_loss=_positive_float(position.get("avgPrice") or trade.get("entry")) or 0.0,
-                take_profit=_positive_float(management.get("runner_target") or trade.get("take_profit")) or 0.0,
-                tick_size=_positive_float(management.get("native_tp_tick_size")) or 1e-8,
+                stop_loss=target_stop,
+                take_profit=runner_target,
+                tick_size=tick_size,
             )
             management["break_even_set"] = bool(protection.get("ok"))
+            management["break_even_stop"] = target_stop if protection.get("ok") else None
             if not protection.get("ok"):
                 management["break_even_error"] = protection.get("error")
             changed = True
@@ -179,7 +231,7 @@ def reconcile_native_profit_orders(client: Any) -> dict[str, Any]:
                 journal_id,
                 event_type,
                 "TP1 was filled by the exchange; remaining position break-even state was updated.",
-                {"symbol": symbol, "remaining_quantity": position_quantity, "protection": protection},
+                {"symbol": symbol, "remaining_quantity": position_quantity, "stop_loss": target_stop, "protection": protection},
             )
             actions.append({"symbol": symbol, "action": event_type})
 
@@ -188,32 +240,36 @@ def reconcile_native_profit_orders(client: Any) -> dict[str, Any]:
             management["tp2_done"] = True
             management["tp2_fill_source"] = "exchange_order" if tp2_status in FILLED_STATUSES else "position_size_reconciliation"
             management["remaining_quantity"] = position_quantity
-            entry = _positive_float(position.get("avgPrice") or trade.get("entry")) or 0.0
-            original_stop = _positive_float(trade.get("stop_loss")) or entry
-            mark_price = _positive_float(position.get("markPrice")) or entry
-            risk = abs(entry - original_stop)
-            direction = str(trade.get("direction") or "").lower()
-            candidate_stop = max(entry, mark_price - risk) if direction == "long" else min(entry, mark_price + risk)
+            candidate_stop = post_tp2_stop(trade, management, mark_price)
             protection = _set_and_verify_protection(
                 client,
                 trade=trade,
                 position=position,
                 stop_loss=candidate_stop,
-                take_profit=_positive_float(management.get("runner_target") or trade.get("take_profit")) or 0.0,
-                tick_size=_positive_float(management.get("native_tp_tick_size")) or 1e-8,
+                take_profit=runner_target,
+                tick_size=tick_size,
             )
             protection_ok = bool(protection.get("ok"))
             management["break_even_set"] = bool(management.get("break_even_set")) or protection_ok
-            management["trailing_stop"] = candidate_stop if protection_ok else None
-            if not protection_ok:
-                management["trailing_error"] = protection.get("error")
+            if is_scalping_management(management):
+                management["profit_lock_stop"] = candidate_stop if protection_ok else None
+                management["trailing_stop"] = None
+                if not protection_ok:
+                    management["profit_lock_error"] = protection.get("error")
+                event_type = "SCALPING_TP2_PROFIT_LOCK_SET" if protection_ok else "SCALPING_TP2_PROFIT_LOCK_PENDING"
+                event_message = "Scalping TP2 was filled; remaining 25% is protected at the TP1 price."
+            else:
+                management["trailing_stop"] = candidate_stop if protection_ok else None
+                if not protection_ok:
+                    management["trailing_error"] = protection.get("error")
+                event_type = "NATIVE_TP2_FILLED_TRAILING_SET" if protection_ok else "NATIVE_TP2_FILLED_TRAILING_PENDING"
+                event_message = "TP2 was filled by the exchange; runner trailing protection state was updated."
             management["last_state_change"] = _utc_now_iso()
             changed = True
-            event_type = "NATIVE_TP2_FILLED_TRAILING_SET" if protection_ok else "NATIVE_TP2_FILLED_TRAILING_PENDING"
             _safe_event(
                 journal_id,
                 event_type,
-                "TP2 was filled by the exchange; runner trailing protection state was updated.",
+                event_message,
                 {"symbol": symbol, "remaining_quantity": position_quantity, "stop_loss": candidate_stop, "protection": protection},
             )
             actions.append({"symbol": symbol, "action": event_type})
