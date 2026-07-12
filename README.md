@@ -6,11 +6,11 @@ Bybit-first automated trading terminal built with **FastAPI, React, PostgreSQL a
 
 The project is in **Demo Beta / Engineering Verification**. Live-capital trading is not approved.
 
-> **Last documentation update:** 13 July 2026, 2:05 AM BDT (`Asia/Dhaka`)  
-> **Latest `main` commit:** `8245f5a4bc1360700458aeb598253cd1ce378287` — PR #38 documentation merge  
-> **Active engineering task:** `STATE-SYNC-001 + WS-001` — authoritative exchange reconciliation and Bybit real-time streams  
-> **Automated verification:** backend **205/205 PASS**, frontend TypeScript/build **PASS**  
-> **Runtime status:** deployment and fresh Bybit Demo verification **PENDING**  
+> **Last documentation update:** 13 July 2026, 2:50 AM BDT (`Asia/Dhaka`)  
+> **Latest `main` commit:** `94a6282ecac582b5f7e5e206f16f3e7861b0ae4b` — PR #39 merged  
+> **Current engineering phase:** deployed runtime verification for `STATE-SYNC-001 + WS-001`  
+> **Automated verification:** backend **205/205 PASS**, frontend TypeScript/build **PASS**, GitHub Actions **PASS**  
+> **Runtime status:** Render deployment and fresh Bybit Demo verification **PENDING**  
 > **Runtime tracker:** Issue #37  
 > **Live trading:** blocked by default
 
@@ -178,8 +178,8 @@ An unknown or conflicting profile must not silently inherit Scalping or Intraday
 | 5 | Blank-page stability | Signal page browser verification **PASS** |
 | 6 | Complete Scalping Demo re-verification | Pending |
 | 7 | Complete Intraday Demo re-verification | In progress |
-| 8A | `STATE-SYNC-001` authoritative exchange position reconciliation | **Automated PASS — review/merge/runtime pending** |
-| 8B | `WS-001` Bybit private/public streams and browser connection status | **Automated PASS — review/merge/runtime pending** |
+| 8A | `STATE-SYNC-001` authoritative exchange position reconciliation | **Merged in PR #39 — runtime pending** |
+| 8B | `WS-001` Bybit private/public streams and browser connection status | **Merged in PR #39 — runtime pending** |
 | 8C | Restart, close cleanup and orphan-order verification | Pending deployed verification |
 | 9 | ACTIVE-signal execution decision visibility | Audit complete; implementation pending after state-sync runtime check |
 | 10 | Historical data/backtesting after runtime closure | Pending |
@@ -226,6 +226,9 @@ Only one bounded repair package may be active at a time. Runtime PASS requires e
 - **After approval:** PR #36 merged into `main` at commit `acb171822db6d31a06deea2deff8a3d8ab0eeea6`.
 - **1:19 AM–1:30 AM BDT:** deployed browser pages and the new LABUSDT lifecycle were re-checked.
 - **1:30 AM BDT:** Dashboard and Active Trades showed authoritative realized PnL after the trade closed.
+- **After fresh ZIP audit:** `STATE-SYNC-001 + WS-001` was implemented on `fix/authoritative-state-bybit-websocket`.
+- **PR #39:** Backend **205/205 PASS**, frontend TypeScript/build **PASS**, and GitHub Actions run #296 **PASS**.
+- **2:50 AM BDT:** Product Owner approved and PR #39 merged into `main` at commit `94a6282ecac582b5f7e5e206f16f3e7861b0ae4b`.
 
 ### PR #36 automated verification
 
@@ -338,6 +341,9 @@ The refresh mismatch was traced to conflicting active-trade authorities: exchang
 | Python compile | **PASS** |
 | Frontend TypeScript check | **PASS** |
 | Frontend production build | **PASS** |
+| GitHub Actions run #296 | **PASS** |
+| Product Owner merge approval | **PASS** |
+| Merge to `main` | **PASS — `94a6282ecac582b5f7e5e206f16f3e7861b0ae4b`** |
 
 #### Runtime gates still required
 
@@ -352,10 +358,12 @@ The refresh mismatch was traced to conflicting active-trade authorities: exchang
 
 ### Current verdict
 
-The implementation and local automated verification for `STATE-SYNC-001 + WS-001` are **PASS**. Deployment and real Bybit Demo runtime behavior are **PENDING**; no runtime PASS is claimed yet. PR #36 realized-PnL evidence remains valid, while TP1 break-even, TP2 trailing, Journal fee/exit, restart and cleanup evidence remain open in Issue #37.
+PR #39 is merged into `main`. The code and automated verification for `STATE-SYNC-001 + WS-001` are **PASS**, but deployment and real Bybit Demo runtime behavior remain **PENDING**; no runtime PASS is claimed yet. PR #36 realized-PnL evidence remains valid, while TP1 break-even, TP2 trailing, Journal fee/exit, restart and cleanup evidence remain open in Issue #37.
 
 ### Next tasks
 
-1. Review the bounded feature PR and CI evidence; do not merge without explicit Product Owner approval.
-2. After merge/deployment, run the exchange ↔ authoritative snapshot ↔ Journal ↔ Dashboard refresh/restart test matrix.
-3. Continue Issue #37 protection lifecycle verification and then implement execution-decision visibility for `EXEC-QUEUE-001`.
+1. Confirm Render deployed merge commit `94a6282ecac582b5f7e5e206f16f3e7861b0ae4b` with the `pybit` dependency.
+2. Verify `PRIVATE WS` and `PUBLIC WS` connection status in the deployed browser.
+3. Run the exchange ↔ authoritative snapshot ↔ Journal ↔ Dashboard repeated-refresh and restart test matrix.
+4. Verify partial fills, fees, realized PnL, TP protection and orphan-order cleanup.
+5. After state-sync runtime verification, implement execution-decision visibility for `EXEC-QUEUE-001`.
