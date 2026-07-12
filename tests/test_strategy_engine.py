@@ -2,7 +2,7 @@ import unittest
 from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
-from app.scanner import run_scan
+from app.signal_pipeline import evaluate_signal_contexts
 from app.strategy import (
     STRATEGY_BREAKOUT,
     STRATEGY_EMA_PULLBACK,
@@ -15,27 +15,6 @@ from app.strategy import (
     evaluate_breakout_strategy,
     evaluate_pure_smc_strategy,
 )
-
-
-class FakeScannerClient:
-    def __init__(self, candles: list[dict[str, float | str]]) -> None:
-        self.candles = candles
-
-    def safe_fetch_recent_candles(self, symbol: str, interval: str, limit: int):
-        if interval == "5":
-            candle = {
-                "timestamp": datetime.now(UTC).isoformat(),
-                "open": 100.0,
-                "high": 101.0,
-                "low": 99.0,
-                "close": 100.5,
-                "volume": 1000.0,
-            }
-            return True, [candle] * limit, None
-        return True, list(self.candles), None
-
-    def safe_fetch_market_tickers(self):
-        return False, [], "offline"
 
 
 class BreakoutStrategyTests(unittest.TestCase):
@@ -59,7 +38,12 @@ class BreakoutStrategyTests(unittest.TestCase):
         self.assertEqual(signal["direction"], "short")
 
     def test_wick_only_breakout_is_rejected(self) -> None:
-        candles = _build_long_breakout_series(self.base_time, breakout_close=100.4, breakout_high=101.2, breakout_volume=180.0)
+        candles = _build_long_breakout_series(
+            self.base_time,
+            breakout_close=100.4,
+            breakout_high=101.2,
+            breakout_volume=180.0,
+        )
         signal = self._run_breakout(candles, ema_value=99.0, rsi_value=60.0)
 
         self.assertEqual(signal["status"], "rejected")
@@ -137,25 +121,24 @@ class BreakoutStrategyTests(unittest.TestCase):
         self.assertEqual(signal["status"], "active")
         self.assertEqual(signal["detected_at"], candles[-2]["timestamp"])
 
-    def test_scanner_returns_both_strategy_results_with_correct_strategy_name(self) -> None:
-        candles = _build_long_breakout_series(self.base_time, breakout_close=101.0, breakout_volume=180.0)
-        client = FakeScannerClient(candles)
-        with patch("app.scanner._resolve_scan_universe", return_value=["BTCUSDT"]), patch(
-            "app.scanner.evaluate_registered_strategies",
+    def test_signal_pipeline_returns_all_strategy_results_with_correct_names(self) -> None:
+        with patch(
+            "app.signal_pipeline.evaluate_registered_strategies",
             return_value=[
                 _signal("BTCUSDT", STRATEGY_EMA_PULLBACK, "active"),
                 _signal("BTCUSDT", STRATEGY_BREAKOUT, "rejected"),
                 _signal("BTCUSDT", STRATEGY_PURE_SMC, "near_setup"),
             ],
         ):
-            result = run_scan(client)
+            result = evaluate_signal_contexts([_signal_context(self.base_time)])
 
-        self.assertTrue(result["ok"])
         self.assertEqual(len(result["results"]), 3)
         self.assertEqual(
             {item["strategy_name"] for item in result["results"]},
             {STRATEGY_EMA_PULLBACK, STRATEGY_BREAKOUT, STRATEGY_PURE_SMC},
         )
+        self.assertTrue(all(item["trade_type"] == "scalping" for item in result["results"]))
+        self.assertTrue(all(item["market_rank"] == 1 for item in result["results"]))
 
     def _run_breakout(self, candles: list[dict[str, float | str]], *, ema_value: float, rsi_value: float) -> dict:
         with patch("app.strategy._ema", return_value=[ema_value] * len(candles)), patch(
@@ -186,7 +169,12 @@ class PureSmcStrategyTests(unittest.TestCase):
         self.assertEqual(structure["direction"], "bullish")
 
     def test_wick_only_structure_break_rejection(self) -> None:
-        candles = _build_bullish_pure_smc_series(self.base_time, break_close=10.1, break_high=10.5, latest_close=10.1)
+        candles = _build_bullish_pure_smc_series(
+            self.base_time,
+            break_close=10.1,
+            break_high=10.5,
+            latest_close=10.1,
+        )
         signal = evaluate_pure_smc_strategy("BTCUSDT", [], candles, self.base_time)
 
         self.assertEqual(signal["status"], "rejected")
@@ -254,56 +242,83 @@ class PureSmcStrategyTests(unittest.TestCase):
         self.assertEqual(signal["rejection_reason"], "aoi_not_confirmed")
 
     def test_near_setup_before_mitigation(self) -> None:
-        signal = evaluate_pure_smc_strategy("BTCUSDT", [], _build_bullish_pure_smc_series(self.base_time, latest_close=10.1), self.base_time)
+        signal = evaluate_pure_smc_strategy(
+            "BTCUSDT",
+            [],
+            _build_bullish_pure_smc_series(self.base_time, latest_close=10.1),
+            self.base_time,
+        )
 
         self.assertEqual(signal["strategy_name"], STRATEGY_PURE_SMC)
         self.assertEqual(signal["status"], "near_setup")
 
     def test_active_after_mitigation(self) -> None:
-        signal = evaluate_pure_smc_strategy("BTCUSDT", [], _build_bullish_pure_smc_series(self.base_time, latest_close=9.7), self.base_time)
+        signal = evaluate_pure_smc_strategy(
+            "BTCUSDT",
+            [],
+            _build_bullish_pure_smc_series(self.base_time, latest_close=9.7),
+            self.base_time,
+        )
 
         self.assertEqual(signal["strategy_name"], STRATEGY_PURE_SMC)
         self.assertEqual(signal["status"], "active")
         self.assertEqual(signal["direction"], "long")
 
     def test_bullish_invalidation(self) -> None:
-        signal = evaluate_pure_smc_strategy("BTCUSDT", [], _build_bullish_pure_smc_series(self.base_time, latest_close=9.4), self.base_time)
+        signal = evaluate_pure_smc_strategy(
+            "BTCUSDT",
+            [],
+            _build_bullish_pure_smc_series(self.base_time, latest_close=9.4),
+            self.base_time,
+        )
 
         self.assertEqual(signal["status"], "rejected")
         self.assertEqual(signal["rejection_reason"], "setup_invalidated")
 
     def test_bearish_invalidation(self) -> None:
-        signal = evaluate_pure_smc_strategy("BTCUSDT", [], _build_bearish_pure_smc_series(self.base_time, latest_close=10.5), self.base_time)
+        signal = evaluate_pure_smc_strategy(
+            "BTCUSDT",
+            [],
+            _build_bearish_pure_smc_series(self.base_time, latest_close=10.5),
+            self.base_time,
+        )
 
         self.assertEqual(signal["status"], "rejected")
         self.assertEqual(signal["rejection_reason"], "setup_invalidated")
 
     def test_ten_candle_expiry(self) -> None:
-        signal = evaluate_pure_smc_strategy("BTCUSDT", [], _build_bullish_expired_pure_smc_series(self.base_time), self.base_time)
+        signal = evaluate_pure_smc_strategy(
+            "BTCUSDT",
+            [],
+            _build_bullish_expired_pure_smc_series(self.base_time),
+            self.base_time,
+        )
 
         self.assertEqual(signal["status"], "expired")
         self.assertEqual(signal["rejection_reason"], "signal_expired")
 
     def test_rr_is_at_least_one_point_five(self) -> None:
-        signal = evaluate_pure_smc_strategy("BTCUSDT", [], _build_bullish_pure_smc_series(self.base_time, latest_close=9.7), self.base_time)
+        signal = evaluate_pure_smc_strategy(
+            "BTCUSDT",
+            [],
+            _build_bullish_pure_smc_series(self.base_time, latest_close=9.7),
+            self.base_time,
+        )
 
         self.assertEqual(signal["status"], "active")
         self.assertGreaterEqual(signal["risk_reward"], 1.5)
 
-    def test_scanner_returns_three_strategy_results_with_correct_strategy_name(self) -> None:
-        candles = _build_bullish_pure_smc_series(self.base_time, latest_close=9.7)
-        client = FakeScannerClient(candles)
-        with patch("app.scanner._resolve_scan_universe", return_value=["BTCUSDT"]), patch(
-            "app.scanner.evaluate_registered_strategies",
+    def test_signal_pipeline_keeps_three_strategy_results(self) -> None:
+        with patch(
+            "app.signal_pipeline.evaluate_registered_strategies",
             return_value=[
                 _signal("BTCUSDT", STRATEGY_EMA_PULLBACK, "active"),
                 _signal("BTCUSDT", STRATEGY_BREAKOUT, "rejected"),
                 _signal("BTCUSDT", STRATEGY_PURE_SMC, "near_setup"),
             ],
         ):
-            result = run_scan(client)
+            result = evaluate_signal_contexts([_signal_context(self.base_time)])
 
-        self.assertTrue(result["ok"])
         self.assertEqual(len(result["results"]), 3)
         self.assertEqual(
             {item["strategy_name"] for item in result["results"]},
@@ -329,6 +344,26 @@ class PureSmcStrategyTests(unittest.TestCase):
         self.assertEqual(signal["detected_at"], candles[-2]["timestamp"])
 
 
+def _signal_context(base_time: datetime) -> dict:
+    return {
+        "symbol": "BTCUSDT",
+        "market_rank": 1,
+        "trade_type": "scalping",
+        "trend": {"state": "UPTREND", "strength": 90.0, "reason": "test_fixture"},
+        "market_ranking": {"score": 88.0, "components": {}},
+        "scanner_logic": {
+            "status": "eligible",
+            "direction": "long",
+            "reason": "scalping_5m_trend_eligible",
+            "confidence_score": 90,
+        },
+        "setup_candles": [],
+        "trigger_candles": [],
+        "timeframes": {"trend": "5m", "setup": "5m", "trigger": "1m"},
+        "detected_at": base_time.isoformat(),
+    }
+
+
 def _signal(symbol: str, strategy_name: str, status: str) -> dict:
     return {
         "symbol": symbol,
@@ -342,7 +377,13 @@ def _signal(symbol: str, strategy_name: str, status: str) -> dict:
         "detected_at": datetime.now(UTC).isoformat(),
         "status": status,
         "confidence_score": 80 if status == "active" else 70 if status == "near_setup" else 0,
-        "rejection_reason": None if status == "active" else "waiting_for_mitigation" if status == "near_setup" else "breakout_not_detected",
+        "rejection_reason": (
+            None
+            if status == "active"
+            else "waiting_for_mitigation"
+            if status == "near_setup"
+            else "breakout_not_detected"
+        ),
     }
 
 
@@ -417,7 +458,14 @@ def _build_short_breakout_series(
     return candles
 
 
-def _candle(timestamp: datetime, open_price: float, high: float, low: float, close: float, volume: float) -> dict[str, float | str]:
+def _candle(
+    timestamp: datetime,
+    open_price: float,
+    high: float,
+    low: float,
+    close: float,
+    volume: float,
+) -> dict[str, float | str]:
     return {
         "timestamp": timestamp.isoformat(),
         "open": open_price,
@@ -441,7 +489,7 @@ def _build_bullish_pure_smc_series(
     break_high: float = 10.6,
     latest_close: float = 10.1,
 ) -> list[dict[str, float | str]]:
-    candles = [
+    return [
         _candle(base_time + timedelta(minutes=0), 9.8, 9.9, 9.5, 9.7, 100.0),
         _candle(base_time + timedelta(minutes=1), 9.7, 10.2, 9.4, 9.9, 100.0),
         _candle(base_time + timedelta(minutes=2), 9.9, 10.8, 9.8, 10.1, 100.0),
@@ -453,9 +501,15 @@ def _build_bullish_pure_smc_series(
         _candle(base_time + timedelta(minutes=8), 8.8, 9.4, 8.9, 9.2, 100.0),
         _candle(base_time + timedelta(minutes=9), 9.9, 10.0, 9.6, 9.7, 100.0),
         _candle(base_time + timedelta(minutes=10), 9.9, break_high, 9.8, break_close, 140.0),
-        _candle(base_time + timedelta(minutes=11), 10.0, max(10.1, latest_close + 0.2), min(9.6, latest_close - 0.1), latest_close, 90.0),
+        _candle(
+            base_time + timedelta(minutes=11),
+            10.0,
+            max(10.1, latest_close + 0.2),
+            min(9.6, latest_close - 0.1),
+            latest_close,
+            90.0,
+        ),
     ]
-    return candles
 
 
 def _build_bearish_pure_smc_series(
@@ -464,7 +518,7 @@ def _build_bearish_pure_smc_series(
     break_close: float = 10.0,
     latest_close: float = 10.15,
 ) -> list[dict[str, float | str]]:
-    candles = [
+    return [
         _candle(base_time + timedelta(minutes=0), 10.0, 10.2, 9.7, 10.1, 100.0),
         _candle(base_time + timedelta(minutes=1), 10.1, 10.4, 9.9, 10.3, 100.0),
         _candle(base_time + timedelta(minutes=2), 10.3, 10.9, 10.0, 10.6, 100.0),
@@ -476,9 +530,15 @@ def _build_bearish_pure_smc_series(
         _candle(base_time + timedelta(minutes=8), 10.3, 10.35, 10.25, 10.3, 100.0),
         _candle(base_time + timedelta(minutes=9), 10.2, 10.4, 10.15, 10.35, 100.0),
         _candle(base_time + timedelta(minutes=10), 10.05, 10.1, 9.7, break_close, 140.0),
-        _candle(base_time + timedelta(minutes=11), 10.2, max(10.3, latest_close + 0.1), min(9.9, latest_close - 0.2), latest_close, 90.0),
+        _candle(
+            base_time + timedelta(minutes=11),
+            10.2,
+            max(10.3, latest_close + 0.1),
+            min(9.9, latest_close - 0.2),
+            latest_close,
+            90.0,
+        ),
     ]
-    return candles
 
 
 def _build_bullish_expired_pure_smc_series(base_time: datetime) -> list[dict[str, float | str]]:

@@ -4,7 +4,6 @@ import unittest
 from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
-from app.scanner import _normalize_strategy_result
 from app.scanner_logic import (
     PriceZone,
     StructureEvent,
@@ -16,6 +15,7 @@ from app.scanner_logic import (
     confirm_5m_entry,
     evaluate_multitimeframe_logic,
 )
+from app.signal_pipeline import normalize_strategy_result
 
 
 class ScannerLogicTests(unittest.TestCase):
@@ -68,14 +68,9 @@ class ScannerLogicTests(unittest.TestCase):
 
     def test_15m_long_setup_rejects_premium_location(self) -> None:
         with patch("app.scanner_logic._latest_structure_event", return_value=self.long_event), patch(
-            "app.scanner_logic._find_liquidity_sweep",
-            return_value={"side": "sell_side"},
-        ), patch(
-            "app.scanner_logic._find_order_block",
-            return_value=PriceZone(104.0, 106.0),
-        ), patch(
-            "app.scanner_logic._find_fvg",
-            return_value=PriceZone(105.0, 107.0),
+            "app.scanner_logic._find_liquidity_sweep", return_value={"side": "sell_side"}
+        ), patch("app.scanner_logic._find_order_block", return_value=PriceZone(104.0, 106.0)), patch(
+            "app.scanner_logic._find_fvg", return_value=PriceZone(105.0, 107.0)
         ):
             result = analyze_15m_setup(self.candles, trend_state="UPTREND")
         self.assertFalse(result["qualified"])
@@ -168,17 +163,11 @@ class ScannerLogicTests(unittest.TestCase):
         self.assertTrue(_displacement_confirmed(candles, 15, "long"))
         self.assertFalse(_displacement_confirmed(candles, 15, "short"))
 
-    def test_latest_structure_event_classifies_choch_from_prior_bearish_structure(self) -> None:
+    def test_latest_structure_event_classifies_choch(self) -> None:
         normalized = _normalize_candles(self.candles)
         swings = {
-            "highs": [
-                {"index": 4, "price": 112.0},
-                {"index": 10, "price": 110.0},
-            ],
-            "lows": [
-                {"index": 6, "price": 94.0},
-                {"index": 12, "price": 92.0},
-            ],
+            "highs": [{"index": 4, "price": 112.0}, {"index": 10, "price": 110.0}],
+            "lows": [{"index": 6, "price": 94.0}, {"index": 12, "price": 92.0}],
         }
         breakout = normalized[20]
         normalized[20] = type(breakout)(
@@ -207,10 +196,12 @@ class ScannerLogicTests(unittest.TestCase):
         self.assertIn("setup_15m", result)
         self.assertIn("confirmation_5m", result)
 
-    def test_scanner_gate_downgrades_pure_smc_without_5m_confirmation(self) -> None:
-        result = _normalize_strategy_result(
+    def test_intraday_structure_gate_downgrades_without_5m_confirmation(self) -> None:
+        result = normalize_strategy_result(
             symbol="BTCUSDT",
-            result=self._strategy_result("pure_smc"),
+            result=self._strategy_result("pure_smc", trade_type="intraday"),
+            trade_type="intraday",
+            market_rank=1,
             trend={"state": "UPTREND", "strength": 90, "reason": "test"},
             market_ranking={"score": 80, "components": {}},
             scanner_logic={
@@ -221,27 +212,37 @@ class ScannerLogicTests(unittest.TestCase):
                 "setup_15m": {},
                 "confirmation_5m": {},
             },
+            timeframes={"trend": "1h", "setup": "15m", "trigger": "5m"},
         )
         self.assertEqual(result["status"], "near_setup")
         self.assertEqual(result["original_status"], "active")
         self.assertEqual(result["rejection_reason"], "waiting_for_5m_choch")
 
-    def test_scanner_gate_does_not_change_non_structure_strategy(self) -> None:
-        result = _normalize_strategy_result(
+    def test_scalping_structure_signal_does_not_use_intraday_gate(self) -> None:
+        result = normalize_strategy_result(
             symbol="BTCUSDT",
-            result=self._strategy_result("ema_pullback"),
+            result=self._strategy_result("pure_smc", trade_type="scalping"),
+            trade_type="scalping",
+            market_rank=1,
             trend={"state": "UPTREND", "strength": 90, "reason": "test"},
             market_ranking={"score": 80, "components": {}},
-            scanner_logic={
-                "status": "blocked",
-                "direction": None,
-                "reason": "15m_structure_event_not_found",
-                "confidence_score": 0,
-                "setup_15m": {},
-                "confirmation_5m": {},
-            },
+            scanner_logic={"status": "blocked", "reason": "intraday_gate_not_applicable"},
+            timeframes={"trend": "5m", "setup": "5m", "trigger": "1m"},
         )
         self.assertEqual(result["status"], "active")
+        self.assertEqual(result["trade_type"], "scalping")
+
+    def test_missing_trade_type_is_blocked_instead_of_defaulting_to_scalping(self) -> None:
+        result = normalize_strategy_result(
+            symbol="BTCUSDT",
+            result=self._strategy_result("ema_pullback", trade_type=None),
+            trend={"state": "UPTREND", "strength": 90, "reason": "test"},
+            market_ranking={"score": 80, "components": {}},
+            scanner_logic={},
+        )
+        self.assertEqual(result["status"], "blocked")
+        self.assertIsNone(result["trade_type"])
+        self.assertEqual(result["rejection_reason"], "trade_type_missing_or_invalid")
 
     def _qualified_setup_patches(self):
         return _PatchBundle(
@@ -272,8 +273,8 @@ class ScannerLogicTests(unittest.TestCase):
         }
 
     @staticmethod
-    def _strategy_result(strategy_name: str) -> dict:
-        return {
+    def _strategy_result(strategy_name: str, *, trade_type: str | None) -> dict:
+        result = {
             "strategy_name": strategy_name,
             "strategy": strategy_name,
             "direction": "long",
@@ -286,6 +287,9 @@ class ScannerLogicTests(unittest.TestCase):
             "confidence_score": 80,
             "rejection_reason": None,
         }
+        if trade_type is not None:
+            result["trade_type"] = trade_type
+        return result
 
     def _candles(self, count: int, *, body: float = 0.2) -> list[dict[str, float | str]]:
         candles: list[dict[str, float | str]] = []

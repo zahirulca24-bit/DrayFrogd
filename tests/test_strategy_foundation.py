@@ -2,7 +2,7 @@ import unittest
 from datetime import UTC, datetime
 from unittest.mock import patch
 
-from app.scanner import run_scan
+from app.signal_pipeline import evaluate_signal_contexts
 from app.strategy import (
     STRATEGY_EMA_PULLBACK,
     Candle,
@@ -12,41 +12,27 @@ from app.strategy import (
 )
 
 
-class FakeScannerClient:
-    def safe_fetch_recent_candles(self, symbol: str, interval: str, limit: int):
-        candle = {
-            "timestamp": datetime.now(UTC).isoformat(),
-            "open": 100.0,
-            "high": 101.0,
-            "low": 99.0,
-            "close": 100.5,
-            "volume": 1000.0,
-        }
-        return True, [candle] * limit, None
-
-    def safe_fetch_market_tickers(self):
-        return False, [], "offline"
-
-
 class StrategyFoundationTests(unittest.TestCase):
     def setUp(self) -> None:
         self.base_time = datetime(2026, 7, 10, 0, 0, tzinfo=UTC)
         self.candles_5m = [
             {
-                "timestamp": (self.base_time).isoformat(),
+                "timestamp": self.base_time.isoformat(),
                 "open": 100.0,
                 "high": 100.5,
                 "low": 99.5,
                 "close": 100.2,
+                "volume": 1000.0,
             }
         ] * 260
         self.candles_1m = [
             {
-                "timestamp": (self.base_time).isoformat(),
+                "timestamp": self.base_time.isoformat(),
                 "open": 100.0,
                 "high": 100.5,
                 "low": 99.5,
                 "close": 100.2,
+                "volume": 1000.0,
             }
         ] * 40
 
@@ -88,34 +74,41 @@ class StrategyFoundationTests(unittest.TestCase):
         ]:
             self.assertIn(field, signal)
 
-    def test_scanner_preserves_strategy_name(self) -> None:
-        with patch("app.scanner._resolve_scan_universe", return_value=["BTCUSDT"]), patch(
-            "app.scanner.evaluate_registered_strategies",
-            return_value=[
-                {
-                    "strategy_name": STRATEGY_EMA_PULLBACK,
-                    "strategy": STRATEGY_EMA_PULLBACK,
-                    "symbol": "BTCUSDT",
-                    "direction": "long",
-                    "entry": 100.0,
-                    "stop_loss": 95.0,
-                    "take_profit": 110.0,
-                    "risk_reward": 2.0,
-                    "confidence_score": 80,
-                    "detected_at": self.base_time.isoformat(),
-                    "status": "active",
-                    "rejection_reason": None,
-                }
-            ],
-        ), patch(
-            "app.scanner.analyze_trend",
-            return_value={"state": "UPTREND", "strength": 90.0, "reason": "test_fixture"},
-        ):
-            result = run_scan(FakeScannerClient())
+    def test_signal_pipeline_preserves_strategy_name_trade_type_and_market_rank(self) -> None:
+        strategy_result = {
+            "strategy_name": STRATEGY_EMA_PULLBACK,
+            "strategy": STRATEGY_EMA_PULLBACK,
+            "symbol": "BTCUSDT",
+            "direction": "long",
+            "entry": 100.0,
+            "stop_loss": 95.0,
+            "take_profit": 110.0,
+            "risk_reward": 2.0,
+            "confidence_score": 80,
+            "detected_at": self.base_time.isoformat(),
+            "status": "active",
+            "rejection_reason": None,
+        }
+        context = {
+            "symbol": "BTCUSDT",
+            "market_rank": 1,
+            "trade_type": "scalping",
+            "trend": {"state": "UPTREND", "strength": 90.0, "reason": "test_fixture"},
+            "market_ranking": {"score": 88.0, "components": {}},
+            "scanner_logic": {"status": "eligible", "direction": "long", "reason": "test_fixture"},
+            "setup_candles": self.candles_5m,
+            "trigger_candles": self.candles_1m,
+            "timeframes": {"trend": "5m", "setup": "5m", "trigger": "1m"},
+        }
+        with patch("app.signal_pipeline.evaluate_registered_strategies", return_value=[strategy_result]):
+            result = evaluate_signal_contexts([context])
 
-        self.assertTrue(result["ok"])
-        self.assertEqual(result["signals"][0]["strategy_name"], STRATEGY_EMA_PULLBACK)
-        self.assertEqual(result["results"][0]["strategy_name"], STRATEGY_EMA_PULLBACK)
+        self.assertTrue(result["signals"])
+        signal = result["signals"][0]
+        self.assertEqual(signal["strategy_name"], STRATEGY_EMA_PULLBACK)
+        self.assertEqual(signal["trade_type"], "scalping")
+        self.assertEqual(signal["market_rank"], 1)
+        self.assertEqual(signal["timeframes"]["trigger"], "1m")
 
     def test_direction_aware_long_pullback_is_allowed(self) -> None:
         candles_1m = self._build_ema_pullback_candles(
@@ -129,7 +122,9 @@ class StrategyFoundationTests(unittest.TestCase):
             trigger_close=100.8,
         )
 
-        with patch("app.strategy._detect_bias", return_value="long"), patch("app.strategy._ema", return_value=[100.0] * len(candles_1m)):
+        with patch("app.strategy._detect_bias", return_value="long"), patch(
+            "app.strategy._ema", return_value=[100.0] * len(candles_1m)
+        ):
             signal = evaluate_ema_pullback_strategy("BTCUSDT", self.candles_5m, candles_1m, self.base_time)
 
         self.assertEqual(signal["status"], "active")
@@ -148,7 +143,9 @@ class StrategyFoundationTests(unittest.TestCase):
             trigger_close=99.2,
         )
 
-        with patch("app.strategy._detect_bias", return_value="short"), patch("app.strategy._ema", return_value=[100.0] * len(candles_1m)):
+        with patch("app.strategy._detect_bias", return_value="short"), patch(
+            "app.strategy._ema", return_value=[100.0] * len(candles_1m)
+        ):
             signal = evaluate_ema_pullback_strategy("BTCUSDT", self.candles_5m, candles_1m, self.base_time)
 
         self.assertEqual(signal["status"], "active")
@@ -167,7 +164,9 @@ class StrategyFoundationTests(unittest.TestCase):
             trigger_close=99.95,
         )
 
-        with patch("app.strategy._detect_bias", return_value="long"), patch("app.strategy._ema", return_value=[100.0] * len(candles_1m)):
+        with patch("app.strategy._detect_bias", return_value="long"), patch(
+            "app.strategy._ema", return_value=[100.0] * len(candles_1m)
+        ):
             signal = evaluate_ema_pullback_strategy("BTCUSDT", self.candles_5m, candles_1m, self.base_time)
 
         self.assertEqual(signal["status"], "rejected")
@@ -199,7 +198,7 @@ class StrategyFoundationTests(unittest.TestCase):
         trigger_close: float,
     ) -> list[dict[str, float | str]]:
         candles: list[dict[str, float | str]] = []
-        for index in range(38):
+        for _ in range(38):
             candles.append(
                 {
                     "timestamp": self.base_time.isoformat(),

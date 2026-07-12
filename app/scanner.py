@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+from datetime import UTC, datetime, timedelta
 from threading import Lock
 from typing import Any
 
@@ -11,22 +14,34 @@ from app.scanner_trend import (
     TREND_UP,
     analyze_trend,
     closed_candles,
-    direction_allowed,
     score_market_candidate,
 )
-from app.strategy import evaluate_registered_strategies
+from app.signal_pipeline import evaluate_signal_contexts, normalize_strategy_result
 
 
 SCANNER_SYMBOLS: list[str] = []
-UNIVERSE_LIMIT = 50
-TREND_CANDLE_LIMIT = 250
-SETUP_CANDLE_LIMIT = 250
-TRIGGER_CANDLE_LIMIT = 100
+UNIVERSE_LIMIT = 30
 
-TREND_INTERVAL = "60"
-SETUP_INTERVAL = "15"
-TRIGGER_INTERVAL = "5"
-STRUCTURE_STRATEGIES = {"pure_smc", "hybrid"}
+INTRADAY_TREND_CANDLE_LIMIT = 250
+INTRADAY_SETUP_CANDLE_LIMIT = 250
+SCALPING_SETUP_CANDLE_LIMIT = 250
+SCALPING_TRIGGER_CANDLE_LIMIT = 250
+
+INTRADAY_TREND_INTERVAL = "60"
+INTRADAY_SETUP_INTERVAL = "15"
+SHARED_5M_INTERVAL = "5"
+SCALPING_TRIGGER_INTERVAL = "1"
+
+# Backward-compatible names for callers that inspect Scanner constants.
+TREND_CANDLE_LIMIT = INTRADAY_TREND_CANDLE_LIMIT
+SETUP_CANDLE_LIMIT = INTRADAY_SETUP_CANDLE_LIMIT
+TRIGGER_CANDLE_LIMIT = SCALPING_SETUP_CANDLE_LIMIT
+TREND_INTERVAL = INTRADAY_TREND_INTERVAL
+SETUP_INTERVAL = INTRADAY_SETUP_INTERVAL
+TRIGGER_INTERVAL = SHARED_5M_INTERVAL
+
+STALE_INTERVAL_MULTIPLIER = 2
+STALE_DATA = "STALE_DATA"
 
 # Liquidity and execution-quality thresholds for symbol selection.
 MIN_TURNOVER_24H = 50_000_000.0
@@ -38,93 +53,183 @@ _latest_scan_results: list[dict[str, Any]] = []
 _latest_ranked_markets: list[dict[str, Any]] = []
 _latest_universe_metadata: dict[str, dict[str, Any]] = {}
 
+# Strict normalization remains available for existing internal imports.
+_normalize_strategy_result = normalize_strategy_result
 
-def run_scan(client: BybitDemoClient) -> dict[str, Any]:
+
+def run_scan(client: BybitDemoClient, now: datetime | None = None) -> dict[str, Any]:
+    """Run market scanning, then hand only eligible ranked contexts to Signal Pipeline."""
+
+    reference = _normalize_now(now)
     universe = _resolve_scan_universe(client)
-    signals: list[dict[str, Any]] = []
-    scan_results: list[dict[str, Any]] = []
     ranked_markets: list[dict[str, Any]] = []
+    rejected_markets: list[dict[str, Any]] = []
     skipped: list[dict[str, str]] = []
+    pending_contexts: dict[str, list[dict[str, Any]]] = {}
 
     with _signals_lock:
         ticker_metadata = {symbol: dict(item) for symbol, item in _latest_universe_metadata.items()}
 
     for symbol in universe:
-        ok_1h, candles_1h, error_1h = client.safe_fetch_recent_candles(
-            symbol=symbol,
-            interval=TREND_INTERVAL,
-            limit=TREND_CANDLE_LIMIT,
+        fetched = _fetch_profile_candles(client, symbol, skipped)
+        closed_1h = closed_candles(fetched.get("1h", []), interval_minutes=60, now=reference)
+        closed_15m = closed_candles(fetched.get("15m", []), interval_minutes=15, now=reference)
+        closed_5m = closed_candles(fetched.get("5m", []), interval_minutes=5, now=reference)
+        closed_1m = closed_candles(fetched.get("1m", []), interval_minutes=1, now=reference)
+
+        scalping_trend = _profile_trend(closed_5m, interval_minutes=5, now=reference)
+        intraday_trend = _profile_trend(closed_1h, interval_minutes=60, now=reference)
+
+        scalping_reason = _profile_rejection_reason(
+            scalping_trend,
+            setup_candles=closed_5m,
+            setup_interval_minutes=5,
+            trigger_candles=closed_1m,
+            trigger_interval_minutes=1,
+            now=reference,
         )
-        if not ok_1h:
-            skipped.append({"symbol": symbol, "reason": error_1h or "Failed to fetch 1h candles"})
+        intraday_reason = _profile_rejection_reason(
+            intraday_trend,
+            setup_candles=closed_15m,
+            setup_interval_minutes=15,
+            trigger_candles=closed_5m,
+            trigger_interval_minutes=5,
+            now=reference,
+        )
+
+        scalping_eligible = scalping_reason is None
+        intraday_eligible = intraday_reason is None
+
+        intraday_logic = (
+            evaluate_multitimeframe_logic(
+                symbol,
+                closed_15m,
+                closed_5m,
+                trend_state=str(intraday_trend.get("state") or ""),
+            )
+            if intraday_eligible
+            else {
+                "status": "blocked",
+                "direction": None,
+                "reason": intraday_reason,
+                "confidence_score": 0,
+                "setup_15m": {},
+                "confirmation_5m": {},
+            }
+        )
+
+        profile_metadata = {
+            "scalping": {
+                "eligible": scalping_eligible,
+                "approved_direction": _approved_direction(scalping_trend),
+                "rejection_reason": scalping_reason,
+                "trend": scalping_trend,
+                "timeframes": _scalping_timeframes(),
+            },
+            "intraday": {
+                "eligible": intraday_eligible,
+                "approved_direction": _approved_direction(intraday_trend),
+                "rejection_reason": intraday_reason,
+                "trend": intraday_trend,
+                "scanner_logic": intraday_logic,
+                "timeframes": _intraday_timeframes(),
+            },
+        }
+
+        if not scalping_eligible and not intraday_eligible:
+            rejected_markets.append(
+                {
+                    "symbol": symbol,
+                    "profiles": profile_metadata,
+                    "reason": "no_eligible_trade_profile",
+                }
+            )
             continue
 
-        ok_15m, candles_15m, error_15m = client.safe_fetch_recent_candles(
-            symbol=symbol,
-            interval=SETUP_INTERVAL,
-            limit=SETUP_CANDLE_LIMIT,
-        )
-        if not ok_15m:
-            skipped.append({"symbol": symbol, "reason": error_15m or "Failed to fetch 15m candles"})
-            continue
-
-        ok_5m, candles_5m, error_5m = client.safe_fetch_recent_candles(
-            symbol=symbol,
-            interval=TRIGGER_INTERVAL,
-            limit=TRIGGER_CANDLE_LIMIT,
-        )
-        if not ok_5m:
-            skipped.append({"symbol": symbol, "reason": error_5m or "Failed to fetch 5m candles"})
-            continue
-
-        closed_1h = closed_candles(candles_1h, interval_minutes=60)
-        closed_15m = closed_candles(candles_15m, interval_minutes=15)
-        closed_5m = closed_candles(candles_5m, interval_minutes=5)
-        trend = analyze_trend(closed_1h, interval_minutes=60)
-        scanner_logic = evaluate_multitimeframe_logic(
-            symbol,
-            closed_15m,
-            closed_5m,
-            trend_state=str(trend.get("state") or ""),
-        )
-        completeness = _data_completeness(closed_1h, closed_15m, closed_5m)
+        completeness = _data_completeness(closed_1h, closed_15m, closed_5m, closed_1m)
         ticker = ticker_metadata.get(symbol, {})
+        strongest_trend = max(
+            float(scalping_trend.get("strength") or 0.0) if scalping_eligible else 0.0,
+            float(intraday_trend.get("strength") or 0.0) if intraday_eligible else 0.0,
+        )
         market_ranking = score_market_candidate(
             ticker,
-            trend_strength=float(trend.get("strength") or 0.0),
+            trend_strength=strongest_trend,
             data_completeness=completeness,
         )
         market_snapshot = {
             "symbol": symbol,
+            "market_rank": None,
             "score": market_ranking["score"],
+            "market_score": market_ranking["score"],
             "score_components": market_ranking["components"],
             "spread_bps": market_ranking["spread_bps"],
-            "trend": trend,
-            "scanner_logic": scanner_logic,
+            "eligible_profiles": [
+                profile
+                for profile, eligible in (("scalping", scalping_eligible), ("intraday", intraday_eligible))
+                if eligible
+            ],
+            "profiles": profile_metadata,
             "data_completeness": round(completeness, 4),
         }
         ranked_markets.append(market_snapshot)
 
-        strategy_results = evaluate_registered_strategies(
-            symbol=symbol,
-            candles_5m=closed_15m,
-            candles_1m=closed_5m,
-        )
-        for result in strategy_results:
-            normalized = _normalize_strategy_result(
-                symbol=symbol,
-                result=result,
-                trend=trend,
-                market_ranking=market_ranking,
-                scanner_logic=scanner_logic,
+        contexts: list[dict[str, Any]] = []
+        if scalping_eligible:
+            contexts.append(
+                {
+                    "symbol": symbol,
+                    "trade_type": "scalping",
+                    "trend": scalping_trend,
+                    "scanner_logic": {
+                        "status": "eligible",
+                        "direction": _approved_direction(scalping_trend),
+                        "reason": "scalping_5m_trend_eligible",
+                        "confidence_score": scalping_trend.get("strength"),
+                    },
+                    "setup_candles": closed_5m,
+                    "trigger_candles": closed_1m,
+                    "timeframes": _scalping_timeframes(),
+                }
             )
-            scan_results.append(normalized)
-            if normalized.get("direction") and normalized.get("status") == "active":
-                signals.append(normalized)
+        if intraday_eligible:
+            contexts.append(
+                {
+                    "symbol": symbol,
+                    "trade_type": "intraday",
+                    "trend": intraday_trend,
+                    "scanner_logic": intraday_logic,
+                    "setup_candles": closed_15m,
+                    "trigger_candles": closed_5m,
+                    "timeframes": _intraday_timeframes(),
+                }
+            )
+        pending_contexts[symbol] = contexts
 
-    signals.sort(key=_signal_sort_key)
-    scan_results.sort(key=_result_sort_key)
     ranked_markets.sort(key=lambda item: (-float(item.get("score") or 0.0), str(item.get("symbol") or "")))
+    ranked_markets = ranked_markets[:UNIVERSE_LIMIT]
+
+    strategy_contexts: list[dict[str, Any]] = []
+    for market_rank, market in enumerate(ranked_markets, start=1):
+        market["market_rank"] = market_rank
+        symbol = str(market.get("symbol") or "")
+        market_ranking = {
+            "score": market.get("score"),
+            "components": market.get("score_components"),
+            "spread_bps": market.get("spread_bps"),
+        }
+        for context in pending_contexts.get(symbol, []):
+            strategy_contexts.append(
+                {
+                    **context,
+                    "market_rank": market_rank,
+                    "market_ranking": market_ranking,
+                }
+            )
+
+    pipeline = evaluate_signal_contexts(strategy_contexts)
+    signals = list(pipeline.get("signals") or [])
+    scan_results = list(pipeline.get("results") or [])
 
     with _signals_lock:
         _latest_signals.clear()
@@ -138,16 +243,18 @@ def run_scan(client: BybitDemoClient) -> dict[str, Any]:
         "ok": True,
         "symbols_scanned": len(universe),
         "universe": universe,
+        "ranked_symbols": len(ranked_markets),
         "signals_found": len(signals),
-        "signals": list(signals),
-        "results": list(scan_results),
-        "ranked_markets": list(ranked_markets),
+        "strategy_checks": int(pipeline.get("strategy_checks") or 0),
+        "signals": signals,
+        "results": scan_results,
+        "ranked_markets": ranked_markets,
+        "rejected_markets": rejected_markets,
         "skipped": skipped,
         "max_spread_bps": MAX_SPREAD_BPS,
         "timeframes": {
-            "trend": "1h",
-            "setup": "15m",
-            "trigger": "5m",
+            "scalping": _scalping_timeframes(),
+            "intraday": _intraday_timeframes(),
             "open_candle_confirmation": False,
         },
     }
@@ -168,80 +275,90 @@ def get_ranked_markets() -> list[dict[str, Any]]:
         return list(_latest_ranked_markets)
 
 
-def _normalize_strategy_result(
-    *,
+def _fetch_profile_candles(
+    client: BybitDemoClient,
     symbol: str,
-    result: dict[str, Any],
-    trend: dict[str, Any],
-    market_ranking: dict[str, Any],
-    scanner_logic: dict[str, Any],
+    skipped: list[dict[str, str]],
+) -> dict[str, list[dict[str, Any]]]:
+    specs = (
+        ("1h", INTRADAY_TREND_INTERVAL, INTRADAY_TREND_CANDLE_LIMIT),
+        ("15m", INTRADAY_SETUP_INTERVAL, INTRADAY_SETUP_CANDLE_LIMIT),
+        ("5m", SHARED_5M_INTERVAL, SCALPING_SETUP_CANDLE_LIMIT),
+        ("1m", SCALPING_TRIGGER_INTERVAL, SCALPING_TRIGGER_CANDLE_LIMIT),
+    )
+    fetched: dict[str, list[dict[str, Any]]] = {}
+    for label, interval, limit in specs:
+        ok, candles, error = client.safe_fetch_recent_candles(symbol=symbol, interval=interval, limit=limit)
+        if ok:
+            fetched[label] = list(candles or [])
+        else:
+            fetched[label] = []
+            skipped.append({"symbol": symbol, "profile_data": label, "reason": error or f"Failed to fetch {label} candles"})
+    return fetched
+
+
+def _profile_trend(
+    candles: list[dict[str, Any]],
+    *,
+    interval_minutes: int,
+    now: datetime,
 ) -> dict[str, Any]:
-    original_status = result.get("status")
-    direction = result.get("direction")
-    strategy_name = str(result.get("strategy_name") or result.get("strategy") or "")
-    normalized = {
-        "symbol": symbol,
-        "strategy_name": strategy_name,
-        "strategy": result.get("strategy") or result.get("strategy_name"),
-        "trade_type": result.get("trade_type") or "scalping",
-        "direction": direction,
-        "entry": result.get("entry"),
-        "stop_loss": result.get("stop_loss"),
-        "take_profit": result.get("take_profit"),
-        "risk_reward": result.get("risk_reward"),
-        "detected_at": result.get("detected_at"),
-        "status": original_status,
-        "confidence_score": result.get("confidence_score"),
-        "rejection_reason": result.get("rejection_reason"),
-        "trend_state": trend.get("state"),
-        "trend_strength": trend.get("strength"),
-        "trend_reason": trend.get("reason"),
-        "trend_aligned": direction_allowed(str(trend.get("state") or ""), direction),
-        "market_score": market_ranking.get("score"),
-        "market_score_components": market_ranking.get("components"),
-        "scanner_logic_status": scanner_logic.get("status"),
-        "scanner_logic_direction": scanner_logic.get("direction"),
-        "scanner_logic_reason": scanner_logic.get("reason"),
-        "scanner_logic_confidence": scanner_logic.get("confidence_score"),
-        "setup_15m": scanner_logic.get("setup_15m"),
-        "confirmation_5m": scanner_logic.get("confirmation_5m"),
-        "timeframes": {"trend": "1h", "setup": "15m", "trigger": "5m"},
-    }
-
-    if direction and original_status in {"active", "near_setup"} and not normalized["trend_aligned"]:
-        normalized["original_status"] = original_status
-        normalized["status"] = "blocked"
-        normalized["rejection_reason"] = _trend_block_reason(str(trend.get("state") or ""), str(direction))
-        return normalized
-
-    if strategy_name.lower() in STRUCTURE_STRATEGIES and direction and original_status in {"active", "near_setup"}:
-        _apply_structure_gate(normalized, scanner_logic)
-
-    return normalized
+    trend = analyze_trend(candles, interval_minutes=interval_minutes, now=now)
+    if trend.get("state") in {TREND_UP, TREND_DOWN} and not _candles_are_fresh(candles, interval_minutes, now):
+        return {
+            **trend,
+            "state": STALE_DATA,
+            "strength": 0.0,
+            "reason": f"stale_{interval_minutes}m_trend_candles",
+        }
+    return trend
 
 
-def _apply_structure_gate(normalized: dict[str, Any], scanner_logic: dict[str, Any]) -> None:
-    original_status = str(normalized.get("status") or "")
-    direction = str(normalized.get("direction") or "").lower()
-    logic_direction = str(scanner_logic.get("direction") or "").lower()
-    logic_status = str(scanner_logic.get("status") or "")
+def _profile_rejection_reason(
+    trend: dict[str, Any],
+    *,
+    setup_candles: list[dict[str, Any]],
+    setup_interval_minutes: int,
+    trigger_candles: list[dict[str, Any]],
+    trigger_interval_minutes: int,
+    now: datetime,
+) -> str | None:
+    state = str(trend.get("state") or "")
+    if state == TREND_SIDEWAYS:
+        return "trend_sideways"
+    if state == TREND_INSUFFICIENT:
+        return "trend_insufficient_data"
+    if state == STALE_DATA:
+        return "trend_stale_data"
+    if state not in {TREND_UP, TREND_DOWN}:
+        return "trend_not_eligible"
+    if not _candles_are_fresh(setup_candles, setup_interval_minutes, now):
+        return "setup_data_missing_or_stale"
+    if not _candles_are_fresh(trigger_candles, trigger_interval_minutes, now):
+        return "trigger_data_missing_or_stale"
+    return None
 
-    if logic_direction and logic_direction != direction:
-        normalized["original_status"] = original_status
-        normalized["status"] = "blocked"
-        normalized["rejection_reason"] = "scanner_logic_direction_mismatch"
-        return
 
-    if original_status == "active" and logic_status != "active":
-        normalized["original_status"] = original_status
-        normalized["status"] = "near_setup" if logic_status == "near_setup" else "blocked"
-        normalized["rejection_reason"] = scanner_logic.get("reason") or "scanner_logic_not_confirmed"
-        return
+def _candles_are_fresh(candles: list[dict[str, Any]], interval_minutes: int, now: datetime) -> bool:
+    if not candles:
+        return False
+    timestamp = _parse_timestamp(candles[-1].get("timestamp"))
+    if timestamp is None:
+        return False
+    closed_at = timestamp + timedelta(minutes=max(1, interval_minutes))
+    if closed_at > now:
+        return False
+    maximum_age = timedelta(minutes=max(1, interval_minutes) * STALE_INTERVAL_MULTIPLIER)
+    return now - closed_at <= maximum_age
 
-    if original_status == "near_setup" and logic_status in {"blocked", "rejected"}:
-        normalized["original_status"] = original_status
-        normalized["status"] = "blocked"
-        normalized["rejection_reason"] = scanner_logic.get("reason") or "scanner_logic_not_confirmed"
+
+def _approved_direction(trend: dict[str, Any]) -> str | None:
+    state = str(trend.get("state") or "")
+    if state == TREND_UP:
+        return "long"
+    if state == TREND_DOWN:
+        return "short"
+    return None
 
 
 def _resolve_scan_universe(client: BybitDemoClient) -> list[str]:
@@ -298,45 +415,55 @@ def _data_completeness(
     candles_1h: list[dict[str, Any]],
     candles_15m: list[dict[str, Any]],
     candles_5m: list[dict[str, Any]],
+    candles_1m: list[dict[str, Any]],
 ) -> float:
     ratios = (
         min(len(candles_1h) / 55.0, 1.0),
         min(len(candles_15m) / 214.0, 1.0),
-        min(len(candles_5m) / 40.0, 1.0),
+        min(len(candles_5m) / 214.0, 1.0),
+        min(len(candles_1m) / 40.0, 1.0),
     )
     return sum(ratios) / len(ratios)
 
 
-def _trend_block_reason(trend_state: str, direction: str) -> str:
-    if trend_state == TREND_SIDEWAYS:
-        return "trend_sideways"
-    if trend_state == TREND_INSUFFICIENT:
-        return "trend_insufficient_data"
-    if trend_state == TREND_UP and direction.lower() != "long":
-        return "trend_conflict_uptrend_long_only"
-    if trend_state == TREND_DOWN and direction.lower() != "short":
-        return "trend_conflict_downtrend_short_only"
-    return "trend_not_aligned"
+def _scalping_timeframes() -> dict[str, Any]:
+    return {
+        "trend": "5m",
+        "setup": "5m",
+        "trigger": "1m",
+        "open_candle_confirmation": False,
+    }
 
 
-def _signal_sort_key(item: dict[str, Any]) -> tuple[float, float, str, str]:
-    return (
-        -float(item.get("market_score") or 0.0),
-        -float(item.get("confidence_score") or 0.0),
-        str(item.get("symbol") or ""),
-        str(item.get("strategy_name") or ""),
-    )
+def _intraday_timeframes() -> dict[str, Any]:
+    return {
+        "trend": "1h",
+        "setup": "15m",
+        "trigger": "5m",
+        "open_candle_confirmation": False,
+    }
 
 
-def _result_sort_key(item: dict[str, Any]) -> tuple[int, float, float, str, str]:
-    priority = {"active": 0, "near_setup": 1, "blocked": 2, "rejected": 3, "expired": 4}
-    return (
-        priority.get(str(item.get("status") or ""), 9),
-        -float(item.get("market_score") or 0.0),
-        -float(item.get("confidence_score") or 0.0),
-        str(item.get("symbol") or ""),
-        str(item.get("strategy_name") or ""),
-    )
+def _parse_timestamp(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, str):
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    else:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def _normalize_now(value: datetime | None) -> datetime:
+    current = value or datetime.now(UTC)
+    if current.tzinfo is None:
+        return current.replace(tzinfo=UTC)
+    return current.astimezone(UTC)
 
 
 def _normalize_price_movement_ratio(value: Any) -> float:
