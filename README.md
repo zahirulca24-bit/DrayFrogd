@@ -4,292 +4,41 @@ Bybit-first automated trading terminal built with **FastAPI, React, PostgreSQL a
 
 The project is currently in **Demo Beta / Engineering Verification**. Live-capital trading is not approved.
 
-> **Last documentation update:** 12 July 2026, 11:30 PM BDT (`Asia/Dhaka`)  
-> **Runtime evidence captured:** 12 July 2026, approximately 9:15 PM–9:21 PM BDT  
-> **Current phase:** Runtime Verification and Trade Management Hardening  
+> **Last documentation update:** 12 July 2026, 11:36 PM BDT (`Asia/Dhaka`)  
 > **Latest `main` commit:** `234c4733321974ecb898abb5bfa3aa64ca6ea2a9` — PR #30  
-> **Latest verified CI:** run #227 — backend compile passed, backend tests **180/180**, frontend TypeScript passed, frontend production build passed  
 > **Documentation PR:** PR #31 — branch `docs/readme-runtime-audit-2026-07-12`  
+> **Current phase:** Runtime Verification and Trade Management Hardening  
 > **Live trading:** blocked by default
 
 ---
 
-## 1. Progress Measurement Rules
+# Part A — Locked Master Plan
 
-Progress percentages in this README are **gate-based**, not subjective estimates.
+This part contains the approved product plan and engineering rules only. Daily results, PASS/FAIL evidence and temporary progress updates must not be inserted inside this section.
 
-- A code roadmap task reaches **100%** only when its approved scope is implemented, tested, merged and supported by recorded CI evidence.
-- A runtime task reaches **100%** only when the deployed application and Bybit Demo evidence confirm the full lifecycle.
-- A documentation task reaches **100%** only after content update, branch commit, PR, CI and approved merge are complete.
-- A green CI run proves only tested code/build paths. It does not prove exchange fills, protection amendments, journal synchronization or real runtime safety.
+## 1. Product Objective
 
----
+DrayFrogd is designed to:
 
-## 2. Current Work Progress Ledger
+1. Scan liquid Bybit USDT perpetual markets.
+2. Build separate Scalping and Intraday market contexts.
+3. Reject sideways, stale, insufficient-data and high-spread markets.
+4. Rank eligible markets deterministically.
+5. Evaluate approved strategies only in the trend-approved direction.
+6. Produce canonical useful signals.
+7. Recompute trade geometry and risk server-side.
+8. Size positions using fixed USDT risk and Stop Loss distance.
+9. Reserve risk, symbol and execution state before exchange submission.
+10. Confirm actual fills and verify exchange protection.
+11. Apply the authoritative Scalping or Intraday management profile.
+12. Reconcile partial fills, fees, realized PnL and lifecycle evidence.
+13. Provide an administrative React terminal for monitoring and control.
 
-### Completed engineering roadmap
-
-| Work item | Completed gates | Progress | Evidence |
-|---|---:|---:|---|
-| Scanner Architecture and Profile Separation | 4/4 | **100%** | PR #27 merged; backend compile; **171/171** backend tests; frontend checks passed |
-| Strategy and Signal Pipeline | 4/4 | **100%** | PR #28 merged; backend compile; **180/180** backend tests; frontend checks passed |
-| Scanner and Signal UI Truthfulness | 4/4 | **100% implementation scope** | PR #30 merged; CI run #227; backend **180/180**; frontend checks passed |
-| README Runtime Audit Update | 3/5 | **60% closure** | Content updated, branch committed and PR #31 opened; CI and merge remain pending |
-
-### Runtime verification and repair program
-
-| Work item | Verified gates | Progress | Current state |
-|---|---:|---:|---|
-| Scalping deployed lifecycle verification | 4/10 | **40%** | Entry, initial protection, TP1 partial close and TP2 partial close verified; remaining lifecycle failed/pending |
-| TP2 → TP1-price SL profit-lock repair | 0/5 | **0%** | Critical defect confirmed; implementation not started |
-| Partial-close journal, fees and realized-PnL synchronization | 0/6 | **0%** | Defect confirmed; implementation not started |
-| Strategy/trade-profile metadata recovery | 0/5 | **0%** | `unknown`/missing metadata confirmed; implementation not started |
-| TP-stage and risk-value frontend consistency | 0/5 | **0%** | UI mismatch confirmed; implementation not started |
-| Blank-page reproduction and stability repair | 0/4 | **0%** | Symptom observed; root cause not confirmed |
-| Complete Intraday lifecycle verification | 0/8 | **0%** | Not started |
-| Restart, close-path and orphan-order verification | 0/6 | **0%** | Not started |
-
-### Scalping lifecycle gate details
-
-The current **4/10 = 40%** verification score is based on these explicit gates:
-
-- [x] Exchange position opened.
-- [x] Initial SL and final TP visible.
-- [x] TP1 closed approximately 50%.
-- [x] TP2 closed approximately 25%.
-- [ ] TP2 moved remaining SL to TP1 price — **failed**.
-- [ ] Remaining 25% remained correctly protected — **failed**.
-- [ ] Partial-close journal lifecycle synchronized — **failed**.
-- [ ] Fees and realized PnL synchronized — **failed**.
-- [ ] Strategy/profile metadata remained authoritative — **failed**.
-- [ ] Final close and order cleanup verified — **pending**.
+The application is **demo-first**. Live trading remains disabled until every release gate is completed and explicitly approved.
 
 ---
 
-## 3. Runtime Verification Checklist — 12 July 2026
-
-This section records evidence observed from the deployed Render application and the connected Bybit Demo account. Checked items are evidence-confirmed. Unchecked items remain defects or pending verification.
-
-### Evidence confirmed
-
-- [x] Deployed frontend loaded and authenticated successfully.
-- [x] Backend, admin authentication, exchange API keys, exchange connection and wallet synchronization showed ready.
-- [x] One ZECUSDT demo position was visible in both DrayFrogd and Bybit.
-- [x] ZECUSDT entry was approximately `530.04` with initial SL `527.54`.
-- [x] The approved Scalping ladder was created:
-  - TP1 approximately `533.79` — close about 50%.
-  - TP2 approximately `535.04` — close about 25%.
-  - Final TP `536.29` — close the remaining 25%.
-- [x] Bybit transaction evidence showed an initial quantity of about `7.97`, a TP1 close of about `3.98`, a TP2 close of about `1.99`, and about `2.00` remaining.
-- [x] Partial TP execution worked at the exchange.
-- [x] Active position quantity, entry, mark price, exposure and floating PnL were broadly synchronized with the exchange snapshot.
-
-### Confirmed runtime defects
-
-- [ ] **CRITICAL — Scalping TP2 profit lock failed.** After TP2, the remaining position SL still showed the original loss stop `527.54`. The locked rule requires the remaining 25% SL to move to the TP1 price, approximately `533.79`.
-- [ ] **TP-stage UI is incorrect.** The Active Trades page displayed final TP `536.29` as `TP1`; the actual TP1 and TP2 stages were not presented correctly.
-- [ ] **Partial-close journal synchronization is incomplete.** The exchange showed partial closes and fees, while the journal still showed one open trade with no partial-close lifecycle evidence.
-- [ ] **Realized PnL synchronization is incorrect.** The Dashboard showed `Today's Realized = 0.00` even though Bybit showed realized cash flow from the ZECUSDT partial closes.
-- [ ] **Fees are missing from the journal.** The exchange recorded fees, but the trade record showed `N/A`.
-- [ ] **Trade metadata was not authoritative after recovery/adoption.** Strategy was `unknown`; trade type, management profile and signal timestamp were missing or unavailable.
-- [ ] **Risk settings are inconsistent across pages.** Dashboard showed `1.00%` risk per trade while Control Center showed `1.90%`.
-- [ ] **Daily trade limit/status presentation is inconsistent.** Dashboard showed `8`, while Control Center showed `1/0` and a configured maximum of `0`.
-- [ ] **Intermittent blank page was observed.** Root cause is not yet confirmed; routing, loading and runtime error handling require evidence-based reproduction.
-- [ ] **Final close and native-order cleanup remain unverified.** Remaining TP, SL close, manual close, orphan-order cleanup and journal finalization require proof.
-- [ ] **Intraday profile lifecycle remains unverified.** TP1 break-even, TP2 trailing activation, runner management and six-hour maximum duration need complete Bybit Demo evidence.
-
-### Runtime verdict
-
-The deployed system proved that Scanner/Signal output can reach exchange execution and that native partial TP orders can fill. It did **not** prove a safe complete lifecycle.
-
-**Current safety classification:** Demo Beta — runtime defects confirmed — live trading not approved.
-
-No live-capital approval may be given until the TP2 protection defect, authoritative journal/PnL reconciliation and both profile lifecycles are fixed and re-verified.
-
----
-
-## 4. Sequential Repair Plan and Ownership
-
-Work must remain sequential and evidence-driven. One bounded repair task must be completed before the next begins.
-
-| Step | Task | Primary worker | Product Owner role | Start state |
-|---|---|---|---|---|
-| 0 | Close README PR #31 | Repository worker | Review and approve merge | In progress |
-| 1 | Fix Scalping TP2 → TP1-price SL profit lock | Repository worker | Approve scope and review evidence | Not started |
-| 2 | Fix partial-fill reconciliation, fees and realized PnL | Repository worker | Review deployed evidence | Not started |
-| 3 | Recover authoritative strategy/profile metadata | Repository worker | Review recovery result | Not started |
-| 4 | Correct TP labels and risk/daily-trade UI values | Repository worker | Screenshot review | Not started |
-| 5 | Reproduce and fix blank-page failure | Repository worker | Confirm reproduction is resolved | Not started |
-| 6 | Run complete Scalping Demo re-verification | Render + Bybit Demo + repository worker | Provide/approve runtime evidence | Not started |
-| 7 | Run complete Intraday Demo verification | Render + Bybit Demo + repository worker | Provide/approve runtime evidence | Not started |
-| 8 | Verify restart, close cleanup and orphan orders | Repository worker + Bybit Demo | Review final evidence | Not started |
-
-Every implementation step requires:
-
-1. Exact changed files and diff review.
-2. Focused tests for the bounded defect.
-3. Full available backend test suite.
-4. Frontend TypeScript and production build when frontend is affected.
-5. CI success.
-6. Product Owner approval before merge.
-7. Deployed Bybit Demo evidence when runtime behavior is affected.
-
----
-
-## 5. Completed Scanner and Signal Roadmap
-
-### [x] Step 1 — Scanner Architecture and Profile Separation
-
-**Merged evidence:** PR #27, merge commit `1e2d31690616553cf1c93d669d132188d783a9c8`.
-
-Implemented:
-
-- Dynamic Bybit USDT perpetual candidate collection.
-- Liquidity, turnover, movement and spread validation.
-- Dynamic ranked universe capped at **Top 30**.
-- Separate profile pipelines:
-  - **Scalping:** 5-minute trend/setup + 1-minute trigger.
-  - **Intraday:** 1-hour trend + 15-minute setup + 5-minute trigger.
-- Open/current candles excluded from confirmed analysis.
-- `SIDEWAYS`, `INSUFFICIENT_DATA` and stale profile data blocked before strategy evaluation.
-- Explicit `market_rank` 1–30.
-- Explicit `trade_type`; missing or unknown profile is blocked and never defaults to Scalping.
-- Manual `/scanner/run` remains scan-only.
-
-### [x] Step 2 — Strategy and Signal Pipeline
-
-**Merged evidence:** PR #28, merge commit `c216a9af96e87a3d466ca0f1a70e3c4825650444`.
-
-Implemented:
-
-- Canonical result states: `NO_SETUP`, `NEAR_SETUP`, `ACTIVE`, `INVALID`, `EXPIRED`.
-- `NEAR_SETUP` remains monitor-only.
-- Only `ACTIVE` can continue to Risk and Execution gates.
-- Trade geometry is validated before a result becomes useful.
-- Opposite-trend and missing-trade-type results are rejected.
-- One deterministic primary useful signal per symbol.
-- Same-direction matches remain confirmation metadata.
-- Signal ranking uses state, quality score, market rank and freshness.
-
-### [x] Step 3 — Scanner and Signal UI Truthfulness
-
-**Merged evidence:** PR #30, merge commit `234c4733321974ecb898abb5bfa3aa64ca6ea2a9`.
-
-Implemented scope:
-
-- Canonical signal states replace fabricated Ready/Executable/Blocked presentation.
-- One ranked market row per symbol.
-- Market rank and signal rank remain separate.
-- Market score and signal score remain separate.
-- Strategy, Risk and Execution states remain separate.
-- Entry, SL, TP, RR, trend, profile, timeframes and signal age come from the canonical contract.
-- Per-signal Auto Trade and Demo Execute controls were removed.
-- Manual Run Scan remains scan-only.
-- Dashboard Latest Signals shows canonical primary `ACTIVE` signals only.
-
-Runtime defects discovered after this implementation are tracked separately in Sections 2–4 and do not erase the completed bounded PR #30 scope.
-
----
-
-## 6. Locked End-to-End Flow
-
-```text
-Bybit USDT Perpetual Market
-→ Liquidity / Turnover / Movement / Spread Filter
-→ Closed-Candle Profile-Specific Analysis
-→ Trend Classification
-→ Reject Sideways / Stale / Insufficient Markets
-→ Rank Eligible Markets (Top 30)
-→ Strategy Engine Evaluates Approved Strategies
-→ Canonical Signal State
-→ Signal Engine Deduplicates and Ranks Useful Signals
-→ Bot Monitors Useful Signal Symbols
-→ ACTIVE Signal + Risk Gate Passed
-→ Trade Execution
-→ Trade-Type-Specific Management Profile
-→ Exchange and Journal Reconciliation
-→ Exact Fees and Realized PnL
-```
-
-Responsibility boundaries:
-
-- **Scanner:** market filtering, profile eligibility, trend classification and market ranking.
-- **Strategy Engine:** setup detection and trade geometry proposals.
-- **Signal Engine:** canonical states, useful-result retention, deduplication and signal ranking.
-- **Risk Engine:** final risk authority.
-- **Position Sizing:** fixed-risk quantity and exchange-constraint authority.
-- **Execution Engine:** final exchange-order authority.
-- **Trade Management:** profile-specific protection, TP stages, break-even, trailing and close lifecycle.
-- **Journal/Reconciliation:** authoritative lifecycle, fees, PnL and restart recovery evidence.
-
----
-
-## 7. Locked Risk and Trade Profiles
-
-Scalping and Intraday must never share one generic management profile.
-
-| Rule | Scalping | Intraday |
-|---|---:|---:|
-| Fixed risk per trade | 20 USDT | 50 USDT |
-| Maximum leverage | 20x | 10x |
-| Minimum Risk:Reward | 1:1.5 | 1:2.0 |
-| TP1 | 1.5R — close 50% | 2R — close 50% |
-| TP2 | 2R — close 25% | 2.5R — close 25% |
-| Final target / Runner | 2.5R — final 25% | 3R — final 25% runner |
-| Early protection | At 1R move SL to break-even plus observed fee buffer | At TP1 move SL to break-even |
-| After TP2 | Move remaining SL to TP1 price | Activate trailing protection |
-| Trailing stop | Disabled | Enabled only after TP2 |
-| Maximum duration | 59 minutes | 6 hours |
-
-Mandatory authoritative fields:
-
-- `trade_type`
-- `strategy_name`
-- `management_profile`
-- selected leverage
-- TP1, TP2 and final/runner targets
-- TP allocation percentages
-- break-even/profit-lock rule
-- trailing state
-- maximum holding time
-
-An unknown or missing `trade_type` must not silently inherit a management profile.
-
-Portfolio controls:
-
-- Maximum **5 active trades**.
-- Same-symbol duplicate positions are blocked.
-- Total combined margin exposure cannot exceed **50% of account/day equity**.
-- A realized losing close creates a **30-minute symbol cooldown**.
-- Daily reset timezone is **Asia/Dhaka**.
-- At **5% net realized daily loss**, new execution stops for that BDT day.
-- Existing positions continue to be protected and reconciled.
-
----
-
-## 8. Project Milestone Status
-
-| # | Milestone | Status | Current evidence / remaining gap |
-|---|---|---|---|
-| 1 | Repository foundation and CI | ✅ Complete | FastAPI, React, backend compile/tests, TypeScript and frontend build |
-| 2 | Authentication and bot controls | 🟡 Partial | Login and controls exist; session expiry, logout and public operational endpoint hardening remain |
-| 3 | Database persistence and restart safety | 🟡 Partial | PostgreSQL/SQLite persistence exists; recovered trade metadata is not authoritative |
-| 4 | Bybit exchange integration | ✅ Complete in code | Wallet, positions, market data, orders, leverage, protection and close APIs |
-| 5 | Market Scanner | ✅ Complete | Top-30 ranking and separate profile pipelines merged through PR #27 |
-| 6 | Strategy and Signal Engine | ✅ Complete | Canonical pipeline and primary signal ranking merged through PR #28 |
-| 7 | Risk Engine Authority | 🟡 Partial | Core gates exist; frontend values need one authoritative contract |
-| 8 | Position sizing and exposure | ✅ Complete in code | SL-distance sizing, exchange constraints and portfolio exposure controls |
-| 9 | Trade Execution Engine | ✅ Complete in code | Reservation, idempotency, fill confirmation and protection verification |
-| 10 | Trade Management Engine | 🔴 Runtime defect | Partial TP fills worked; Scalping TP2 profit-lock failed |
-| 11 | Journal and exact PnL sync | 🔴 Runtime defect | Partial closes, fees and realized PnL did not reconcile |
-| 12 | Frontend operations terminal | 🟡 Partial | UI roadmap merged; TP labels, settings consistency and blank-page stability remain |
-| 13 | Deployment and observability | 🟡 Partial | Render and Watchdog exist; lifecycle verification remains incomplete |
-| 14 | Full Bybit Demo E2E and soak testing | ⬜ Pending | Complete Scalping and Intraday evidence required |
-| 15 | Live-release hardening | ⬜ Pending | Security, backups, monitoring and approved demo evidence required |
-
----
-
-## 9. Architecture
+## 2. Architecture
 
 ```text
 React + TypeScript Frontend
@@ -325,9 +74,77 @@ Bybit V5 Demo / Live APIs
 | Hosting | Render |
 | CI | GitHub Actions |
 
+### Responsibility boundaries
+
+- **Scanner:** market filtering, profile eligibility, trend classification and market ranking.
+- **Strategy Engine:** setup detection and trade geometry proposals.
+- **Signal Engine:** canonical states, useful-result retention, deduplication and signal ranking.
+- **Risk Engine:** final risk authority.
+- **Position Sizing:** fixed-risk quantity and exchange-constraint authority.
+- **Execution Engine:** final exchange-order authority.
+- **Trade Management:** profile-specific protection, TP stages, break-even, trailing and close lifecycle.
+- **Journal/Reconciliation:** authoritative lifecycle, fees, PnL and restart recovery evidence.
+
 ---
 
-## 10. Enabled Strategies
+## 3. Locked End-to-End Flow
+
+```text
+Bybit USDT Perpetual Market
+→ Liquidity / Turnover / Movement / Spread Filter
+→ Closed-Candle Profile-Specific Analysis
+→ Trend Classification
+→ Reject Sideways / Stale / Insufficient Markets
+→ Rank Eligible Markets (Top 30)
+→ Strategy Engine Evaluates Approved Strategies
+→ Canonical Signal State
+→ Signal Engine Deduplicates and Ranks Useful Signals
+→ Bot Monitors Useful Signal Symbols
+→ ACTIVE Signal + Risk Gate Passed
+→ Position Sizing and Atomic Reservation
+→ Exchange Execution
+→ Trade-Type-Specific Management Profile
+→ Exchange and Journal Reconciliation
+→ Exact Fees and Realized PnL
+```
+
+---
+
+## 4. Scanner and Signal Rules
+
+### Scanner profiles
+
+- Dynamic Bybit USDT perpetual candidate collection.
+- Liquidity, turnover, movement and spread validation.
+- Ranked universe capped at **Top 30**.
+- **Scalping:** 5-minute trend/setup + 1-minute trigger.
+- **Intraday:** 1-hour trend + 15-minute setup + 5-minute trigger.
+- Open/current candles are excluded from confirmed analysis.
+- `SIDEWAYS`, `INSUFFICIENT_DATA` and stale profile data are blocked before strategy evaluation.
+- `trade_type` must be explicit; unknown profile must never default to Scalping.
+- Manual `/scanner/run` is scan-only and must never execute trades.
+
+### Canonical signal states
+
+- `NO_SETUP`
+- `NEAR_SETUP`
+- `ACTIVE`
+- `INVALID`
+- `EXPIRED`
+
+Rules:
+
+- `NEAR_SETUP` is monitor-only.
+- Only `ACTIVE` may continue to Risk and Execution gates.
+- Opposite-trend and missing-trade-type results are rejected.
+- One deterministic primary useful signal is retained per symbol.
+- Other valid same-direction matches remain confirmation metadata.
+- Market rank and signal rank must remain separate.
+- Market score and signal score must remain separate.
+
+---
+
+## 5. Enabled Strategies
 
 Current registered strategies:
 
@@ -335,47 +152,128 @@ Current registered strategies:
 2. **Breakout**
 3. **Pure SMC**
 
-Completed controls:
-
-- Canonical five-state result contract.
-- Direction enforcement.
-- Useful-signal retention and deduplication.
-- One primary useful signal per symbol.
-- Deterministic signal ranking.
-
-Still required:
+Future strategy work must include:
 
 - Strategy version and enable/disable control.
 - Historical backtesting and walk-forward validation.
 - Failure analysis and controlled tuning workflow.
-- Deployed evidence linking each executed trade to an authoritative strategy/profile.
+- Runtime evidence linking every executed trade to its authoritative strategy/profile.
 
 ---
 
-## 11. Testing and Release Evidence
+## 6. Locked Risk and Trade Profiles
 
-Automated checks:
+Scalping and Intraday must never share one generic management profile.
 
-- Backend compile.
-- Backend unit/integration suite.
-- Frontend TypeScript check.
-- Frontend production build.
+| Rule | Scalping | Intraday |
+|---|---:|---:|
+| Fixed risk per trade | 20 USDT | 50 USDT |
+| Maximum leverage | 20x | 10x |
+| Minimum Risk:Reward | 1:1.5 | 1:2.0 |
+| TP1 | 1.5R — close 50% | 2R — close 50% |
+| TP2 | 2R — close 25% | 2.5R — close 25% |
+| Final target / Runner | 2.5R — final 25% | 3R — final 25% runner |
+| Early protection | At 1R move SL to break-even plus observed fee buffer | At TP1 move SL to break-even |
+| After TP2 | Move remaining SL to TP1 price | Activate trailing protection |
+| Trailing stop | Disabled | Enabled only after TP2 |
+| Maximum duration | 59 minutes | 6 hours |
 
-Required runtime evidence:
+### Mandatory authoritative fields
 
-- Deployed health/readiness.
-- Bybit Demo order and position evidence.
-- TP1/TP2/final protection transitions.
-- Journal, fees and realized-PnL evidence.
-- Restart and recovery evidence.
-- Close-path and order-cleanup evidence.
-- Complete Scalping and Intraday lifecycles.
+Every managed trade must persist:
+
+- `trade_type`
+- `strategy_name`
+- `management_profile`
+- selected leverage
+- TP1, TP2 and final/runner targets
+- TP allocation percentages
+- break-even/profit-lock rule
+- trailing state
+- maximum holding time
+- signal, entry and close timestamps
+
+An unknown or missing `trade_type` must not silently inherit a management profile.
+
+### Portfolio controls
+
+- Maximum **5 active trades**.
+- Same-symbol duplicate positions are blocked.
+- Total combined margin exposure cannot exceed **50% of account/day equity**.
+- A realized losing close creates a **30-minute symbol cooldown**.
+- Daily reset timezone is **Asia/Dhaka**.
+- At **5% net realized daily loss**, new execution stops for that BDT day.
+- Existing positions continue to be protected and reconciled.
 
 ---
 
-## 12. Local Development
+## 7. Master Roadmap
 
-Backend:
+Work must remain sequential. A new major module must not start before the active bounded task is completed, tested and reviewed.
+
+| Phase | Planned outcome |
+|---|---|
+| Phase 1 | Repository foundation, CI, authentication and database persistence |
+| Phase 2 | Bybit market data, account, position and execution integration |
+| Phase 3 | Scanner architecture and profile separation |
+| Phase 4 | Strategy and canonical Signal Pipeline |
+| Phase 5 | Risk authority, Position Sizing and atomic execution safety |
+| Phase 6 | Separate Scalping and Intraday Trade Management |
+| Phase 7 | Journal, fees, realized-PnL and restart reconciliation |
+| Phase 8 | Truthful operator UI and Control Center |
+| Phase 9 | Full Bybit Demo Scalping and Intraday lifecycle verification |
+| Phase 10 | Historical data, backtesting, walk-forward analysis and controlled tuning |
+| Phase 11 | Security, backup, monitoring, soak testing and live-release hardening |
+
+---
+
+## 8. Testing and Completion Gates
+
+### Code task completion gates
+
+1. Approved bounded scope implemented.
+2. Exact changed files and diff reviewed.
+3. Focused tests passed.
+4. Full available backend suite passed.
+5. Frontend TypeScript and production build passed when affected.
+6. CI passed.
+7. Product Owner approved merge.
+8. Merged into `main`.
+
+### Runtime task completion gates
+
+1. Approved code merged and deployed.
+2. Render health/readiness confirmed.
+3. Bybit Demo order and position evidence captured.
+4. TP, SL and protection transitions confirmed.
+5. Journal, fees and realized PnL confirmed.
+6. Restart/recovery behavior confirmed.
+7. Close-path and order-cleanup behavior confirmed.
+8. Product Owner accepted screenshots/evidence.
+
+A green CI run proves only tested code/build paths. It does not prove exchange fills, protection amendments, journal synchronization or runtime safety.
+
+---
+
+## 9. Safety and Release Rules
+
+- Default mode is `demo`.
+- Live mode is not production-approved.
+- Scalping and Intraday management rules must remain separate.
+- Unknown trade type must not receive a silent default profile.
+- Code completion is not runtime verification.
+- Runtime verification is not live-capital approval.
+- Do not describe an unexecuted or failed test as passed.
+- Do not claim deployment without deployment evidence.
+- Use feature branches and pull requests for production changes.
+- Do not merge to `main` without explicit Product Owner approval.
+- Do not enable live trading before Demo E2E, soak testing, operations review and release approval.
+
+---
+
+## 10. Local Development
+
+### Backend
 
 ```powershell
 py -3 -m pip install -r requirements.txt
@@ -383,7 +281,7 @@ py -3 -m app.database_bootstrap
 py -3 -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-Frontend:
+### Frontend
 
 ```powershell
 cd frontend
@@ -399,9 +297,7 @@ sqlite:///./app.db
 
 Keep `APP_ENV=development` when using SQLite.
 
----
-
-## 13. Required Environment Variables
+### Required environment variables
 
 Backend:
 
@@ -426,26 +322,114 @@ Never commit API keys, passwords, session secrets, service-role credentials or `
 
 ---
 
-## 14. Safety and Release Rules
+# Part B — Current Version Plan
 
-- Default mode is `demo`.
-- Live mode is not production-approved.
-- Scalping and Intraday management rules must remain separate.
-- Unknown trade type must not receive a silent default management profile.
-- Code completion is not runtime verification.
-- Runtime verification is not live-capital approval.
-- Do not describe a test as passed without evidence.
-- Do not claim a deployment without deployment evidence.
-- Use feature branches and pull requests for production changes.
-- Do not merge to `main` without explicit Product Owner approval.
-- Do not enable live trading before demo E2E, soak testing, operations review and release approval.
+This section defines the active version/update plan. Status results are recorded separately in Part C.
+
+## DrayFrogd V2 — Runtime Hardening Update Plan
+
+### Update goal
+
+Complete authoritative Trade Management, Journal/PnL reconciliation and truthful UI behavior before any further expansion.
+
+### Sequential tasks
+
+| Step | Task | Primary worker | Product Owner role |
+|---|---|---|---|
+| 0 | Close README structure and audit PR | Repository worker | Review and approve merge |
+| 1 | Fix Scalping TP2 → TP1-price SL profit lock | Repository worker | Approve scope and review evidence |
+| 2 | Fix partial-fill reconciliation, fees and realized PnL | Repository worker | Review deployed evidence |
+| 3 | Recover authoritative strategy/profile metadata | Repository worker | Review recovery result |
+| 4 | Correct TP labels and Risk/daily-trade UI values | Repository worker | Screenshot review |
+| 5 | Reproduce and fix blank-page failure | Repository worker | Confirm reproduction is resolved |
+| 6 | Run complete Scalping Demo re-verification | Repository worker + Render + Bybit Demo | Provide/approve runtime evidence |
+| 7 | Run complete Intraday Demo verification | Repository worker + Render + Bybit Demo | Provide/approve runtime evidence |
+| 8 | Verify restart, close cleanup and orphan orders | Repository worker + Bybit Demo | Review final evidence |
+| 9 | Start historical data/backtesting work only after runtime closure | Repository worker | Approve new version scope |
+
+### Version-plan rule
+
+- Only one step may be active at a time.
+- A step cannot be marked complete without its defined gates.
+- PASS/FAIL evidence belongs in the day-wise update log, not inside the locked plan.
+- Any new requirement must be added as a new version/update plan item, not inserted into the middle of completed plan text.
 
 ---
 
-## 15. Current Verdict
+# Part C — Day-wise Update, Checklist and Results
 
-DrayFrogd has a substantial demo-trading application, a completed Scanner/Signal roadmap and core safety architecture.
+All daily progress, timestamps, PASS/FAIL/PENDING results and current percentages are recorded here.
 
-The 12 July 2026 deployed verification proved exchange entry and native partial TP fills, but it also confirmed a critical Scalping TP2 protection failure and incomplete journal/PnL reconciliation.
+## 12 July 2026 — Sunday
 
-**Current classification:** Demo Beta — runtime repair required — live trading not approved.
+### Update time
+
+- **Documentation update:** 11:36 PM BDT (`Asia/Dhaka`)
+- **Runtime screenshots captured:** approximately 9:15 PM–9:21 PM BDT
+- **Repository branch:** `docs/readme-runtime-audit-2026-07-12`
+- **Pull request:** PR #31
+
+### Engineering work completed today
+
+| Work item | Result | Evidence |
+|---|---|---|
+| Scanner Architecture and Profile Separation | **PASS** | PR #27 merged; backend compile; **171/171** backend tests; frontend checks passed |
+| Strategy and Signal Pipeline | **PASS** | PR #28 merged; backend compile; **180/180** backend tests; frontend checks passed |
+| Scanner and Signal UI Truthfulness bounded implementation | **PASS** | PR #30 merged; CI run #227; backend **180/180**; frontend checks passed |
+| README audit revision before restructure | **PASS** | PR #31 CI run #230 succeeded |
+| README master-plan/version-plan/day-log restructure | **PENDING CI** | Current PR #31 head updated; new CI run required |
+
+### Deployed Scalping lifecycle checklist
+
+| Gate | Result | Evidence |
+|---|---|---|
+| Exchange position opened | **PASS** | ZECUSDT position visible in DrayFrogd and Bybit Demo |
+| Initial SL and final TP installed | **PASS** | Entry about `530.04`, SL `527.54`, final TP `536.29` |
+| TP1 closed approximately 50% | **PASS** | Initial quantity about `7.97`; TP1 close about `3.98` |
+| TP2 closed approximately 25% | **PASS** | TP2 close about `1.99`; about `2.00` remained |
+| TP2 moved remaining SL to TP1 price | **FAIL** | Remaining SL still showed original loss stop `527.54`; required approximately `533.79` |
+| Remaining 25% correctly profit-protected | **FAIL** | Position remained exposed below entry after TP2 |
+| Partial-close journal lifecycle synchronized | **FAIL** | App still showed one open trade without TP1/TP2 lifecycle records |
+| Fees synchronized | **FAIL** | Bybit showed fees; Journal showed `N/A` |
+| Realized PnL synchronized | **FAIL** | Dashboard showed Today's Realized `0.00` despite partial closes |
+| Strategy/profile metadata authoritative | **FAIL** | Strategy showed `unknown`; profile/timestamps were missing |
+| Final close and native-order cleanup | **PENDING** | Not verified |
+| Complete Intraday lifecycle | **PENDING** | Not started |
+
+### UI checklist
+
+| Check | Result |
+|---|---|
+| Final TP displayed with correct stage label | **FAIL** — final TP `536.29` was shown as TP1 |
+| Dashboard and Control Center use one Risk value | **FAIL** — `1.00%` vs `1.90%` observed |
+| Daily-trade values use one backend authority | **FAIL** — `8` vs `1/0`/maximum `0` observed |
+| Blank-page root cause reproduced | **PENDING** — symptom observed, cause not confirmed |
+
+### Current gate-based progress
+
+| Work item | Completed gates | Progress | Current status |
+|---|---:|---:|---|
+| Scanner Architecture and Profile Separation | 4/4 | **100%** | Complete and merged |
+| Strategy and Signal Pipeline | 4/4 | **100%** | Complete and merged |
+| Scanner and Signal UI Truthfulness implementation | 4/4 | **100%** | Bounded implementation complete and merged |
+| README PR #31 closure | 3/5 | **60%** | Content, branch and PR complete; current-head CI and merge pending |
+| Scalping deployed lifecycle verification | 4/10 | **40%** | Entry, protection setup, TP1 and TP2 verified; remaining gates failed/pending |
+| TP2 profit-lock repair | 0/5 | **0%** | Not started |
+| Journal, fees and realized-PnL repair | 0/6 | **0%** | Not started |
+| Metadata recovery repair | 0/5 | **0%** | Not started |
+| TP-stage/Risk UI consistency repair | 0/5 | **0%** | Not started |
+| Blank-page stability repair | 0/4 | **0%** | Root cause not confirmed |
+| Intraday lifecycle verification | 0/8 | **0%** | Not started |
+| Restart/cleanup/orphan-order verification | 0/6 | **0%** | Not started |
+
+### Current verdict at end of day
+
+The deployed application proved exchange entry and native TP1/TP2 partial fills. It did not prove a safe complete lifecycle because the Scalping TP2 profit-lock failed and Journal/PnL reconciliation remained incomplete.
+
+**Classification:** Demo Beta — runtime repair required — live trading not approved.
+
+### Next active task
+
+After PR #31 receives current-head CI success and Product Owner merge approval:
+
+> **Step 1 — Fix Scalping TP2 → TP1-price SL profit lock.**
