@@ -4,9 +4,10 @@ Bybit-first automated trading terminal built with **FastAPI, React, PostgreSQL a
 
 The project is currently in **Demo Beta / Engineering Verification**. Live-capital trading is not approved.
 
-> **Last documentation update:** 12 July 2026, 11:49 PM BDT (`Asia/Dhaka`)  
+> **Last documentation update:** 12 July 2026, 11:52 PM BDT (`Asia/Dhaka`)  
 > **Latest `main` commit:** `22e6f2d4f3b13442cf85c8ae067a4af5dfe30169` — README PR #31 merged  
 > **Active branch:** `fix/scalping-tp2-profit-lock-retry`  
+> **Active pull request:** PR #32  
 > **Current task:** Step 1 — Scalping TP2 → TP1-price SL profit-lock repair  
 > **Next task:** Step 2 — Partial-close Journal, fees and realized-PnL synchronization  
 > **Live trading:** blocked by default
@@ -202,7 +203,7 @@ A green CI run does not prove exchange/runtime behavior.
 | Step | Task | Status |
 |---:|---|---|
 | 0 | Close README structure and runtime-audit PR | **Complete** |
-| 1 | Fix Scalping TP2 → TP1-price SL profit lock | **Active** |
+| 1 | Fix Scalping TP2 → TP1-price SL profit lock | **Active — CI passed, merge pending** |
 | 2 | Fix partial-fill reconciliation, fees and realized PnL | Pending |
 | 3 | Recover authoritative strategy/profile metadata | Pending |
 | 4 | Correct TP labels and Risk/daily-trade UI values | Pending |
@@ -225,6 +226,7 @@ Only one step may be active at a time. PASS/FAIL evidence belongs in Part C.
 - **9:15 PM–9:21 PM BDT:** deployed application and Bybit Demo screenshots captured.
 - **11:36 PM BDT:** README reorganized into Master Plan, Version Plan and Day-wise Log.
 - **11:49 PM BDT:** Step 1 branch created and TP2 profit-lock root-cause repair started.
+- **11:52 PM BDT:** PR #32 CI run #238 completed successfully.
 
 ### Completed engineering work
 
@@ -256,16 +258,28 @@ Only one step may be active at a time. PASS/FAIL evidence belongs in Part C.
 
 **Confirmed code-level failure mode:** the native reconciler persists `tp2_done = true` before the SL amendment is proven successful. When that amendment fails once, later cycles skip the TP2 block because `tp2_done` is already true. The protection therefore has no retry path.
 
-Implemented on branch `fix/scalping-tp2-profit-lock-retry`:
+Implemented in PR #32:
 
 - Added an independent two-second Scalping profit-lock guard.
-- Separates TP2 fill state from `profit_lock_verified` state.
+- Separated TP2 fill state from `profit_lock_verified` state.
 - Rechecks the actual exchange SL after TP2.
 - Retries the TP1-price SL amendment until exchange verification passes.
 - Keeps Scalping trailing disabled.
 - Supports position-size TP2 inference after restart.
 - Refuses to treat an unknown management profile as Scalping.
-- Added focused tests for retry, idempotent confirmation, size inference and unknown-profile blocking.
+- Persists retry count, verification state and exact error evidence.
+
+### Step 1 automated evidence
+
+| Check | Result | Evidence |
+|---|---|---|
+| Focused retry/idempotency tests | **PASS** | New tests included in backend suite |
+| Backend compile | **PASS** | GitHub Actions run #238 |
+| Full backend suite | **PASS** | **184/184 tests passed** |
+| Frontend TypeScript check | **PASS** | GitHub Actions run #238 |
+| Frontend production build | **PASS** | GitHub Actions run #238 |
+| CI | **PASS** | Run #238 completed successfully |
+| Deployed Bybit Demo verification | **PENDING** | Requires merge and deployment |
 
 ### Current gate-based progress
 
@@ -273,7 +287,7 @@ Implemented on branch `fix/scalping-tp2-profit-lock-retry`:
 |---|---:|---:|---|
 | README PR #31 closure | 5/5 | **100%** | Merged to `main` |
 | Scalping deployed lifecycle verification | 4/10 | **40%** | TP2 protection and downstream evidence failed/pending |
-| Step 1 TP2 profit-lock repair | 4/8 | **50%** | Root cause, branch, implementation and tests added; execution/CI/merge pending |
+| Step 1 TP2 profit-lock repair | 7/8 | **87.5%** | Code and CI passed; Product Owner merge approval pending |
 | Step 2 Journal, fees and realized-PnL repair | 0/6 | **0%** | Not started |
 | Step 3 metadata recovery | 0/5 | **0%** | Not started |
 | Step 4 TP-stage/Risk UI consistency | 0/5 | **0%** | Not started |
@@ -281,20 +295,20 @@ Implemented on branch `fix/scalping-tp2-profit-lock-retry`:
 | Intraday lifecycle verification | 0/8 | **0%** | Not started |
 | Restart/cleanup/orphan-order verification | 0/6 | **0%** | Not started |
 
-### Step 1 remaining gates
+### Step 1 completion gates
 
 - [x] Runtime defect documented.
 - [x] Code-level no-retry failure mode confirmed.
 - [x] Bounded branch and implementation created.
 - [x] Focused tests added.
-- [ ] Focused tests executed successfully.
-- [ ] Full backend suite and frontend checks passed.
-- [ ] GitHub Actions CI passed.
+- [x] Focused tests executed successfully.
+- [x] Full backend suite and frontend checks passed.
+- [x] GitHub Actions CI passed.
 - [ ] Product Owner approved merge to `main`.
 
 ### Current verdict
 
-The repair is **implemented but not yet verified**. No PASS claim is made until CI succeeds and a fresh deployed Bybit Demo lifecycle confirms that the remaining 25% SL moves to TP1 after TP2.
+Step 1 implementation and automated verification are **PASS**. Runtime verification is still **PENDING** because the code has not yet been merged and deployed.
 
 ### Next task
 
