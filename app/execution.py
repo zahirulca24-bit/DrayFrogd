@@ -146,6 +146,7 @@ def execute_signal(client: Any, signal: dict[str, Any], auto_triggered: bool = F
             journal_id,
             {
                 "status": "active",
+                "take_profit": updated_trade.get("take_profit"),
                 "exchange_metadata": updated_trade["exchange_metadata"],
             },
         )
@@ -200,16 +201,51 @@ def execute_signal(client: Any, signal: dict[str, Any], auto_triggered: bool = F
 
 
 def _execution_spread_gate(client: Any, symbol: str) -> dict[str, Any]:
-    method = getattr(client, "safe_fetch_ticker", None)
-    if not symbol or not callable(method):
+    if not symbol:
         return {"allowed": False, "reason": "SPREAD_UNAVAILABLE", "spread_bps": None}
-    try:
-        ok, ticker, error = method(symbol=symbol)
-    except Exception as exc:
-        return {"allowed": False, "reason": str(exc), "spread_bps": None}
-    if not ok or not ticker:
+
+    single_ticker_method = getattr(client, "safe_fetch_ticker", None)
+    if callable(single_ticker_method):
+        try:
+            ok, ticker, error = single_ticker_method(symbol=symbol)
+        except Exception as exc:
+            return {"allowed": False, "reason": str(exc), "spread_bps": None}
+        if ok and ticker:
+            return validate_spread(ticker)
         return {"allowed": False, "reason": error or "SPREAD_UNAVAILABLE", "spread_bps": None}
-    return validate_spread(ticker)
+
+    market_tickers_method = getattr(client, "safe_fetch_market_tickers", None)
+    if callable(market_tickers_method):
+        try:
+            ok, tickers, error = market_tickers_method()
+        except Exception as exc:
+            return {"allowed": False, "reason": str(exc), "spread_bps": None}
+        if not ok:
+            return {"allowed": False, "reason": error or "SPREAD_UNAVAILABLE", "spread_bps": None}
+        ticker = next(
+            (
+                item
+                for item in tickers
+                if str(item.get("symbol") or "").upper() == symbol
+            ),
+            None,
+        )
+        if ticker:
+            return validate_spread(ticker)
+        return {"allowed": False, "reason": "SPREAD_UNAVAILABLE", "spread_bps": None}
+
+    public_get = getattr(client, "_public_get", None)
+    if callable(public_get):
+        try:
+            payload = public_get("/v5/market/tickers", {"category": "linear", "symbol": symbol})
+            items = payload.get("list", []) if isinstance(payload, dict) else []
+            ticker = items[0] if items else None
+        except Exception as exc:
+            return {"allowed": False, "reason": str(exc), "spread_bps": None}
+        if ticker:
+            return validate_spread(ticker)
+
+    return {"allowed": False, "reason": "SPREAD_UNAVAILABLE", "spread_bps": None}
 
 
 def _apply_management_profile(client: Any, trade: dict[str, Any], spread_gate: dict[str, Any]) -> dict[str, Any]:
