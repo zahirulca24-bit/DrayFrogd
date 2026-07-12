@@ -6,11 +6,11 @@ Bybit-first automated trading terminal built with **FastAPI, React, PostgreSQL a
 
 The project is in **Demo Beta / Engineering Verification**. Live-capital trading is not approved.
 
-> **Last documentation update:** 13 July 2026, 3:13 AM BDT (`Asia/Dhaka`)  
-> **Latest `main` commit:** `d01b3aabde94f2d2013f9945026cc8c716433fd0` — PR #40 README merge  
-> **Active engineering task:** `WS-RUNTIME-001` — independent private/public supervisors and truthful connection diagnostics  
-> **Automated verification:** GitHub Actions run #307 **PASS**; backend **203/203 PASS**; frontend TypeScript/build **PASS**  
-> **Runtime status:** `PRIVATE WS` and `PUBLIC WS` both displayed `RECONNECTING`; corrected build deployment verification is **PENDING**  
+> **Last documentation update:** 13 July 2026, 3:22 AM BDT (`Asia/Dhaka`)  
+> **Latest `main` commit:** `718aa343d9531770bc3a5f05c18b62715bcf189c` — PR #41 merged  
+> **Current engineering phase:** deployed runtime verification for `WS-RUNTIME-001`  
+> **Automated verification:** GitHub Actions run #309 **PASS**; backend **203/203 PASS**; frontend TypeScript/build **PASS**  
+> **Runtime status:** independent private/public supervisor hotfix is merged; fresh Render and Bybit Demo verification is **PENDING**  
 > **Runtime tracker:** Issue #37  
 > **Live trading:** blocked by default
 
@@ -180,7 +180,7 @@ An unknown or conflicting profile must not silently inherit Scalping or Intraday
 | 7 | Complete Intraday Demo re-verification | In progress |
 | 8A | `STATE-SYNC-001` authoritative exchange position reconciliation | **Merged in PR #39 — runtime verification in progress** |
 | 8B | `WS-001` Bybit private/public streams and browser connection status | **Runtime FAIL — both channels displayed reconnecting** |
-| 8B.1 | `WS-RUNTIME-001` independent channel supervision and exact errors | **CI PASS — review/merge/runtime pending** |
+| 8B.1 | `WS-RUNTIME-001` independent channel supervision and exact errors | **Merged in PR #41 — runtime pending** |
 | 8C | Restart, close cleanup and orphan-order verification | Pending deployed verification |
 | 9 | ACTIVE-signal execution decision visibility | Audit complete; implementation pending after state-sync runtime check |
 | 10 | Historical data/backtesting after runtime closure | Pending |
@@ -234,6 +234,8 @@ Only one bounded repair package may be active at a time. Runtime PASS requires e
 - **After runtime evidence:** Product Owner approved `WS-RUNTIME-001` hotfix.
 - **CI run #305:** Backend failed because the new test module imported `pytest`, while repository CI uses the standard-library `unittest` runner; no product-code failure was indicated.
 - **CI run #307:** Tests were converted to native `unittest`; backend **203/203 PASS**, frontend TypeScript/build **PASS**.
+- **CI run #309:** Final README-synchronized branch head passed backend and frontend jobs.
+- **3:18 AM BDT:** Product Owner approved and PR #41 merged into `main` at commit `718aa343d9531770bc3a5f05c18b62715bcf189c`.
 
 ### PR #36 automated verification
 
@@ -375,24 +377,14 @@ The approved hotfix establishes these rules:
 - The browser visibly displays exact private/public errors instead of hiding them only in a tooltip.
 - WebSocket-triggered reconciliation remains separate and REST remains the accounting/state authority.
 
-#### Hotfix automated evidence
-
-| Check | Result |
-|---|---|
-| Focused WebSocket tests | **9/9 PASS** |
-| Full GitHub backend suite | **203/203 PASS** |
-| Python compile | **PASS** |
-| Frontend TypeScript check | **PASS** |
-| Frontend production build | **PASS** |
-| GitHub Actions run #307 | **PASS** |
-
 ### Current verdict
 
-PR #39 is merged into `main`. `STATE-SYNC-001` remains under deployed verification. `WS-001` is **RUNTIME FAIL** on the first connection check because both channels remained reconnecting and the exact failing channel was not observable. `WS-RUNTIME-001` PR #41 has **CI PASS**, but deployment and Bybit Demo verification remain pending; no WebSocket runtime PASS is claimed yet.
+PR #41 is merged into `main`. `WS-RUNTIME-001` code and CI are **PASS**, but the corrected build has not yet been verified on Render or against live Bybit Demo WebSocket endpoints. No WebSocket runtime PASS is claimed yet. `STATE-SYNC-001` remains under deployed verification, and REST reconciliation remains the active accounting/state authority.
 
 ### Next tasks
 
-1. Review PR #41 evidence and obtain explicit Product Owner merge approval.
-2. After merge, deploy and verify private authentication and public market connectivity independently.
-3. Run repeated refresh, disconnect/reconnect and restart checks while REST reconciliation remains active.
-4. Continue partial-fill, TP protection, Journal fee/exit and cleanup verification in Issue #37.
+1. Confirm Render deployed merge commit `718aa343d9531770bc3a5f05c18b62715bcf189c`.
+2. Verify private Demo authentication and public linear connectivity independently.
+3. Confirm one channel can fail without changing or closing the other channel.
+4. Run repeated refresh, disconnect/reconnect and restart checks while REST reconciliation remains active.
+5. Continue partial-fill, TP protection, Journal fee/exit and cleanup verification in Issue #37.
