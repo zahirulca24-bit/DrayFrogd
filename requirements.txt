@@ -1,5 +1,6 @@
 fastapi
 itsdangerous
 psycopg[binary]>=3.2,<4
+pybit>=5.16,<6
 sqlalchemy
 uvicorn
