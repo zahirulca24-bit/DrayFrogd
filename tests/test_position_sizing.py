@@ -143,6 +143,70 @@ class PositionSizingTests(unittest.TestCase):
         self.assertTrue(result["allowed"])
         self.assertEqual(result["current_exposure"], 200.0)
 
+    def test_sol_scalping_regression_does_not_fill_remaining_exposure_budget(self) -> None:
+        result = calculate_position_size(
+            signal={
+                "symbol": "SOLUSDT",
+                "entry": 76.50,
+                "stop_loss": 76.91,
+                "take_profit": 75.27,
+                "detected_at": datetime.now(UTC).isoformat(),
+            },
+            wallet={"totalEquity": "600", "totalAvailableBalance": "600"},
+            symbol_info={
+                "qtyStep": "0.1",
+                "tickSize": "0.01",
+                "minOrderQty": "0.1",
+                "minNotionalValue": "5",
+            },
+            active_trades=[],
+            positions=[],
+            settings={
+                "risk_amount": 20.0,
+                "leverage_cap": 20.0,
+                "exposure_cap": 0.50,
+            },
+            client=FakeClient(),
+        )
+
+        self.assertTrue(result["allowed"])
+        self.assertEqual(result["quantity"], "48.7")
+        self.assertAlmostEqual(result["risk_amount"], 19.967, places=3)
+        self.assertAlmostEqual(result["notional"], 3725.55, places=2)
+        self.assertEqual(result["selected_leverage"], 20.0)
+        self.assertAlmostEqual(result["required_margin"], 186.2775, places=4)
+        self.assertLess(result["trade_margin_utilization"], 0.32)
+        self.assertGreater(result["remaining_margin_capacity"], 113.0)
+
+    def test_fixed_risk_trade_is_rejected_when_profile_leverage_cannot_fit_portfolio_cap(self) -> None:
+        result = calculate_position_size(
+            signal={
+                "symbol": "SOLUSDT",
+                "entry": 76.50,
+                "stop_loss": 76.91,
+                "take_profit": 75.27,
+                "detected_at": datetime.now(UTC).isoformat(),
+            },
+            wallet={"totalEquity": "600", "totalAvailableBalance": "600"},
+            symbol_info={
+                "qtyStep": "0.1",
+                "tickSize": "0.01",
+                "minOrderQty": "0.1",
+                "minNotionalValue": "5",
+            },
+            active_trades=[{"required_margin": 250.0}],
+            positions=[],
+            settings={
+                "risk_amount": 20.0,
+                "leverage_cap": 20.0,
+                "exposure_cap": 0.50,
+            },
+            client=FakeClient(),
+        )
+
+        self.assertFalse(result["allowed"])
+        self.assertIn("profile cap", result["reason"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -152,7 +152,7 @@ class RiskAuthorityTests(unittest.TestCase):
         self.assertFalse(result["allowed"])
         self.assertIn("mismatch", result["reason"].lower())
 
-    def test_fixed_risk_position_sizing_selects_minimum_needed_leverage(self) -> None:
+    def test_fixed_risk_position_sizing_uses_profile_leverage_without_filling_budget(self) -> None:
         result = calculate_position_size(
             signal={
                 "symbol": "BTCUSDT",
@@ -183,8 +183,11 @@ class RiskAuthorityTests(unittest.TestCase):
         self.assertTrue(result["allowed"])
         self.assertAlmostEqual(result["risk_amount"], 20.0)
         self.assertAlmostEqual(result["notional"], 2000.0)
-        self.assertAlmostEqual(result["selected_leverage"], 4.0)
-        self.assertAlmostEqual(result["required_margin"], 500.0)
+        self.assertAlmostEqual(result["minimum_required_leverage"], 4.0)
+        self.assertAlmostEqual(result["selected_leverage"], 20.0)
+        self.assertAlmostEqual(result["required_margin"], 100.0)
+        self.assertAlmostEqual(result["trade_margin_utilization"], 0.10)
+        self.assertAlmostEqual(result["remaining_margin_capacity"], 400.0)
 
     def test_partial_close_progress_allocates_realized_pnl_by_bdt_day(self) -> None:
         event_ms = int(datetime(2026, 7, 12, 1, 0, tzinfo=UTC).timestamp() * 1000)
