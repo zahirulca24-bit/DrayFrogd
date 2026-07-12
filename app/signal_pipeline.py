@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-import sys
-from typing import Any, Callable
+from typing import Any
 
 from app.scanner_trend import (
     TREND_DOWN,
@@ -15,13 +14,6 @@ from app.strategy import evaluate_registered_strategies
 
 VALID_TRADE_TYPES = {"scalping", "intraday"}
 STRUCTURE_STRATEGIES = {"pure_smc", "hybrid"}
-StrategyEvaluator = Callable[..., list[dict[str, Any]]]
-
-# Legacy tests and old internal patch points referenced app.scanner.evaluate_registered_strategies.
-# Keep that patch target available without moving strategy execution back into Scanner.
-_scanner_module = sys.modules.get("app.scanner")
-if _scanner_module is not None and not hasattr(_scanner_module, "evaluate_registered_strategies"):
-    setattr(_scanner_module, "evaluate_registered_strategies", evaluate_registered_strategies)
 
 
 def evaluate_signal_contexts(contexts: list[dict[str, Any]]) -> dict[str, Any]:
@@ -29,7 +21,6 @@ def evaluate_signal_contexts(contexts: list[dict[str, Any]]) -> dict[str, Any]:
 
     results: list[dict[str, Any]] = []
     signals: list[dict[str, Any]] = []
-    evaluator = _resolve_strategy_evaluator()
 
     ordered_contexts = sorted(
         contexts,
@@ -46,7 +37,7 @@ def evaluate_signal_contexts(contexts: list[dict[str, Any]]) -> dict[str, Any]:
             results.append(_invalid_context_result(context, "trade_type_missing_or_invalid"))
             continue
 
-        strategy_results = evaluator(
+        strategy_results = evaluate_registered_strategies(
             symbol=str(context.get("symbol") or ""),
             candles_5m=list(context.get("setup_candles") or []),
             candles_1m=list(context.get("trigger_candles") or []),
@@ -145,12 +136,6 @@ def normalize_strategy_result(
         _apply_structure_gate(normalized, scanner_logic)
 
     return normalized
-
-
-def _resolve_strategy_evaluator() -> StrategyEvaluator:
-    scanner_module = sys.modules.get("app.scanner")
-    candidate = getattr(scanner_module, "evaluate_registered_strategies", None) if scanner_module is not None else None
-    return candidate if callable(candidate) else evaluate_registered_strategies
 
 
 def _apply_structure_gate(normalized: dict[str, Any], scanner_logic: dict[str, Any]) -> None:
