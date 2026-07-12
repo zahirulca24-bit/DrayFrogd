@@ -6,9 +6,32 @@ from unittest.mock import patch
 from app.execution import execute_signal
 
 
+ALLOWED_SPREAD = {
+    "allowed": True,
+    "reason": "",
+    "spread_bps": 10.0,
+    "max_spread_bps": 50.0,
+}
+
+
 class PublicExecutionApiTests(unittest.TestCase):
+    def test_high_spread_is_rejected_before_authoritative_execution(self) -> None:
+        with (
+            patch("app.execution._execution_spread_gate", return_value={
+                "allowed": False,
+                "reason": "Spread 75.00 bps exceeds maximum 50.00 bps",
+                "spread_bps": 75.0,
+                "max_spread_bps": 50.0,
+            }),
+            patch("app.execution._execute_signal_authoritatively") as execute,
+        ):
+            result = execute_signal(object(), {"symbol": "BTCUSDT"})
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"], "SPREAD_GATE_REJECTED")
+        execute.assert_not_called()
+
     def test_unconfirmed_fill_is_emergency_closed_before_returning(self) -> None:
-        client = object()
         pending_trade = {
             "journal_id": "exec-unconfirmed",
             "symbol": "BTCUSDT",
@@ -25,6 +48,7 @@ class PublicExecutionApiTests(unittest.TestCase):
         }
 
         with (
+            patch("app.execution._execution_spread_gate", return_value=ALLOWED_SPREAD),
             patch("app.execution._execute_signal_authoritatively", return_value={
                 "ok": False,
                 "error": "FILL_CONFIRMATION_UNAVAILABLE",
@@ -39,27 +63,49 @@ class PublicExecutionApiTests(unittest.TestCase):
             }) as emergency_close,
             patch("app.execution.update_active_trade") as update_active,
         ):
-            result = execute_signal(client, {"symbol": "BTCUSDT"})
+            result = execute_signal(object(), {"symbol": "BTCUSDT"})
 
         self.assertFalse(result["ok"])
         self.assertEqual(result["trade"]["status"], "close_pending_sync")
         emergency_close.assert_called_once()
         update_active.assert_called_once()
 
-    def test_confirmed_execution_installs_and_persists_native_profit_orders(self) -> None:
-        trade = {
+    def test_confirmed_scalping_execution_installs_profile_and_native_orders(self) -> None:
+        original_trade = {
             "journal_id": "exec-native",
             "execution_key": "a" * 64,
             "symbol": "BTCUSDT",
             "direction": "long",
+            "entry": 100.0,
+            "stop_loss": 98.0,
+            "take_profit": 103.0,
             "quantity": 10.0,
+            "remaining_quantity": 10.0,
             "status": "active",
-            "management": {"initial_quantity": 10.0, "tp1": 104.0, "tp2": 105.0},
-            "exchange_metadata": {},
+            "management": {},
+            "exchange_metadata": {"trade_type": "scalping"},
         }
-        expected = {"ok": True, "trade": trade, "sizing": {"quantity": "10"}}
-        management = {
-            **trade["management"],
+        profiled_management = {
+            "profile_name": "scalping_v2",
+            "trade_type": "scalping",
+            "initial_quantity": 10.0,
+            "tp1": 103.0,
+            "tp2": 104.0,
+            "runner_target": 105.0,
+            "trailing_enabled": False,
+        }
+        profiled_trade = {
+            **original_trade,
+            "trade_type": "scalping",
+            "take_profit": 105.0,
+            "management": profiled_management,
+            "exchange_metadata": {
+                **original_trade["exchange_metadata"],
+                "management": profiled_management,
+            },
+        }
+        native_management = {
+            **profiled_management,
             "native_tp_enabled": True,
             "tp1_order_link_id": "df-t1-key",
             "tp2_order_link_id": "df-t2-key",
@@ -70,10 +116,19 @@ class PublicExecutionApiTests(unittest.TestCase):
         }
 
         with (
-            patch("app.execution._execute_signal_authoritatively", return_value=expected),
+            patch("app.execution._execution_spread_gate", return_value=ALLOWED_SPREAD),
+            patch("app.execution._execute_signal_authoritatively", return_value={
+                "ok": True,
+                "trade": original_trade,
+                "sizing": {"quantity": "10"},
+            }),
+            patch("app.execution._apply_management_profile", return_value={
+                "ok": True,
+                "trade": profiled_trade,
+            }) as profile,
             patch("app.execution.install_native_profit_orders", return_value={
                 "ok": True,
-                "management": management,
+                "management": native_management,
                 "orders": orders,
             }) as install,
             patch("app.execution.update_trade_entry", return_value={"journal_id": "exec-native"}) as persist,
@@ -83,8 +138,11 @@ class PublicExecutionApiTests(unittest.TestCase):
             result = execute_signal(object(), {"symbol": "BTCUSDT"})
 
         self.assertTrue(result["ok"])
-        self.assertTrue(result["trade"]["management"]["native_tp_enabled"])
+        self.assertEqual(result["management_profile"], "scalping_v2")
+        self.assertEqual(result["trade"]["take_profit"], 105.0)
+        self.assertFalse(result["trade"]["management"]["trailing_enabled"])
         self.assertEqual(result["native_profit_orders"], orders)
+        profile.assert_called_once()
         install.assert_called_once()
         persist.assert_called_once()
         update_active.assert_called_once()
@@ -95,10 +153,14 @@ class PublicExecutionApiTests(unittest.TestCase):
             "execution_key": "b" * 64,
             "symbol": "BTCUSDT",
             "direction": "long",
+            "entry": 100.0,
+            "stop_loss": 98.0,
+            "take_profit": 105.0,
             "quantity": 10.0,
+            "remaining_quantity": 10.0,
             "status": "active",
-            "management": {"initial_quantity": 10.0, "tp1": 104.0, "tp2": 105.0},
-            "exchange_metadata": {},
+            "management": {"profile_name": "scalping_v2", "initial_quantity": 10.0, "tp1": 103.0, "tp2": 104.0},
+            "exchange_metadata": {"trade_type": "scalping"},
         }
         safe_trade = {
             **trade,
@@ -108,7 +170,9 @@ class PublicExecutionApiTests(unittest.TestCase):
         }
 
         with (
+            patch("app.execution._execution_spread_gate", return_value=ALLOWED_SPREAD),
             patch("app.execution._execute_signal_authoritatively", return_value={"ok": True, "trade": trade, "sizing": {}}),
+            patch("app.execution._apply_management_profile", return_value={"ok": True, "trade": trade}),
             patch("app.execution.install_native_profit_orders", return_value={"ok": False, "error": "order rejected"}),
             patch("app.execution.cancel_native_profit_orders") as cancel,
             patch("app.execution._emergency_close_pending_sync", return_value={
