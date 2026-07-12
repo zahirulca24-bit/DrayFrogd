@@ -3,17 +3,19 @@ from __future__ import annotations
 import asyncio
 import logging
 
+from app.authoritative_reconciliation import reconcile_state
 from app.bot_controls import can_execute, get_execution_mode
+from app.bybit_websocket import websocket_service
 from app.config import settings
 from app.exchange import get_exchange_client
 from app.intraday_protection_guard import enforce_intraday_protection
 from app.journal import log_bot_event
 from app.native_profit_reconcile import reconcile_native_profit_orders
-from app.reconciliation import reconcile_state
 from app.risk import extract_account_equity, refresh_risk_state
 from app.risk_cooldown_sync import sync_loss_cooldowns
 from app.risk_execution import execute_signal
 from app.risk_sync import sync_partial_realized_pnl
+from app.runtime_integration import install_runtime_integration
 from app.scanner import get_active_signals, run_scan
 from app.trade_management import manage_open_trades
 
@@ -61,6 +63,8 @@ async def native_profit_monitor_loop() -> None:
 
 
 async def auto_trading_loop() -> None:
+    install_runtime_integration()
+    await websocket_service.start()
     native_monitor = asyncio.create_task(native_profit_monitor_loop())
     try:
         while True:
@@ -100,9 +104,6 @@ async def auto_trading_loop() -> None:
                 if not partial_pnl_result.get("ok") and partial_pnl_result.get("errors"):
                     logger.debug("Partial realized PnL sync pending: %s", partial_pnl_result.get("errors"))
 
-                # Exact negative realized PnL creates a symbol-specific 30-minute
-                # cooldown. The expiry is reconstructed from closed_at, so restart
-                # and repeated worker cycles cannot bypass or extend it.
                 await asyncio.to_thread(sync_loss_cooldowns)
 
                 wallet_ok, wallet, wallet_error = await asyncio.to_thread(client.safe_fetch_wallet_balance)
@@ -205,6 +206,7 @@ async def auto_trading_loop() -> None:
 
             await asyncio.sleep(settings.bot_scan_interval_seconds)
     finally:
+        await websocket_service.stop()
         native_monitor.cancel()
         try:
             await native_monitor
