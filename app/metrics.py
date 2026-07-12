@@ -5,6 +5,7 @@ from math import isfinite
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from app.authoritative_state import get_snapshot
 from app.execution import get_active_trades, get_closed_trades
 from app.journal import get_closed_trade_history, get_trade_history
 
@@ -13,7 +14,8 @@ BDT = ZoneInfo("Asia/Dhaka")
 
 
 def get_metrics(now: datetime | None = None) -> dict[str, Any]:
-    active_trades = get_active_trades()
+    snapshot = get_snapshot()
+    active_trades = list(snapshot.get("trades") or []) if int(snapshot.get("version") or 0) > 0 else get_active_trades()
     closed_trades = get_closed_trades() or get_closed_trade_history()
     total_trades = len(active_trades) + len(closed_trades)
     win_trades = sum(1 for trade in closed_trades if str(trade.get("result", "")).lower() == "tp")
@@ -48,7 +50,7 @@ def get_portfolio_summary() -> dict[str, Any]:
         "pnl_r": metrics["pnl_r"],
         "today_realized_pnl": metrics["today_realized_pnl"],
         "today_fees": metrics["today_fees"],
-        "execution_mode": next((trade.get("execution_mode") for trade in get_active_trades() if trade.get("execution_mode")), "demo"),
+        "execution_mode": str(get_snapshot().get("mode") or next((trade.get("execution_mode") for trade in get_active_trades() if trade.get("execution_mode")), "demo")),
     }
 
 
