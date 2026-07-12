@@ -9,6 +9,11 @@ from app.execution import close_trade, get_active_trades, update_active_trade
 from app.exchange import BybitClient, ExchangeError
 from app.journal import append_trade_event, log_bot_event, update_trade_entry
 from app.risk import release_active_trade
+from app.trade_management_profiles import (
+    break_even_stop,
+    is_scalping_management,
+    post_tp2_stop,
+)
 from app.trade_management_rules import evaluate_management_action
 
 
@@ -184,10 +189,11 @@ def manage_open_trades(client: BybitClient) -> dict[str, Any]:
             continue
 
         if action == "retry_break_even":
+            target_stop = break_even_stop(trade, management, entry)
             protection = _set_protection(
                 client,
                 trade,
-                stop_loss=entry,
+                stop_loss=target_stop,
                 take_profit=_runner_target(trade, management),
             )
             if protection.get("error"):
@@ -201,6 +207,7 @@ def manage_open_trades(client: BybitClient) -> dict[str, Any]:
                 )
                 continue
             management["break_even_set"] = True
+            management["break_even_stop"] = target_stop
             management["last_state_change"] = _utc_now_iso()
             trade_updates["management"] = management
             _save_trade_state(trade, journal_id, trade_updates)
@@ -208,8 +215,8 @@ def manage_open_trades(client: BybitClient) -> dict[str, Any]:
                 _record_action(
                     trade,
                     "BREAK_EVEN_CONFIRMED",
-                    "Break-even stop confirmed on exchange.",
-                    protection,
+                    "Break-even plus observed-fee buffer stop confirmed on exchange.",
+                    {"stop_loss": target_stop, **protection},
                 )
             )
             continue
@@ -246,6 +253,39 @@ def manage_open_trades(client: BybitClient) -> dict[str, Any]:
             )
             continue
 
+        if action == "retry_profit_lock":
+            candidate_stop = post_tp2_stop({**trade, "entry": entry}, management, mark_price)
+            protection = _set_protection(
+                client,
+                trade,
+                stop_loss=candidate_stop,
+                take_profit=_runner_target(trade, management),
+            )
+            if protection.get("error"):
+                actions.append(
+                    _record_action(
+                        trade,
+                        "SCALPING_PROFIT_LOCK_RETRY_FAILED",
+                        "Scalping TP1-level profit lock retry failed; will retry next cycle.",
+                        protection,
+                    )
+                )
+                continue
+            management["profit_lock_stop"] = candidate_stop
+            management["trailing_stop"] = None
+            management["last_state_change"] = _utc_now_iso()
+            trade_updates["management"] = management
+            _save_trade_state(trade, journal_id, trade_updates)
+            actions.append(
+                _record_action(
+                    trade,
+                    "SCALPING_PROFIT_LOCK_CONFIRMED",
+                    "Scalping remaining 25% is protected at the TP1 price.",
+                    {"stop_loss": candidate_stop, **protection},
+                )
+            )
+            continue
+
         if action == "tp1":
             close_qty = min(
                 remaining_qty,
@@ -265,13 +305,15 @@ def manage_open_trades(client: BybitClient) -> dict[str, Any]:
 
             management["tp1_done"] = True
             management["remaining_quantity"] = max(remaining_qty - close_qty, 0.0)
+            target_stop = break_even_stop(trade, management, entry)
             protection = _set_protection(
                 client,
                 trade,
-                stop_loss=entry,
+                stop_loss=target_stop,
                 take_profit=_runner_target(trade, management),
             )
             management["break_even_set"] = not bool(protection.get("error"))
+            management["break_even_stop"] = target_stop if management["break_even_set"] else None
             management["last_state_change"] = _utc_now_iso()
             trade_updates.update(
                 {
@@ -287,7 +329,7 @@ def manage_open_trades(client: BybitClient) -> dict[str, Any]:
                     trade,
                     event_type,
                     "TP1 partial close confirmed; break-even protection state recorded.",
-                    {"qty": close_qty, "order": close_result, "protection": protection},
+                    {"qty": close_qty, "order": close_result, "stop_loss": target_stop, "protection": protection},
                 )
             )
             continue
@@ -311,14 +353,23 @@ def manage_open_trades(client: BybitClient) -> dict[str, Any]:
 
             management["tp2_done"] = True
             management["remaining_quantity"] = max(remaining_qty - close_qty, 0.0)
-            candidate_stop = _trailing_stop({**trade, "entry": entry}, mark_price)
+            candidate_stop = post_tp2_stop({**trade, "entry": entry}, management, mark_price)
             protection = _set_protection(
                 client,
                 trade,
                 stop_loss=candidate_stop,
                 take_profit=_runner_target(trade, management),
             )
-            management["trailing_stop"] = None if protection.get("error") else candidate_stop
+            protection_ok = not bool(protection.get("error"))
+            if is_scalping_management(management):
+                management["profit_lock_stop"] = candidate_stop if protection_ok else None
+                management["trailing_stop"] = None
+                event_type = "SCALPING_TP2_PROFIT_LOCK_SET" if protection_ok else "SCALPING_TP2_PROFIT_LOCK_PENDING"
+                event_message = "Scalping TP2 partial close confirmed; remaining 25% stop is locked at TP1."
+            else:
+                management["trailing_stop"] = candidate_stop if protection_ok else None
+                event_type = "TP2_PARTIAL_CLOSE" if protection_ok else "TP2_PARTIAL_CLOSE_TRAILING_PENDING"
+                event_message = "TP2 partial close confirmed; trailing protection state recorded."
             management["last_state_change"] = _utc_now_iso()
             trade_updates.update(
                 {
@@ -328,13 +379,12 @@ def manage_open_trades(client: BybitClient) -> dict[str, Any]:
                 }
             )
             _save_trade_state(trade, journal_id, trade_updates)
-            event_type = "TP2_PARTIAL_CLOSE" if management["trailing_stop"] is not None else "TP2_PARTIAL_CLOSE_TRAILING_PENDING"
             actions.append(
                 _record_action(
                     trade,
                     event_type,
-                    "TP2 partial close confirmed; trailing protection state recorded.",
-                    {"qty": close_qty, "order": close_result, "protection": protection},
+                    event_message,
+                    {"qty": close_qty, "order": close_result, "stop_loss": candidate_stop, "protection": protection},
                 )
             )
             continue
