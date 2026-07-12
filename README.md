@@ -6,11 +6,12 @@ Bybit-first automated trading terminal built with **FastAPI, React, PostgreSQL a
 
 The project is in **Demo Beta / Engineering Verification**. Live-capital trading is not approved.
 
-> **Last documentation update:** 13 July 2026, 1:30 AM BDT (`Asia/Dhaka`)  
-> **Latest `main` commit:** `acb171822db6d31a06deea2deff8a3d8ab0eeea6` — PR #36 merged  
+> **Last documentation update:** 13 July 2026, 2:05 AM BDT (`Asia/Dhaka`)  
+> **Latest `main` commit:** `8245f5a4bc1360700458aeb598253cd1ce378287` — PR #38 documentation merge  
+> **Active engineering task:** `STATE-SYNC-001 + WS-001` — authoritative exchange reconciliation and Bybit real-time streams  
+> **Automated verification:** backend **205/205 PASS**, frontend TypeScript/build **PASS**  
+> **Runtime status:** deployment and fresh Bybit Demo verification **PENDING**  
 > **Runtime tracker:** Issue #37  
-> **Current verified result:** Realized-PnL synchronization **PASS**  
-> **Current pending result:** TP1 break-even and TP2 trailing runtime verification  
 > **Live trading:** blocked by default
 
 ---
@@ -51,7 +52,9 @@ FastAPI Backend
         +-- Position Sizing
         +-- Execution Service
         +-- Trade Management
-        +-- Journal and Reconciliation
+        +-- Journal and Authoritative Reconciliation
+        +-- Bybit Private/Public WebSocket Service
+        +-- Browser WebSocket Status Polling
         +-- Watchdog and Bot Controls
         |
         +-- PostgreSQL (deployment)
@@ -65,7 +68,7 @@ Bybit V5 Demo / Live APIs
 |---|---|
 | Backend | Python 3.12, FastAPI, SQLAlchemy |
 | Frontend | React, TypeScript, Vite |
-| Exchange | Bybit V5 REST APIs |
+| Exchange | Bybit V5 REST + private/public WebSocket APIs |
 | Production database | PostgreSQL |
 | Local database | SQLite |
 | Hosting | Render |
@@ -88,8 +91,10 @@ Bybit USDT Perpetual Market
 → Position Sizing and Atomic Reservation
 → Exchange Execution
 → Trade-Type-Specific Management
-→ Exchange and Journal Reconciliation
-→ Exact Fees and Realized PnL
+→ Exchange-authoritative Position Reconciliation
+→ Private/Public WebSocket Event Ingestion
+→ Journal Lifecycle and Exact Fees/Realized PnL
+→ One Authoritative Operator Snapshot
 ```
 
 ## 4. Scanner and Signal rules
@@ -173,8 +178,10 @@ An unknown or conflicting profile must not silently inherit Scalping or Intraday
 | 5 | Blank-page stability | Signal page browser verification **PASS** |
 | 6 | Complete Scalping Demo re-verification | Pending |
 | 7 | Complete Intraday Demo re-verification | In progress |
-| 8 | Restart, close cleanup and orphan-order verification | Pending |
-| 9 | ACTIVE-signal execution queue audit | Newly identified — pending |
+| 8A | `STATE-SYNC-001` authoritative exchange position reconciliation | **Automated PASS — review/merge/runtime pending** |
+| 8B | `WS-001` Bybit private/public streams and browser connection status | **Automated PASS — review/merge/runtime pending** |
+| 8C | Restart, close cleanup and orphan-order verification | Pending deployed verification |
+| 9 | ACTIVE-signal execution decision visibility | Audit complete; implementation pending after state-sync runtime check |
 | 10 | Historical data/backtesting after runtime closure | Pending |
 
 Only one bounded repair package may be active at a time. Runtime PASS requires exchange evidence, not CI alone.
@@ -296,11 +303,59 @@ This is not yet classified as a confirmed code defect because execution-event/re
 | ACTIVE-signal execution-capacity audit | **0%** | New bounded audit item |
 | Restart/cleanup/orphan-order verification | **0%** | Not started |
 
+### `STATE-SYNC-001 + WS-001` bounded implementation
+
+The refresh mismatch was traced to conflicting active-trade authorities: exchange positions, Journal rows, process memory and read endpoints could independently rebuild or mutate state. The implementation now establishes one exchange-authoritative operator snapshot and adds real-time Bybit event ingestion without treating WebSocket delivery as a substitute for REST reconciliation.
+
+#### Implemented behavior
+
+- Bybit open positions are the active-position authority.
+- Journal data is retained as lifecycle/metadata evidence; a Journal-only stale row is not counted as an active exchange position.
+- Position matching uses execution mode, symbol, direction and position index, with legacy fallback only when unambiguous.
+- Exchange-only positions are recovered deterministically and are not duplicated by repeated refresh/restart cycles.
+- `/active-trades` is read-only and no longer mutates global active state during a page refresh.
+- Metrics, Portfolio, Dashboard and Active Trades consume the same authoritative snapshot.
+- A failed REST refresh preserves the previous snapshot as stale instead of making positions disappear.
+- Risk and reservation capacity count only capacity-blocking execution states.
+- Private Bybit WebSocket topics cover positions, orders, executions and wallet events.
+- Public Bybit WebSocket topics cover active/ranked-symbol ticker updates and top-of-book updates for active positions.
+- Private WebSocket events trigger debounced REST reconciliation and are backed by the normal periodic REST truth checks.
+- The browser polls an authenticated WebSocket-status endpoint and shows private/public connection state in a persistent badge.
+
+#### Automated evidence
+
+| Check | Result |
+|---|---|
+| Full backend suite | **205/205 PASS** |
+| New authoritative-reconciliation tests | **PASS** |
+| Exchange-only recovery and idempotency | **PASS TEST** |
+| Journal-only stale row excluded from active snapshot | **PASS TEST** |
+| Exact Bybit close synchronization precedes stale classification | **PASS TEST** |
+| Opposite-side same-symbol identity separation | **PASS TEST** |
+| Transient REST failure preserves prior snapshot | **PASS TEST** |
+| Private execution-event reconciliation trigger | **PASS TEST** |
+| Public ticker patch test | **PASS TEST** |
+| Python compile | **PASS** |
+| Frontend TypeScript check | **PASS** |
+| Frontend production build | **PASS** |
+
+#### Runtime gates still required
+
+- Render deployment completes with the official `pybit` SDK dependency.
+- Private WS authenticates through the official `pybit` SDK in Bybit Demo and receives position/order/execution/wallet events.
+- Public WS receives ticker/order-book events and reconnects cleanly.
+- Exchange, Dashboard, Active Trades and Journal agree after repeated browser refreshes.
+- Backend restart recovers each exchange position exactly once with preserved metadata where available.
+- Exchange 0 positions + stale Journal row produces 0 active trades and explicit attention state.
+- Partial fill, fees, realized PnL and TP lifecycle remain correct after WS/REST reconciliation.
+- Disconnect/reconnect and REST fallback do not duplicate trades or erase the last valid snapshot.
+
 ### Current verdict
 
-PR #36 is merged and deployed. The realized-PnL synchronization fix is **confirmed working in runtime**. Full lifecycle closure remains blocked by missing TP1 break-even, TP2 trailing, final Journal fee/exit, restart recovery and cleanup evidence.
+The implementation and local automated verification for `STATE-SYNC-001 + WS-001` are **PASS**. Deployment and real Bybit Demo runtime behavior are **PENDING**; no runtime PASS is claimed yet. PR #36 realized-PnL evidence remains valid, while TP1 break-even, TP2 trailing, Journal fee/exit, restart and cleanup evidence remain open in Issue #37.
 
 ### Next tasks
 
-1. Continue Issue #37 runtime verification for `TP1 → Break-even → TP2 → trailing → final Journal evidence → restart → cleanup`.
-2. Audit `EXEC-QUEUE-001` after Product Owner approval; do not change execution code before the audit establishes the exact rejection or queue failure.
+1. Review the bounded feature PR and CI evidence; do not merge without explicit Product Owner approval.
+2. After merge/deployment, run the exchange ↔ authoritative snapshot ↔ Journal ↔ Dashboard refresh/restart test matrix.
+3. Continue Issue #37 protection lifecycle verification and then implement execution-decision visibility for `EXEC-QUEUE-001`.
