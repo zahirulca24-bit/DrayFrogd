@@ -6,19 +6,16 @@ Bybit-first automated trading terminal built with **FastAPI, React, PostgreSQL a
 
 The project is in **Demo Beta / Engineering Verification**. Live-capital trading is not approved.
 
-> **Last documentation update:** 13 July 2026, 1:04 AM BDT (`Asia/Dhaka`)  
-> **Latest `main` commit:** `a1510e5abb428dd955691861875d41801e7baee6` — PR #35 Signal Engine hotfix  
-> **Active branch:** `fix/intraday-protection-partial-pnl-sync`  
-> **Active pull request:** PR #36  
-> **Current task:** Intraday TP1 break-even, TP2 trailing and partial Journal/PnL repair  
-> **Automated code verification:** CI run #271 **PASS**, backend **194/194**, frontend checks **PASS**  
+> **Last documentation update:** 13 July 2026, 1:30 AM BDT (`Asia/Dhaka`)  
+> **Latest `main` commit:** `acb171822db6d31a06deea2deff8a3d8ab0eeea6` — PR #36 merged  
+> **Runtime tracker:** Issue #37  
+> **Current verified result:** Realized-PnL synchronization **PASS**  
+> **Current pending result:** TP1 break-even and TP2 trailing runtime verification  
 > **Live trading:** blocked by default
 
 ---
 
 # Part A — Locked Master Plan
-
-This section contains approved product scope, architecture and permanent rules only. Daily progress and PASS/FAIL evidence belong in Part C.
 
 ## 1. Product objective
 
@@ -74,17 +71,6 @@ Bybit V5 Demo / Live APIs
 | Hosting | Render |
 | CI | GitHub Actions |
 
-### Responsibility boundaries
-
-- **Scanner:** market filtering, profile eligibility, trend classification and market ranking.
-- **Strategy Engine:** setup detection and geometry proposals.
-- **Signal Engine:** canonical states, useful-result retention, deduplication and ranking.
-- **Risk Engine:** final risk authority.
-- **Position Sizing:** fixed-risk quantity and exchange-constraint authority.
-- **Execution Engine:** final exchange-order authority.
-- **Trade Management:** profile-specific protection, TP stages, break-even, trailing and close lifecycle.
-- **Journal/Reconciliation:** authoritative lifecycle, fees, PnL and restart recovery.
-
 ## 3. Locked end-to-end flow
 
 ```text
@@ -93,14 +79,15 @@ Bybit USDT Perpetual Market
 → Closed-Candle Profile-Specific Analysis
 → Trend Classification
 → Reject Sideways / Stale / Insufficient Markets
-→ Rank Eligible Markets (Top 30)
-→ Strategy Engine Evaluates Approved Strategies
+→ Rank Eligible Markets
+→ Strategy Engine
 → Canonical Signal State
-→ Signal Engine Deduplicates and Ranks Useful Signals
-→ ACTIVE Signal + Risk Gate Passed
+→ Signal Engine Deduplication and Ranking
+→ ACTIVE Signal
+→ Risk Gate
 → Position Sizing and Atomic Reservation
 → Exchange Execution
-→ Trade-Type-Specific Management Profile
+→ Trade-Type-Specific Management
 → Exchange and Journal Reconciliation
 → Exact Fees and Realized PnL
 ```
@@ -114,7 +101,8 @@ Bybit USDT Perpetual Market
 - `SIDEWAYS`, `INSUFFICIENT_DATA` and stale data are blocked.
 - Manual `/scanner/run` is scan-only.
 - Canonical states: `NO_SETUP`, `NEAR_SETUP`, `ACTIVE`, `INVALID`, `EXPIRED`.
-- `NEAR_SETUP` is monitor-only; only `ACTIVE` may continue to Risk and Execution.
+- `NEAR_SETUP` is monitor-only.
+- Only `ACTIVE` may continue to Risk and Execution.
 - One deterministic primary useful signal is retained per symbol.
 - Market rank/score and signal rank/score remain separate.
 
@@ -123,8 +111,6 @@ Bybit USDT Perpetual Market
 1. **EMA Pullback**
 2. **Breakout**
 3. **Pure SMC**
-
-Future strategy work requires version control, historical backtesting, walk-forward validation, failure analysis and controlled tuning.
 
 ## 6. Locked Risk and Trade profiles
 
@@ -157,31 +143,7 @@ An unknown or conflicting profile must not silently inherit Scalping or Intraday
 - At **5% net realized daily loss**, new execution stops for that BDT day.
 - Existing positions continue to be protected and reconciled.
 
-## 7. Master roadmap
-
-| Phase | Planned outcome |
-|---|---|
-| Phase 1 | Repository foundation, CI, authentication and database persistence |
-| Phase 2 | Bybit market/account/position/execution integration |
-| Phase 3 | Scanner architecture and profile separation |
-| Phase 4 | Strategy and canonical Signal Pipeline |
-| Phase 5 | Risk authority, Position Sizing and atomic execution safety |
-| Phase 6 | Separate Scalping and Intraday Trade Management |
-| Phase 7 | Journal, fees, realized-PnL and restart reconciliation |
-| Phase 8 | Truthful operator UI and Control Center |
-| Phase 9 | Full Bybit Demo Scalping and Intraday lifecycle verification |
-| Phase 10 | Historical data, backtesting, walk-forward analysis and tuning |
-| Phase 11 | Security, backup, monitoring, soak testing and live-release hardening |
-
-## 8. Completion gates
-
-A code task reaches 100% only after bounded implementation, diff review, focused tests, full available suite, frontend checks when affected, CI, Product Owner approval and merge.
-
-A runtime task reaches 100% only after deployment plus Bybit Demo evidence confirms protection transitions, Journal/PnL, restart recovery and close cleanup.
-
-A green CI run does not prove exchange/runtime behavior.
-
-## 9. Safety and release rules
+## 7. Safety and release rules
 
 - Default mode is `demo`.
 - Live mode is not production-approved.
@@ -202,19 +164,20 @@ A green CI run does not prove exchange/runtime behavior.
 | Step | Task | Status |
 |---:|---|---|
 | 0 | README structure and runtime-audit closure | **Complete** |
-| 1 | Scalping TP2 → TP1-price SL profit lock | Automated repair exists in PR #32; rebase/merge/deploy pending |
-| 2A | Intraday TP1 break-even and TP2 trailing retry | **Automated PASS — PR #36 merge/deploy pending** |
-| 2B | Partial-fill Journal, fees and realized PnL | **Automated PASS — PR #36 merge/deploy pending** |
-| 2C | Dashboard/Active Trades open-partial realized PnL | **Automated PASS — PR #36 merge/deploy pending** |
+| 1 | Scalping TP2 → TP1-price SL profit lock | Pending deployed re-verification |
+| 2A | Intraday TP1 break-even and TP2 trailing retry | **Merged in PR #36 — runtime pending** |
+| 2B | Partial-fill Journal, fees and realized PnL | **Merged in PR #36 — realized PnL runtime PASS** |
+| 2C | Dashboard/Active Trades open-partial realized PnL | **Runtime PASS** |
 | 3 | Recover authoritative strategy/profile metadata | Pending |
 | 4 | Correct TP labels and Risk/daily-trade UI values | Pending |
-| 5 | Blank-page stability | Signal initial-render guard merged in PR #35; deployed browser verification pending |
+| 5 | Blank-page stability | Signal page browser verification **PASS** |
 | 6 | Complete Scalping Demo re-verification | Pending |
-| 7 | Complete Intraday Demo re-verification | Pending |
+| 7 | Complete Intraday Demo re-verification | In progress |
 | 8 | Restart, close cleanup and orphan-order verification | Pending |
-| 9 | Historical data/backtesting after runtime closure | Pending |
+| 9 | ACTIVE-signal execution queue audit | Newly identified — pending |
+| 10 | Historical data/backtesting after runtime closure | Pending |
 
-Only one bounded repair package may be active at a time. PASS/FAIL evidence belongs in Part C.
+Only one bounded repair package may be active at a time. Runtime PASS requires exchange evidence, not CI alone.
 
 ---
 
@@ -226,11 +189,11 @@ Only one bounded repair package may be active at a time. PASS/FAIL evidence belo
 
 | Work item | Result | Evidence |
 |---|---|---|
-| Scanner Architecture and Profile Separation | **PASS** | PR #27 merged; backend 171/171; frontend checks passed |
-| Strategy and Signal Pipeline | **PASS** | PR #28 merged; backend 180/180; frontend checks passed |
-| Scanner and Signal UI Truthfulness | **PASS** | PR #30 merged; CI run #227 passed |
+| Scanner Architecture and Profile Separation | **PASS** | PR #27 merged |
+| Strategy and Signal Pipeline | **PASS** | PR #28 merged |
+| Scanner and Signal UI Truthfulness | **PASS** | PR #30 merged |
 | README master/version/day-log structure | **PASS** | PR #31 merged |
-| Signal Engine initial-render white-screen guard | **PASS CODE / RUNTIME PENDING** | PR #35 merged after CI run #258 |
+| Signal Engine initial-render white-screen guard | **PASS** | PR #35 merged and browser page now loads |
 
 ### ZECUSDT Scalping runtime evidence
 
@@ -240,7 +203,7 @@ Only one bounded repair package may be active at a time. PASS/FAIL evidence belo
 | TP1 approximately 50% | **PASS** |
 | TP2 approximately 25% | **PASS** |
 | Remaining 25% SL moved to TP1 price | **FAIL** |
-| Partial Journal/fees/realized PnL | **FAIL** |
+| Partial Journal/fees/realized PnL | **FAIL on old deployment** |
 | Final close and cleanup | **PENDING** |
 
 ---
@@ -249,74 +212,95 @@ Only one bounded repair package may be active at a time. PASS/FAIL evidence belo
 
 ### Timeline
 
-- **12:44 AM–12:45 AM BDT:** LABUSDT Bybit Demo, Journal, Active Trades and Dashboard screenshots captured.
+- **12:44 AM–12:45 AM BDT:** LABUSDT trade screenshots captured from Bybit Demo, Journal, Active Trades and Dashboard.
 - **1:00 AM BDT:** Product Owner approved the bounded repair.
 - **1:01 AM BDT:** PR #36 opened.
-- **1:02 AM BDT:** CI run #271 completed successfully.
-- **1:04 AM BDT:** README synchronized with automated evidence.
+- **1:02 AM BDT:** CI passed with backend **194/194** tests and frontend checks.
+- **After approval:** PR #36 merged into `main` at commit `acb171822db6d31a06deea2deff8a3d8ab0eeea6`.
+- **1:19 AM–1:30 AM BDT:** deployed browser pages and the new LABUSDT lifecycle were re-checked.
+- **1:30 AM BDT:** Dashboard and Active Trades showed authoritative realized PnL after the trade closed.
 
-### LABUSDT Intraday runtime evidence
+### PR #36 automated verification
+
+| Check | Result |
+|---|---|
+| Explicit-Intraday fast protection guard | **PASS CODE** |
+| TP1 break-even retry after persisted `tp1_done` | **PASS TEST** |
+| TP2 trailing retry after persisted `tp2_done` | **PASS TEST** |
+| Restart quantity inference | **PASS TEST** |
+| Unknown/conflicting profile blocked | **PASS TEST** |
+| Exact partial Journal/PnL/fees synchronization | **PASS TEST** |
+| BDT daily realized metrics including open partials | **PASS TEST** |
+| Frontend TypeScript and production build | **PASS** |
+| GitHub Actions CI | **PASS** |
+| Product Owner merge approval | **PASS** |
+| Merge to `main` | **PASS** |
+| Render deployment/browser load | **PASS** |
+
+### Fresh LABUSDT deployed runtime evidence
 
 | Gate | Result | Evidence |
 |---|---|---|
-| Initial short opened | **PASS** | `4,496` LAB opened near `0.444` |
-| TP1 partial close | **PASS** | `2,248` LAB closed near `0.438` |
-| TP2 partial close | **PASS** | `1,124` LAB closed near `0.436` |
-| Remaining runner | **PASS** | `1,124` LAB remained |
-| TP1 moved SL to break-even | **FAIL** | Exchange protection was not verified at break-even |
-| TP2 started trailing protection | **FAIL** | Runner trailing did not activate |
-| Journal quantity reflected remaining size | **PASS** | Journal showed `1,124` |
-| Journal partial fees | **FAIL** | `N/A` |
-| Journal partial realized PnL | **FAIL** | `N/A` |
-| Dashboard Today's Realized | **FAIL** | `$0.00` despite Bybit partial profits |
-| Active Trades realized PnL | **FAIL** | `$0.00` |
-| Strategy/profile metadata | **FAIL** | Journal displayed `unknown` |
+| New LABUSDT trade opened | **PASS** | Deployed app and Bybit Demo showed the position |
+| Final close synchronization | **PASS** | Position disappeared from Dashboard active trades |
+| Dashboard Today's Realized | **PASS** | `$27.64` displayed |
+| Dashboard Today's Net | **PASS** | `$27.64` displayed with zero unrealized PnL |
+| Active Trades Realized PnL | **PASS** | `$27.6431` displayed |
+| Account equity/available balance refresh | **PASS** | Dashboard refreshed after close |
+| Signal Engine browser stability | **PASS** | Page loads and displays ranked markets/signals |
+| Journal exact exit price | **PENDING EVIDENCE** | Final Journal screenshot still required |
+| Journal exact fees | **PENDING EVIDENCE** | Final Journal screenshot still required |
+| TP1 moved SL to break-even | **PENDING EVIDENCE** | Bybit protection screenshot required at TP1 |
+| TP2 started trailing protection | **PENDING EVIDENCE** | Bybit protection screenshot required at TP2 |
+| Restart recovery | **PENDING** | Not yet tested |
+| Native order cleanup/orphan check | **PENDING** | Not yet tested |
 
-### Confirmed code-level root causes
+### Accounting verdict
 
-1. Native reconciliation persisted `tp1_done`/`tp2_done` even when protection amendment or verification failed; later fast cycles skipped the stage.
-2. Deployed partial reconciliation did not persist exact cumulative Bybit PnL, fees and weighted exit into visible Journal columns.
-3. Dashboard and Active Trades calculated realized PnL from fully closed trades only, excluding open positions with realized partial fills.
-4. Unknown or conflicting profile state must be blocked instead of receiving a silent management default.
+The deployed PR #36 build now proves that the realized-PnL accounting path is functioning after the LABUSDT trade closed:
 
-### PR #36 automated checklist
+- Dashboard realized PnL updated from `$0.00` to `$27.64`.
+- Active Trades realized PnL displayed `$27.6431`.
+- Dashboard net PnL matched realized PnL after unrealized PnL returned to zero.
 
-| Check | Result | Evidence |
-|---|---|---|
-| Bounded branch and PR | **PASS** | PR #36 |
-| Explicit-Intraday fast protection guard | **PASS** | Two-second monitor integration |
-| TP1 break-even retry after persisted `tp1_done` | **PASS** | Focused transient-failure test |
-| TP2 trailing retry after persisted `tp2_done` | **PASS** | Focused transient-failure test |
-| Restart quantity inference | **PASS** | Focused restart test |
-| Unknown/conflicting profile blocked | **PASS** | Focused authority test |
-| Exact partial Journal/PnL/fees synchronization | **PASS** | Six reconciliation tests |
-| BDT daily realized metrics including open partials | **PASS** | Three daily-accounting tests |
-| Dashboard and Active Trades use backend daily authority | **PASS BUILD** | TypeScript and production build passed |
-| Backend compile | **PASS** | CI run #271 |
-| Full backend suite | **PASS** | **194/194 tests passed** |
-| Frontend TypeScript check | **PASS** | CI run #271 |
-| Frontend production build | **PASS** | CI run #271 |
-| GitHub Actions CI | **PASS** | Run #271 |
-| Product Owner merge approval | **PENDING** | No merge performed |
-| Render deployment | **PENDING** | Requires merge |
-| New Bybit Demo verification | **PENDING** | Requires deployment and fresh lifecycle |
+**Result:** Realized-PnL synchronization is **RUNTIME PASS**.
+
+This does not yet prove the TP1 break-even or TP2 trailing protection transitions. Those remain open in Issue #37.
+
+### Newly identified execution-capacity issue
+
+At approximately **1:30 AM BDT**:
+
+- Bot status was `RUNNING`.
+- Auto trading was `ENABLED`.
+- Readiness was `READY`.
+- Maximum open trades was `5`.
+- Dashboard showed `0` active trades.
+- Signal Engine showed **2 ACTIVE signals**: `WLDUSDT LONG` and `LABUSDT SHORT`.
+- The WLDUSDT signal still showed `Risk gate: NOT EVALUATED` and `Execution: ENGINE CONTROLLED`.
+
+This is not yet classified as a confirmed code defect because execution-event/rejection evidence has not been audited. It is the next bounded audit item:
+
+> **EXEC-QUEUE-001 — Confirm that ACTIVE signals enter Risk and Execution while capacity remains, and persist explicit rejection reasons when they do not.**
 
 ### Current gate-based progress
 
-| Work item | Completed gates | Progress | Current status |
-|---|---:|---:|---|
-| Signal white-screen hotfix | 4/5 | **80%** | Merged; browser verification pending |
-| Intraday BE/trailing repair | 6/8 | **75%** | Code and CI passed; merge/runtime pending |
-| Partial Journal/PnL repair | 6/8 | **75%** | Code and CI passed; merge/runtime pending |
-| Dashboard open-partial realized repair | 5/7 | **71%** | Code and frontend checks passed; merge/runtime pending |
-| Complete Intraday deployed lifecycle | 3/10 | **30%** | Entry, TP1 and TP2 fills passed; protection/accounting failed on deployed version |
-| Metadata recovery | 0/5 | **0%** | Not started |
-| Restart/cleanup/orphan-order verification | 0/6 | **0%** | Not started |
+| Work item | Progress | Current status |
+|---|---:|---|
+| Signal white-screen hotfix | **100%** | Merged and browser verified |
+| Partial Journal/PnL repair | **88%** | Realized PnL runtime PASS; exact Journal fee/exit evidence pending |
+| Dashboard/Active Trades realized repair | **100%** | Runtime PASS |
+| Intraday BE/trailing repair | **75%** | Code/tests PASS; live protection transitions pending |
+| Complete Intraday deployed lifecycle | **60%** | Entry, close and accounting verified; BE/trailing/restart/cleanup pending |
+| Metadata recovery | **0%** | Not started |
+| ACTIVE-signal execution-capacity audit | **0%** | New bounded audit item |
+| Restart/cleanup/orphan-order verification | **0%** | Not started |
 
 ### Current verdict
 
-PR #36 implementation and automated verification are **PASS**. The deployed runtime remains **FAIL/PENDING** until the PR is approved, merged, deployed and verified with a fresh Bybit Demo lifecycle.
+PR #36 is merged and deployed. The realized-PnL synchronization fix is **confirmed working in runtime**. Full lifecycle closure remains blocked by missing TP1 break-even, TP2 trailing, final Journal fee/exit, restart recovery and cleanup evidence.
 
-### Next task
+### Next tasks
 
-> Product Owner review and merge decision for PR #36. After merge: deploy to Render and re-test `Entry → TP1 → Break-even → TP2 → trailing → Journal/fees/PnL → final close`.
+1. Continue Issue #37 runtime verification for `TP1 → Break-even → TP2 → trailing → final Journal evidence → restart → cleanup`.
+2. Audit `EXEC-QUEUE-001` after Product Owner approval; do not change execution code before the audit establishes the exact rejection or queue failure.
