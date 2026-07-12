@@ -13,6 +13,7 @@ from app.risk import extract_account_equity, refresh_risk_state
 from app.risk_cooldown_sync import sync_loss_cooldowns
 from app.risk_execution import execute_signal
 from app.risk_sync import sync_partial_realized_pnl
+from app.scalping_profit_lock_guard import enforce_scalping_tp2_profit_locks
 from app.scanner import get_active_signals, run_scan
 from app.trade_management import manage_open_trades
 
@@ -37,6 +38,10 @@ async def native_profit_monitor_loop() -> None:
             result = await asyncio.to_thread(reconcile_native_profit_orders, client)
             if not result.get("ok") and result.get("errors"):
                 logger.debug("Native TP reconciliation pending: %s", result.get("errors"))
+
+            profit_lock_result = await asyncio.to_thread(enforce_scalping_tp2_profit_locks, client)
+            if not profit_lock_result.get("ok") and profit_lock_result.get("errors"):
+                logger.debug("Scalping TP2 profit-lock retry pending: %s", profit_lock_result.get("errors"))
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # pragma: no cover - defensive watcher guard
@@ -158,7 +163,6 @@ async def auto_trading_loop() -> None:
                             },
                         )
                         continue
-
                     if outcome.get("ok"):
                         _safe_log_bot_event(
                             "trade_executed",
