@@ -9,13 +9,14 @@ The project is currently in **Demo Beta / Engineering Verification**. Live-capit
 > **Latest completed roadmap step:** Step 1 — Scanner Architecture  
 > **Latest scanner merge:** PR #21 — `f30eda65b0ad06cf943ca952f5261a9807a2c477`  
 > **Latest Scanner test evidence:** targeted 12/12, full backend 150/150  
+> **Trade-management profiles:** Scalping and Intraday are separate  
 > **Live trading:** blocked by default
 
 ---
 
 ## 1. Current 3-Step Roadmap
 
-This is the active implementation roadmap. Completed items must remain checked and each future completed step must be updated here with evidence.
+This is the active implementation roadmap. Completed items remain checked and each future completed step must be updated here with evidence.
 
 ### [x] Step 1 — Scanner Market Ranking, Trend Classification and Sideways Rejection
 
@@ -25,11 +26,11 @@ Implemented:
 
 - Dynamic Bybit USDT perpetual candidate collection.
 - Liquidity, turnover, movement and spread validation.
-- Multi-timeframe market analysis:
+- Multi-timeframe analysis:
   - 1-hour trend context
   - 15-minute setup context
   - 5-minute trigger confirmation
-- Open/current candles are excluded from confirmed analysis.
+- Open/current candles excluded from confirmed analysis.
 - Deterministic trend states:
   - `UPTREND`
   - `DOWNTREND`
@@ -40,7 +41,6 @@ Implemented:
 - `SIDEWAYS`, stale and insufficient-data markets are blocked.
 - Dynamic ranked universe of up to 50 eligible markets.
 - Deterministic market score and score-component metadata.
-- Scanner output includes trend, market score and timeframe evidence.
 - Existing Risk and Execution behavior remains unchanged.
 
 Evidence:
@@ -66,16 +66,16 @@ Scope:
   - `ACTIVE`
   - `INVALID`
   - `EXPIRED`
-- Confirmed entries must use closed candles only.
-- Opposite-trend strategy results must be rejected.
+- Confirmed entries use closed candles only.
+- Opposite-trend strategy results are rejected.
 - Signal Engine keeps only useful results:
   - `NEAR_SETUP` → monitor only
   - `ACTIVE` → eligible for Risk and Execution gates
-- `INVALID` and `EXPIRED` results must leave executable monitoring.
+- `INVALID` and `EXPIRED` leave executable monitoring.
 - One primary best-quality signal per symbol.
-- Other valid strategy matches remain as confirmation metadata.
-- Signal ranking must be deterministic using quality, confidence, freshness and valid risk geometry.
-- Scanner, Risk, Position Sizing and Execution rules must not be changed by this step.
+- Other valid strategy matches remain confirmation metadata.
+- Signal ranking is deterministic using quality, confidence, freshness and valid risk geometry.
+- Scanner, Risk, Position Sizing and Execution rules are outside this step.
 
 Completion gates:
 
@@ -103,8 +103,8 @@ Scanner UI must show:
 Required presentation rules:
 
 - A strategy-check total must not be shown as a symbol total.
-- Market ranking and signal ranking must be shown as separate layers.
-- Strategy-valid state and account-executable state must be displayed separately.
+- Market ranking and signal ranking must be separate layers.
+- Strategy-valid state and account-executable state must be separate.
 - No stale, placeholder or fabricated runtime values.
 
 Signal cards must show:
@@ -142,7 +142,7 @@ Bybit USDT Perpetual Market
 → Bot Monitors Signal Symbols Only
 → Active Signal + Risk Gate Passed
 → Trade Execution
-→ Trade Management
+→ Trade-Type-Specific Management Profile
 → Journal and PnL Reconciliation
 ```
 
@@ -153,7 +153,7 @@ Responsibility boundaries:
 - **Signal Engine:** useful-result storage, deduplication and signal ranking.
 - **Risk Engine:** final risk authority.
 - **Execution Engine:** final exchange-order authority.
-- **Trade Management:** protection, TP stages, break-even, trailing and close lifecycle.
+- **Trade Management:** profile-specific protection, TP stages, break-even, trailing and close lifecycle.
 
 ---
 
@@ -174,7 +174,7 @@ This score represents engineering milestone completion. It is not a profitabilit
 | 7 | Risk Engine Authority | ✅ Complete in code | Fixed-risk profiles, dynamic daily risk pool and circuit breaker |
 | 8 | Position sizing and exposure | ✅ Complete in code | SL-distance sizing, exchange constraints and portfolio margin ceiling |
 | 9 | Trade Execution Engine | ✅ Complete in code | Reservation, idempotency, fill confirmation and protection verification |
-| 10 | Trade Management Engine | 🟡 Partial | Native TP, break-even and trailing exist; real demo verification remains |
+| 10 | Trade Management Engine | 🟡 Partial | Separate Scalping/Intraday profiles are implemented in code; real demo verification remains |
 | 11 | Journal and exact PnL sync | ✅ Complete in code | Persistent journal, reconciliation and realized-PnL synchronization |
 | 12 | Frontend operations terminal | 🟡 Partial | Main pages exist; Step 3 and Settings remain |
 | 13 | Deployment and observability | 🟡 Partial | Render, health/readiness and Watchdog exist; latest runtime verification remains |
@@ -195,11 +195,11 @@ DrayFrogd is designed to:
 6. Size positions using fixed USDT risk and SL distance.
 7. Reserve risk and execution state before exchange submission.
 8. Confirm actual fills and verify exchange protection.
-9. Manage TP stages, break-even, trailing and final close reconciliation.
+9. Apply the correct Scalping or Intraday management profile.
 10. Persist trade, PnL, risk and operational evidence.
 11. Provide an administrative React terminal for monitoring and control.
 
-The application is **demo-first**. Live trading must remain disabled until all live-release gates are completed and explicitly approved.
+The application is **demo-first**. Live trading remains disabled until all release gates are completed and explicitly approved.
 
 ---
 
@@ -262,17 +262,38 @@ Strategy completion still requires:
 
 ---
 
-## 7. Locked Risk and Portfolio Policy
+## 7. Locked Risk and Trade Profiles
 
-### Trade profiles
+Scalping and Intraday must never share one generic management profile.
 
 | Rule | Scalping | Intraday |
 |---|---:|---:|
 | Fixed risk per trade | 20 USDT | 50 USDT |
 | Maximum leverage | 20x | 10x |
 | Minimum Risk:Reward | 1:1.5 | 1:2.0 |
+| TP1 | 1.5R — close 50% | 2R — close 50% |
+| TP2 | 2R — close 25% | 2.5R — close 25% |
+| Final target / Runner | 2.5R — close final 25% | 3R — final 25% runner |
+| Early protection | At 1R move SL to break-even + observed fee buffer | At TP1 move SL to break-even |
+| After TP2 | Move remaining SL to TP1 price | Activate trailing protection |
+| Trailing stop | Disabled | Enabled only after TP2 |
 | Maximum duration | 59 minutes | 6 hours |
-| Trailing stop | Disabled | Enabled after approved trigger |
+
+### Mandatory profile contract
+
+Every managed trade must persist and enforce:
+
+- `trade_type`
+- `strategy_name`
+- `management_profile`
+- selected leverage
+- TP1, TP2 and final/runner target
+- TP allocation percentages
+- break-even/profit-lock rule
+- trailing enabled/disabled state
+- maximum holding time
+
+An unknown or missing `trade_type` must not silently inherit a default profile. New management actions must be blocked until the trade profile is authoritative.
 
 ### Portfolio controls
 
@@ -283,7 +304,7 @@ Strategy completion still requires:
 - A realized losing close creates a **30-minute symbol cooldown**.
 - Daily reset timezone is **Asia/Dhaka**.
 - At **5% net realized daily loss**, new execution stops for that BDT day.
-- Existing positions must continue to be protected and reconciled.
+- Existing positions continue to be protected and reconciled.
 
 ---
 
@@ -299,9 +320,10 @@ Active Signal
 → Market order submission
 → Actual fill confirmation
 → Actual-fill risk and RR recheck
-→ SL/TP attachment and exchange verification
-→ Native TP management
-→ Persistent active-trade state
+→ Install selected management profile
+→ Attach and verify profile-specific final TP and initial SL
+→ Install native TP1 / TP2 orders
+→ Persist active-trade state
 ```
 
 Implemented safety controls include:
@@ -310,30 +332,70 @@ Implemented safety controls include:
 - Duplicate execution prevention.
 - Durable reservation before order submission.
 - Actual fill and executed quantity persistence.
+- Profile-specific protection installation.
 - Emergency close when fill risk becomes unsafe.
 - Emergency close when protection cannot be attached or verified.
 - Uncertain exchange states are not reported as successful trades.
 
 ---
 
-## 9. Trade Management
+## 9. Trade Management Rules
 
-Implemented baseline:
+### Scalping profile
 
-- Native reduce-only TP orders.
-- Break-even protection after approved TP progress.
-- Runner trailing protection.
-- Exchange protection verification.
-- Position and order reconciliation after restart.
-- Manual-close and fallback management paths.
+| Stage | Target | Quantity | Protection action |
+|---|---:|---:|---|
+| Early protection | 1R | No close | SL → break-even + observed fee buffer |
+| TP1 | 1.5R | Close 50% | Keep protected stop |
+| TP2 | 2R | Close 25% | Remaining 25% SL → TP1 price |
+| Final TP | 2.5R | Close final 25% | Full exit; no trailing |
 
-Still required:
+Additional Scalping rules:
 
-- Real Bybit Demo TP/BE/trailing verification.
-- Orphan-order detection and cleanup.
-- Private order/position WebSocket reconciliation.
-- Multi-instance worker ownership lock.
-- Extended partial-fill and amendment tests.
+- High-spread symbols are rejected using the repository's verified spread boundary.
+- Trailing stop is disabled.
+- Maximum trade duration is 59 minutes.
+- The remaining 25% after TP2 is protected at the TP1 price.
+
+### Intraday profile
+
+| Stage | Target | Quantity | Protection action |
+|---|---:|---:|---|
+| TP1 | 2R | Close 50% | SL → break-even |
+| TP2 | 2.5R | Close 25% | Activate trailing protection |
+| Runner | 3R target | Final 25% | Manage with approved trailing rule |
+
+Additional Intraday rules:
+
+- Maximum leverage is 10x.
+- Trailing is enabled only after TP2.
+- Maximum trade duration is 6 hours.
+
+### Implemented behavior
+
+- TP1 and TP2 use exchange-native GTC reduce-only limit orders.
+- Native order IDs, quantities, targets and statuses are persisted.
+- The dedicated watcher reconciles native order state every 2 seconds.
+- The profile-specific final TP is installed and exchange-verified.
+- Scalping 1R protection is checked by the dedicated watcher.
+- Scalping TP2 applies a TP1-price profit lock to the final 25%.
+- Intraday TP1 moves the remaining position SL to break-even.
+- Intraday TP2 activates trailing protection.
+- Protection updates are verified against the exchange position.
+- Position-size reconciliation remains available as a restart-safe fallback.
+- Eligible existing full-size active trades can be adopted after restart/deploy.
+- Cancelled, rejected or deactivated native orders switch to the mark-price fallback.
+- Native-order mode blocks duplicate polling-based partial closes.
+- Maximum-hold and stagnant-trade exits remain fallback management rules.
+
+### Trade Management work still required
+
+- Real Bybit Demo verification of both Scalping and Intraday TP lifecycles.
+- Native order cancellation/cleanup verification on manual close, SL close and full position close.
+- Orphan-order detection and cleanup after crashes or exchange-side manual actions.
+- Private order/position WebSocket integration; current watcher uses periodic REST reconciliation.
+- Multi-instance worker ownership/locking before horizontal scaling.
+- Extended tests for partial fills, order amendments, rejected amendments and exchange latency.
 
 ---
 
@@ -343,10 +405,10 @@ These remain separate bounded tasks after Steps 2 and 3:
 
 - Journal restart reconciliation and authoritative exchange timestamps.
 - Entry fees, realized PnL and daily net-PnL verification.
-- Strategy and trade-type persistence after restart.
+- Strategy and trade-type persistence after restart verification.
 - Bot/manual/external trade classification.
-- Scalping 20x and Intraday 10x runtime enforcement verification.
-- Scalping and Intraday TP-ladder enforcement verification.
+- Scalping 20x and Intraday 10x runtime verification.
+- Scalping and Intraday TP-ladder runtime verification.
 - Failed or uncertain reservation cleanup.
 - Authentication expiry and server-side logout hardening.
 - Settings completion.
@@ -367,7 +429,7 @@ These remain separate bounded tasks after Steps 2 and 3:
 
 1. Deploy the approved latest `main`.
 2. Verify database bootstrap, health and readiness.
-3. Complete one full Bybit Demo trade lifecycle.
+3. Complete full Scalping and Intraday Bybit Demo lifecycles.
 4. Capture backend, journal and exchange evidence.
 5. Fix only evidence-confirmed runtime defects.
 
@@ -392,7 +454,7 @@ These remain separate bounded tasks after Steps 2 and 3:
 
 1. Align all frontend risk values with backend authority.
 2. Show risk pool, live downside risk and breaker reasons.
-3. Show native TP order status and protection state.
+3. Show selected trade profile, native TP status and protection state.
 4. Complete Settings.
 5. Remove old project naming.
 6. Add deployment and runtime-verification panels.
@@ -426,7 +488,7 @@ Required release evidence:
 - Full available test suite.
 - CI result.
 - Deployed health/readiness.
-- Bybit Demo order and position evidence.
+- Bybit Demo order and position evidence for both profiles.
 - Journal and PnL evidence.
 - Restart/recovery evidence.
 
@@ -489,6 +551,8 @@ Never commit API keys, passwords, session secrets, service-role credentials or `
 
 - Default mode is `demo`.
 - Live mode is not production-approved.
+- Scalping and Intraday management rules must remain separate.
+- Unknown trade type must not receive a silent default management profile.
 - Code completion is not runtime verification.
 - Runtime verification is not live-capital approval.
 - Do not describe a test as passed without evidence.
@@ -505,6 +569,8 @@ DrayFrogd has a substantial demo-trading application and core safety architectur
 
 **Step 1 of the current Scanner roadmap is complete. Steps 2 and 3 remain pending.**
 
-The project is not finished because Strategy/Signal pipeline completion, truthful Scanner/Signal UI, real Bybit Demo E2E verification, backtesting, operational hardening and live-release gates are still outstanding.
+**Scalping and Intraday now have separately documented management profiles.** Runtime enforcement exists in code through PR #20, but both profiles still require full Bybit Demo lifecycle verification.
+
+The project is not finished because Strategy/Signal pipeline completion, truthful Scanner/Signal UI, real Bybit Demo E2E verification, backtesting, operational hardening and live-release gates remain outstanding.
 
 **Current classification: Demo Beta — 70% roadmap complete, runtime verification required, live trading not approved.**
