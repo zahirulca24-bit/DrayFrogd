@@ -1,7 +1,14 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { AlertTriangle, Play, RefreshCw } from "lucide-react";
 import { api } from "../api";
 import { ExecutableSignal, ExecuteTradeResponse, MarketTicker } from "../types";
+import {
+  CanonicalSignalState,
+  fetchSignalTruth,
+  runSignalTruthScan,
+  SignalTruthPayload,
+  TruthSignal,
+} from "../signalTruth";
 
 interface SignalEngineProps {
   authToken: string | null;
@@ -34,14 +41,19 @@ const BDT_DATE_TIME = new Intl.DateTimeFormat("en-BD", {
 });
 
 function formatBdtDateTime(value?: string | Date | null) {
-  if (!value) {
-    return "N/A";
-  }
-  return BDT_DATE_TIME.format(new Date(value));
+  if (!value) return "N/A";
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? "N/A" : BDT_DATE_TIME.format(date);
 }
 
-function formatMoney(value: number) {
-  return `$${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })}`;
+function formatMoney(value: number | null) {
+  if (value === null || !Number.isFinite(value)) return "N/A";
+  return `$${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 6 })}`;
+}
+
+function formatNumber(value: number | null, suffix = "") {
+  if (value === null || !Number.isFinite(value)) return "N/A";
+  return `${value.toFixed(2)}${suffix}`;
 }
 
 function formatCompact(value: number) {
@@ -53,70 +65,65 @@ function numberValue(value: unknown) {
   return Number.isFinite(numeric) ? numeric : 0;
 }
 
-function statusLabel(signal: ExecutableSignal) {
-  if (signal.executionStatus === "READY") {
-    return "Executable";
-  }
-  if (signal.executionStatus === "NEAR_SETUP") {
-    return "Near Setup";
-  }
-  return "Blocked";
+function formatAge(value: string | null) {
+  if (!value) return "N/A";
+  const ageMs = Date.now() - new Date(value).getTime();
+  if (!Number.isFinite(ageMs) || ageMs < 0) return "N/A";
+  const minutes = Math.floor(ageMs / 60_000);
+  if (minutes < 1) return "<1m";
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ${minutes % 60}m`;
+  return `${Math.floor(hours / 24)}d`;
 }
 
-function statusTone(signal: ExecutableSignal) {
-  if (signal.executionStatus === "READY") {
-    return "text-emerald-300 border-emerald-500/20 bg-emerald-500/10";
-  }
-  if (signal.executionStatus === "NEAR_SETUP") {
-    return "text-amber-300 border-amber-500/20 bg-amber-500/10";
-  }
+function stateTone(state: CanonicalSignalState) {
+  if (state === "ACTIVE") return "text-emerald-300 border-emerald-500/20 bg-emerald-500/10";
+  if (state === "NEAR_SETUP") return "text-amber-300 border-amber-500/20 bg-amber-500/10";
+  if (state === "NO_SETUP") return "text-slate-300 border-slate-700 bg-slate-800/60";
+  if (state === "EXPIRED") return "text-violet-300 border-violet-500/20 bg-violet-500/10";
   return "text-rose-300 border-rose-500/20 bg-rose-500/10";
 }
 
-function trendLabel(ticker?: MarketTicker, direction?: string) {
-  if (!ticker) {
-    return direction || "N/A";
-  }
-  const change = numberValue(ticker.price24hPcnt) * 100;
-  return `${change >= 0 ? "UP" : "DOWN"} ${Math.abs(change).toFixed(2)}%`;
+function trendTone(trendState: string | null) {
+  if (trendState === "UPTREND") return "text-emerald-400";
+  if (trendState === "DOWNTREND") return "text-rose-400";
+  return "text-slate-400";
 }
 
-function normalizeSignals(signals: ExecutableSignal[]) {
-  const priority = { READY: 0, NEAR_SETUP: 1, BLOCKED: 2, EXPIRED: 3 } as Record<string, number>;
-  return [...signals].sort((a, b) => {
-    const delta = (priority[a.executionStatus] ?? 9) - (priority[b.executionStatus] ?? 9);
-    if (delta !== 0) {
-      return delta;
-    }
-    return b.score - a.score;
-  });
-}
-
-export default function SignalEngine({
-  authToken,
-  signals,
-  scanResults,
-  loading,
-  onRunScan,
-  onRefresh,
-  onExecuteSignal,
-}: SignalEngineProps) {
-  const [overview, setOverview] = useState<{ top_gainers: MarketTicker[]; watchlist: MarketTicker[] }>({ top_gainers: [], watchlist: [] });
-  const [marketError, setMarketError] = useState<string | null>(null);
+export default function SignalEngine(props: SignalEngineProps) {
+  const [truth, setTruth] = useState<SignalTruthPayload | null>(null);
+  const [truthError, setTruthError] = useState<string | null>(null);
+  const [scanLoading, setScanLoading] = useState(false);
   const [selectedSignalId, setSelectedSignalId] = useState<string | null>(null);
-  const [autoTradeArmed, setAutoTradeArmed] = useState<Record<string, boolean>>({});
-  const [executionFeedback, setExecutionFeedback] = useState<Record<string, string>>({});
-  const bdtDayRef = useRef(new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Dhaka" }));
+  const [overview, setOverview] = useState<{ top_gainers: MarketTicker[]; watchlist: MarketTicker[] }>({
+    top_gainers: [],
+    watchlist: [],
+  });
+  const [marketError, setMarketError] = useState<string | null>(null);
+
+  const loadTruth = useCallback(async () => {
+    if (!props.authToken) return;
+    try {
+      const payload = await fetchSignalTruth(props.authToken);
+      setTruth(payload);
+      setTruthError(null);
+    } catch (error: any) {
+      setTruthError(error?.message || "Scanner and signal contract data is unavailable.");
+    }
+  }, [props.authToken]);
 
   useEffect(() => {
-    if (!authToken) {
-      return;
-    }
+    void loadTruth();
+  }, [loadTruth, props.signals.length, props.scanResults.length]);
 
+  useEffect(() => {
+    if (!props.authToken) return;
     let cancelled = false;
+
     const loadOverview = async () => {
       try {
-        const response = await api.getMarketOverview(authToken);
+        const response = await api.getMarketOverview(props.authToken as string);
         if (!cancelled) {
           setOverview({
             top_gainers: response.top_gainers || [],
@@ -125,27 +132,21 @@ export default function SignalEngine({
           setMarketError(response.error || null);
         }
       } catch (error: any) {
-        if (!cancelled) {
-          setMarketError(error?.message || "Failed to load market overview");
-        }
+        if (!cancelled) setMarketError(error?.message || "Live market enrichment is unavailable.");
       }
     };
 
-    loadOverview();
+    void loadOverview();
     const interval = setInterval(() => {
-      loadOverview();
-      const currentBdtDay = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Dhaka" });
-      if (currentBdtDay !== bdtDayRef.current) {
-        bdtDayRef.current = currentBdtDay;
-        void onRefresh();
-      }
-    }, 10000);
+      void loadOverview();
+      void loadTruth();
+    }, 10_000);
 
     return () => {
       cancelled = true;
       clearInterval(interval);
     };
-  }, [authToken, onRefresh]);
+  }, [props.authToken, loadTruth]);
 
   const tickerMap = useMemo(() => {
     const map = new Map<string, MarketTicker>();
@@ -153,306 +154,353 @@ export default function SignalEngine({
     return map;
   }, [overview]);
 
-  const allSignals = useMemo(() => normalizeSignals(scanResults), [scanResults]);
-
-  const selectedSignal = useMemo(() => {
-    if (!allSignals.length) {
-      return null;
-    }
-    return allSignals.find((signal) => signal.id === selectedSignalId) || allSignals[0];
-  }, [allSignals, selectedSignalId]);
+  const signalCards = truth?.primarySignals || [];
+  const marketRows = truth?.marketRows || [];
+  const selectedSignal = signalCards.find((signal) => signal.id === selectedSignalId) || signalCards[0] || null;
 
   useEffect(() => {
-    if (!selectedSignal && allSignals.length > 0) {
-      setSelectedSignalId(allSignals[0].id);
+    if (signalCards.length > 0 && !signalCards.some((signal) => signal.id === selectedSignalId)) {
+      setSelectedSignalId(signalCards[0].id);
     }
-  }, [allSignals, selectedSignal]);
+  }, [signalCards, selectedSignalId]);
 
-  const executableCount = allSignals.filter((signal) => signal.executionStatus === "READY").length;
-  const nearSetupCount = allSignals.filter((signal) => signal.executionStatus === "NEAR_SETUP").length;
-  const blockedCount = allSignals.filter((signal) => !["READY", "NEAR_SETUP"].includes(signal.executionStatus)).length;
+  const handleRunScan = async () => {
+    if (!props.authToken) return;
+    setScanLoading(true);
+    setTruthError(null);
+    try {
+      const payload = await runSignalTruthScan(props.authToken);
+      setTruth(payload);
+      await props.onRefresh();
+    } catch (error: any) {
+      setTruthError(error?.message || "Scan failed.");
+    } finally {
+      setScanLoading(false);
+    }
+  };
+
+  const summary = truth?.summary;
+  const loading = props.loading || scanLoading;
 
   return (
     <div className="space-y-5" id="signal-engine-root">
-      <div className="bg-bento-card border border-slate-800 rounded-2xl p-5 shadow-md" id="scanner-banner">
-        <div className="flex flex-col xl:flex-row justify-between items-start xl:items-center gap-5">
+      <section className="rounded-2xl border border-slate-800 bg-bento-card p-5 shadow-md">
+        <div className="flex flex-col gap-5 xl:flex-row xl:items-center xl:justify-between">
           <div>
-            <h3 className="text-lg font-bold text-white tracking-tight font-sans">Signal Engine</h3>
-            <p className="mt-2 text-xs text-slate-500">Scanner results on the left, executable signal cards on the right. No chart noise, only decision flow.</p>
+            <h1 className="text-lg font-bold tracking-tight text-white">Signal Engine</h1>
+            <p className="mt-2 text-xs text-slate-500">
+              Canonical backend states, one primary useful signal per symbol, and separate strategy and execution truth.
+            </p>
           </div>
-
-          <div className="flex items-center gap-3 shrink-0">
+          <div className="flex items-center gap-3">
             <button
-              onClick={onRunScan}
-              disabled={loading}
-              className="flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold transition-all border bg-emerald-600/10 text-emerald-400 border-emerald-600/20 hover:bg-emerald-600/20 disabled:opacity-50 cursor-pointer"
+              type="button"
+              onClick={() => void handleRunScan()}
+              disabled={loading || !props.authToken}
+              className="flex items-center gap-2 rounded-lg border border-emerald-600/20 bg-emerald-600/10 px-4 py-2 text-xs font-bold text-emerald-400 transition-colors hover:bg-emerald-600/20 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              <Play className="w-3 h-3" /> Run Scan
+              <Play className="h-3.5 w-3.5" /> {scanLoading ? "SCANNING..." : "RUN SCAN"}
             </button>
             <button
-              onClick={onRefresh}
+              type="button"
+              onClick={() => {
+                void props.onRefresh();
+                void loadTruth();
+              }}
               disabled={loading}
-              className="flex items-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs font-bold transition-all border border-slate-700 disabled:opacity-50 cursor-pointer"
+              className="flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-800 px-4 py-2 text-xs font-bold text-slate-300 transition-colors hover:bg-slate-700 disabled:opacity-50"
             >
-              <RefreshCw className={`w-3 h-3 ${loading ? "animate-spin" : ""}`} /> Refresh
+              <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} /> REFRESH
             </button>
           </div>
         </div>
 
-        <div className="grid grid-cols-2 xl:grid-cols-4 gap-3 mt-5">
-          <SummaryBadge label="Executable" value={executableCount} tone="good" />
-          <SummaryBadge label="Near Setup" value={nearSetupCount} tone="warn" />
-          <SummaryBadge label="Blocked" value={blockedCount} tone="bad" />
-          <SummaryBadge label="Total" value={allSignals.length} tone="neutral" />
+        <div className="mt-4 rounded-xl border border-sky-500/15 bg-sky-500/5 px-4 py-3 text-[11px] text-sky-200">
+          <strong>Run Scan is diagnostic only.</strong> It refreshes scanner and signal evidence but does not submit a trade. Automatic execution remains controlled by Start Engine.
         </div>
-      </div>
 
-      {marketError && (
-        <div className="bg-rose-500/10 border border-rose-500/20 text-rose-300 p-4 rounded-2xl text-xs font-mono">
-          {marketError}
+        <div className="mt-5 grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-8">
+          <SummaryBadge label="Symbols checked" value={summary?.symbolsScanned ?? "N/A"} tone="neutral" />
+          <SummaryBadge label="Ranked markets" value={summary?.rankedMarkets ?? 0} tone="neutral" />
+          <SummaryBadge label="Strategy checks" value={summary?.strategyChecks ?? 0} tone="neutral" />
+          <SummaryBadge label="Near setups" value={summary?.nearSetups ?? 0} tone="warn" />
+          <SummaryBadge label="Active signals" value={summary?.activeSignals ?? 0} tone="good" />
+          <SummaryBadge label="Uptrend profiles" value={summary?.uptrendProfiles ?? 0} tone="good" />
+          <SummaryBadge label="Downtrend profiles" value={summary?.downtrendProfiles ?? 0} tone="bad" />
+          <SummaryBadge
+            label="Sideways / stale"
+            value={
+              summary?.sidewaysRejectedProfiles === null || summary?.insufficientOrStaleProfiles === null
+                ? "N/A"
+                : summary.sidewaysRejectedProfiles + summary.insufficientOrStaleProfiles
+            }
+            tone="bad"
+          />
+        </div>
+
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-[10px] font-mono text-slate-500">
+          <span>
+            Source: {truth?.source === "manual_scan" ? "latest manual scan response" : "current scanner/signal endpoints"}
+          </span>
+          <span>Captured: {formatBdtDateTime(truth?.capturedAt)}</span>
+        </div>
+        {truth?.source !== "manual_scan" && (
+          <p className="mt-2 text-[10px] text-slate-600">
+            Pre-strategy Sideways and stale rejection totals are shown as N/A until Run Scan returns the full scanner summary.
+          </p>
+        )}
+      </section>
+
+      {(truthError || marketError) && (
+        <div className="space-y-2">
+          {truthError && <ErrorBanner message={truthError} />}
+          {marketError && <ErrorBanner message={`Market enrichment: ${marketError}`} />}
         </div>
       )}
 
-      <div className="grid grid-cols-1 xl:grid-cols-[0.45fr_0.55fr] gap-5">
-        <div className="bg-bento-card border border-slate-800 rounded-2xl p-5 shadow-md">
-          <div className="flex items-center justify-between mb-4">
+      <div className="grid grid-cols-1 gap-5 xl:grid-cols-[0.46fr_0.54fr]">
+        <section className="rounded-2xl border border-slate-800 bg-bento-card p-5 shadow-md">
+          <div className="mb-4 flex items-start justify-between gap-4">
             <div>
-              <h3 className="text-sm font-semibold text-white tracking-tight font-sans">Scanner Results</h3>
-              <p className="text-xs text-slate-500 mt-1">Price and volume are enriched from live backend market data.</p>
+              <h2 className="text-sm font-semibold text-white">Ranked Market Results</h2>
+              <p className="mt-1 text-xs text-slate-500">One row per represented market. Strategy checks are never shown as symbol rows.</p>
             </div>
-            <span className="text-[10px] font-mono text-slate-500">{allSignals.length} rows</span>
+            <span className="rounded-lg border border-slate-800 bg-[#0A0B0E] px-2.5 py-1 text-[10px] font-mono text-slate-400">
+              {marketRows.length} markets
+            </span>
           </div>
 
           <div className="overflow-hidden rounded-2xl border border-slate-800 bg-[#0A0B0E]">
-            <div className="grid grid-cols-[1.15fr_1fr_1fr_1fr_0.8fr_1fr_1.6fr] gap-3 px-4 py-3 text-[10px] font-mono uppercase tracking-wider text-slate-500 border-b border-slate-800">
+            <div className="grid grid-cols-[0.55fr_1fr_0.9fr_0.85fr_0.75fr_1fr_1.3fr] gap-3 border-b border-slate-800 px-4 py-3 text-[9px] font-mono uppercase tracking-wider text-slate-500">
+              <span>Rank</span>
               <span>Symbol</span>
-              <span>Price</span>
-              <span>Volume</span>
               <span>Trend</span>
+              <span>Profile</span>
               <span>Score</span>
-              <span>Status</span>
-              <span>Block / Reject</span>
+              <span>State</span>
+              <span>Reason</span>
             </div>
-
             <div className="max-h-[720px] overflow-y-auto">
-              {allSignals.map((signal) => (
-                <ScannerTableRow
-                  key={signal.id}
+              {marketRows.map((signal) => (
+                <MarketResultRow
+                  key={signal.symbol}
                   signal={signal}
-                  ticker={tickerMap.get(signal.pair)}
-                  active={selectedSignal?.id === signal.id}
-                  onSelect={() => setSelectedSignalId(signal.id)}
+                  active={selectedSignal?.symbol === signal.symbol}
+                  onSelect={() => {
+                    const matching = signalCards.find((item) => item.symbol === signal.symbol);
+                    if (matching) setSelectedSignalId(matching.id);
+                  }}
                 />
               ))}
-              {allSignals.length === 0 && (
-                <div className="p-12 text-center text-slate-600 font-mono text-xs">
-                  <AlertTriangle className="w-8 h-8 mx-auto mb-3 text-slate-700" />
-                  <span>No scanner results available.</span>
-                </div>
-              )}
+              {marketRows.length === 0 && <EmptyResults text="No ranked scanner results are currently available." />}
             </div>
           </div>
-        </div>
+        </section>
 
-        <div className="bg-bento-card border border-slate-800 rounded-2xl p-5 shadow-md">
-          <div className="flex items-center justify-between mb-4">
+        <section className="rounded-2xl border border-slate-800 bg-bento-card p-5 shadow-md">
+          <div className="mb-4 flex items-start justify-between gap-4">
             <div>
-              <h3 className="text-sm font-semibold text-white tracking-tight font-sans">Signals</h3>
-              <p className="text-xs text-slate-500 mt-1">Executable cards first, near setups second, blocked setups last.</p>
+              <h2 className="text-sm font-semibold text-white">Primary Useful Signals</h2>
+              <p className="mt-1 text-xs text-slate-500">ACTIVE first, NEAR_SETUP second. No duplicate primary card for the same symbol.</p>
             </div>
-            <span className="text-[10px] font-mono text-slate-500">{signals.length} executable live</span>
+            <span className="rounded-lg border border-slate-800 bg-[#0A0B0E] px-2.5 py-1 text-[10px] font-mono text-slate-400">
+              {signalCards.length} primary
+            </span>
           </div>
 
-          <div className="space-y-4 max-h-[720px] overflow-y-auto pr-1">
-            {allSignals.map((signal) => (
-              <SignalCard
+          <div className="max-h-[720px] space-y-4 overflow-y-auto pr-1">
+            {signalCards.map((signal) => (
+              <TruthSignalCard
                 key={signal.id}
                 signal={signal}
-                ticker={tickerMap.get(signal.pair)}
+                ticker={tickerMap.get(signal.symbol)}
                 selected={selectedSignal?.id === signal.id}
-                autoTradeEnabled={Boolean(autoTradeArmed[signal.id])}
-                onToggleAutoTrade={() =>
-                  setAutoTradeArmed((current) => ({
-                    ...current,
-                    [signal.id]: !current[signal.id],
-                  }))
-                }
                 onSelect={() => setSelectedSignalId(signal.id)}
-                onExecute={() =>
-                  (async () => {
-                    const result = await onExecuteSignal({
-                      symbol: signal.pair,
-                      direction: signal.direction.toLowerCase(),
-                      entry: signal.entryPrice,
-                      stop_loss: signal.stopLoss,
-                      take_profit: signal.takeProfit,
-                      risk_reward: signal.rr,
-                      detected_at: signal.timestamp,
-                      status: "active",
-                    });
-                    setExecutionFeedback((current) => ({
-                      ...current,
-                      [signal.id]: result.ok ? (result.warning || "Execution submitted successfully.") : (result.error || "Execution failed."),
-                    }));
-                  })()
-                }
-                executionFeedback={executionFeedback[signal.id]}
               />
             ))}
+            {signalCards.length === 0 && <EmptyResults text="No ACTIVE or NEAR_SETUP primary signal is available." />}
           </div>
-        </div>
+        </section>
       </div>
     </div>
   );
 }
 
-function SummaryBadge({ label, value, tone }: { label: string; value: number; tone: "good" | "warn" | "bad" | "neutral" }) {
+function SummaryBadge({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: number | string;
+  tone: "good" | "warn" | "bad" | "neutral";
+}) {
   const toneClass =
     tone === "good"
       ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-300"
       : tone === "warn"
-      ? "border-amber-500/20 bg-amber-500/10 text-amber-300"
-      : tone === "bad"
-      ? "border-rose-500/20 bg-rose-500/10 text-rose-300"
-      : "border-slate-800 bg-[#0A0B0E] text-slate-300";
+        ? "border-amber-500/20 bg-amber-500/10 text-amber-300"
+        : tone === "bad"
+          ? "border-rose-500/20 bg-rose-500/10 text-rose-300"
+          : "border-slate-800 bg-[#0A0B0E] text-slate-300";
   return (
-    <div className={`rounded-xl border px-4 py-3 ${toneClass}`}>
-      <div className="text-[10px] font-mono uppercase tracking-wider">{label}</div>
+    <div className={`rounded-xl border px-3 py-3 ${toneClass}`}>
+      <div className="text-[9px] font-mono uppercase tracking-wider">{label}</div>
       <div className="mt-2 text-lg font-semibold">{value}</div>
     </div>
   );
 }
 
-function ScannerTableRow({
-  signal,
-  ticker,
-  active,
-  onSelect,
-}: {
-  signal: ExecutableSignal;
-  ticker?: MarketTicker;
-  active: boolean;
-  onSelect: () => void;
-}) {
+function MarketResultRow({ signal, active, onSelect }: { signal: TruthSignal; active: boolean; onSelect: () => void }) {
   return (
     <button
+      type="button"
       onClick={onSelect}
-      className={`grid w-full grid-cols-[1.15fr_1fr_1fr_1fr_0.8fr_1fr_1.6fr] gap-3 px-4 py-3 text-left text-xs border-b border-slate-900 transition-colors cursor-pointer ${
+      className={`grid w-full grid-cols-[0.55fr_1fr_0.9fr_0.85fr_0.75fr_1fr_1.3fr] gap-3 border-b border-slate-900 px-4 py-3 text-left text-[11px] transition-colors ${
         active ? "bg-emerald-500/10" : "hover:bg-slate-900/60"
       }`}
     >
-      <span className="font-semibold text-white">{signal.pair}</span>
-      <span className="text-slate-300">{formatMoney(ticker ? numberValue(ticker.lastPrice) : signal.price)}</span>
-      <span className="text-slate-400">{ticker ? formatCompact(numberValue(ticker.volume24h)) : "N/A"}</span>
-      <span className={ticker && numberValue(ticker.price24hPcnt) < 0 ? "text-rose-400" : "text-emerald-400"}>{trendLabel(ticker, signal.direction)}</span>
-      <span className="text-slate-300">{signal.score}%</span>
-      <span className={signal.executionStatus === "READY" ? "text-emerald-300" : signal.executionStatus === "NEAR_SETUP" ? "text-amber-300" : "text-rose-300"}>
-        {statusLabel(signal)}
-      </span>
-      <span className="text-slate-500">{signal.rejectionReason || "None"}</span>
+      <span className="font-mono text-slate-400">{signal.marketRank ?? "N/A"}</span>
+      <span className="font-semibold text-white">{signal.symbol}</span>
+      <span className={trendTone(signal.trendState)}>{signal.trendState || "N/A"}</span>
+      <span className="capitalize text-slate-300">{signal.tradeType || "N/A"}</span>
+      <span className="font-mono text-slate-300">{formatNumber(signal.marketScore)}</span>
+      <span className={`font-mono text-[10px] ${stateTone(signal.signalState).split(" ")[0]}`}>{signal.signalState}</span>
+      <span className="truncate text-slate-500" title={signal.rejectionReason || "None"}>{signal.rejectionReason || "None"}</span>
     </button>
   );
 }
 
-function SignalCard({
+function TruthSignalCard({
   signal,
   ticker,
   selected,
-  autoTradeEnabled,
-  onToggleAutoTrade,
   onSelect,
-  onExecute,
-  executionFeedback,
 }: {
-  signal: ExecutableSignal;
+  signal: TruthSignal;
   ticker?: MarketTicker;
   selected: boolean;
-  autoTradeEnabled: boolean;
-  onToggleAutoTrade: () => void;
   onSelect: () => void;
-  onExecute: () => Promise<void>;
-  executionFeedback?: string;
 }) {
-  const executable = signal.executionStatus === "READY";
+  const riskGate = signal.signalState === "ACTIVE" ? "NOT EVALUATED" : "NOT APPLICABLE";
+  const executionGate = signal.signalState === "ACTIVE" ? "ENGINE CONTROLLED" : "BLOCKED BY STATE";
+  const timeframe = [signal.timeframes.trend && `Trend ${signal.timeframes.trend}`, signal.timeframes.setup && `Setup ${signal.timeframes.setup}`, signal.timeframes.trigger && `Trigger ${signal.timeframes.trigger}`]
+    .filter(Boolean)
+    .join(" · ") || "N/A";
+
   return (
-    <div
-      className={`rounded-2xl border p-5 shadow-md transition-colors ${
-        selected ? "border-emerald-500/20 bg-emerald-500/5" : "border-slate-800 bg-[#0A0B0E]"
-      }`}
+    <button
+      type="button"
       onClick={onSelect}
+      className={`w-full rounded-2xl border p-5 text-left shadow-md transition-colors ${
+        selected ? "border-emerald-500/20 bg-emerald-500/5" : "border-slate-800 bg-[#0A0B0E] hover:border-slate-700"
+      }`}
     >
-      <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
-        <div className="space-y-3">
-          <div className="flex items-center gap-3 flex-wrap">
-            <span className={`px-3 py-1.5 rounded-xl border text-[10px] font-mono ${statusTone(signal)}`}>{statusLabel(signal)}</span>
-            <span className="text-sm font-semibold text-white">{signal.score}%</span>
-            <span className={`px-2 py-1 rounded-full text-[10px] font-mono ${signal.direction === "LONG" ? "bg-emerald-500/10 text-emerald-300" : "bg-rose-500/10 text-rose-300"}`}>
-              {signal.direction}
+      <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-start">
+        <div>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className={`rounded-xl border px-3 py-1.5 text-[10px] font-mono ${stateTone(signal.signalState)}`}>{signal.signalState}</span>
+            <span className={`rounded-full px-2 py-1 text-[10px] font-mono ${signal.direction === "LONG" ? "bg-emerald-500/10 text-emerald-300" : "bg-rose-500/10 text-rose-300"}`}>
+              {signal.direction || "N/A"}
+            </span>
+            <span className="rounded-lg border border-slate-800 bg-slate-950/60 px-2 py-1 text-[10px] font-mono text-slate-400">
+              {signal.tradeType?.toUpperCase() || "PROFILE N/A"}
             </span>
           </div>
-
-          <div>
-            <div className="text-lg font-bold text-white">{signal.pair}</div>
-            <div className="mt-1 text-xs text-slate-500">{signal.indicator}</div>
-          </div>
+          <div className="mt-3 text-lg font-bold text-white">{signal.symbol}</div>
+          <div className="mt-1 text-xs text-slate-500">{signal.strategyName}</div>
         </div>
-
-        <div className="flex items-center gap-3">
-          <label className="flex items-center gap-2 text-xs text-slate-400">
-            <input
-              type="checkbox"
-              checked={autoTradeEnabled}
-              onChange={onToggleAutoTrade}
-              onClick={(event) => event.stopPropagation()}
-              className="rounded border-slate-700 bg-slate-950"
-            />
-            Auto Trade
-          </label>
-          <button
-            onClick={(event) => {
-              event.stopPropagation();
-              void onExecute();
-            }}
-            disabled={!executable}
-            className="px-4 py-2 rounded-xl border border-emerald-500/20 bg-emerald-500/10 text-emerald-300 text-xs font-semibold cursor-pointer disabled:opacity-50"
-          >
-            Demo Execute
-          </button>
+        <div className="grid grid-cols-2 gap-2 text-right text-[10px] font-mono">
+          <RankBox label="Market rank" value={signal.marketRank ?? "N/A"} />
+          <RankBox label="Signal rank" value={signal.signalRank ?? "N/A"} />
+          <RankBox label="Market score" value={formatNumber(signal.marketScore)} />
+          <RankBox label="Signal score" value={formatNumber(signal.signalScore)} />
         </div>
       </div>
 
-      <div className="grid grid-cols-2 xl:grid-cols-4 gap-3 mt-5">
-        <MetricCard label="Entry" value={formatMoney(signal.entryPrice)} />
+      <div className="mt-5 grid grid-cols-2 gap-3 xl:grid-cols-4">
+        <MetricCard label="Entry" value={formatMoney(signal.entry)} />
         <MetricCard label="Stop Loss" value={formatMoney(signal.stopLoss)} />
-        <MetricCard label="Target" value={formatMoney(signal.takeProfit)} />
-        <MetricCard label="Received" value={formatBdtDateTime(signal.timestamp)} />
+        <MetricCard label="Take Profit" value={formatMoney(signal.takeProfit)} />
+        <MetricCard label="Risk : Reward" value={formatNumber(signal.riskReward, "R")} />
       </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-3 mt-4">
-        <MetricCard label="Setup Details" value={`${signal.timeframe} | ${signal.grade} | ${signal.rr.toFixed(2)}R`} />
-        <MetricCard label="Trend / Volume" value={`${trendLabel(ticker, signal.direction)} | ${ticker ? formatCompact(numberValue(ticker.volume24h)) : "N/A"}`} />
+      <div className="mt-3 grid grid-cols-1 gap-3 xl:grid-cols-3">
+        <MetricCard label="Timeframes" value={timeframe} />
+        <MetricCard label="Trend / Approved side" value={`${signal.trendState || "N/A"} / ${signal.approvedDirection || "N/A"}`} />
+        <MetricCard label="Signal age / Received" value={`${formatAge(signal.detectedAt)} / ${formatBdtDateTime(signal.detectedAt)}`} />
+      </div>
+
+      <div className="mt-4 grid grid-cols-2 gap-2 xl:grid-cols-4">
+        <GateCard label="Strategy state" value={signal.signalState} good={["ACTIVE", "NEAR_SETUP"].includes(signal.signalState)} />
+        <GateCard label="Monitor only" value={signal.monitorOnly ? "YES" : "NO"} good={signal.monitorOnly} neutral={!signal.monitorOnly} />
+        <GateCard label="Risk gate" value={riskGate} neutral />
+        <GateCard label="Execution" value={executionGate} neutral={signal.signalState === "ACTIVE"} />
+      </div>
+
+      <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-slate-800 pt-3 text-[10px] text-slate-500">
+        <span>
+          Confirmation matches: {signal.confirmationCount} · Strategies: {signal.matchedStrategies.length ? signal.matchedStrategies.join(", ") : signal.strategyName}
+        </span>
+        <span>Volume: {ticker ? formatCompact(numberValue(ticker.volume24h)) : "N/A"}</span>
       </div>
 
       {signal.rejectionReason && (
-        <div className="mt-4 rounded-xl border border-slate-800 bg-slate-950/60 px-4 py-3 text-[11px] text-slate-400">
+        <div className="mt-3 rounded-xl border border-slate-800 bg-slate-950/60 px-4 py-3 text-[11px] text-slate-400">
           <span className="text-slate-300">Reason:</span> {signal.rejectionReason}
         </div>
       )}
-
-      {executionFeedback && (
-        <div className="mt-4 rounded-xl border border-slate-800 bg-slate-950/60 px-4 py-3 text-[11px] text-slate-300">
-          <span className="text-slate-400">Execution:</span> {executionFeedback}
-        </div>
-      )}
-    </div>
+    </button>
   );
 }
 
 function MetricCard({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-3">
-      <div className="text-[10px] font-mono uppercase tracking-wider text-slate-500">{label}</div>
-      <div className="mt-2 text-sm font-semibold text-white break-words">{value}</div>
+      <div className="text-[9px] font-mono uppercase tracking-wider text-slate-500">{label}</div>
+      <div className="mt-2 break-words text-sm font-semibold text-white">{value}</div>
+    </div>
+  );
+}
+
+function RankBox({ label, value }: { label: string; value: number | string }) {
+  return (
+    <div className="rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-2">
+      <div className="text-slate-600">{label}</div>
+      <div className="mt-1 font-semibold text-slate-300">{value}</div>
+    </div>
+  );
+}
+
+function GateCard({ label, value, good = false, neutral = false }: { label: string; value: string; good?: boolean; neutral?: boolean }) {
+  const tone = good
+    ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-300"
+    : neutral
+      ? "border-slate-800 bg-slate-950/60 text-slate-300"
+      : "border-rose-500/20 bg-rose-500/10 text-rose-300";
+  return (
+    <div className={`rounded-xl border px-3 py-2 ${tone}`}>
+      <div className="text-[9px] font-mono uppercase tracking-wider opacity-70">{label}</div>
+      <div className="mt-1 text-[10px] font-semibold">{value}</div>
+    </div>
+  );
+}
+
+function EmptyResults({ text }: { text: string }) {
+  return (
+    <div className="p-12 text-center text-xs font-mono text-slate-600">
+      <AlertTriangle className="mx-auto mb-3 h-8 w-8 text-slate-700" />
+      {text}
+    </div>
+  );
+}
+
+function ErrorBanner({ message }: { message: string }) {
+  return (
+    <div className="rounded-2xl border border-rose-500/20 bg-rose-500/10 p-4 text-xs text-rose-300">
+      <div className="flex items-center gap-2">
+        <AlertTriangle className="h-4 w-4" /> {message}
+      </div>
     </div>
   );
 }
