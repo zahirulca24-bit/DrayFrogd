@@ -4,7 +4,7 @@ Bybit-first automated trading terminal built with **FastAPI, React, PostgreSQL a
 
 The project is currently in **Demo Beta / Engineering Verification**. Live-capital trading is not approved.
 
-> **Last documentation update:** 13 July 2026, 12:06 AM BDT (`Asia/Dhaka`)  
+> **Last documentation update:** 13 July 2026, 12:10 AM BDT (`Asia/Dhaka`)  
 > **Latest `main` commit:** `22e6f2d4f3b13442cf85c8ae067a4af5dfe30169` — README PR #31 merged  
 > **Active branch:** `fix/partial-close-journal-pnl-sync`  
 > **Active pull request:** PR #33 — stacked on Step 1 PR #32  
@@ -204,7 +204,7 @@ A green CI run does not prove exchange/runtime behavior.
 |---:|---|---|
 | 0 | Close README structure and runtime-audit PR | **Complete** |
 | 1 | Fix Scalping TP2 → TP1-price SL profit lock | **Automated PASS — PR #32 merge/deploy pending** |
-| 2 | Fix partial-fill reconciliation, fees and realized PnL | **Active — PR #33 CI pending** |
+| 2 | Fix partial-fill reconciliation, fees and realized PnL | **Automated PASS — PR #33 merge/deploy pending** |
 | 3 | Recover authoritative strategy/profile metadata | Pending |
 | 4 | Correct TP labels and Risk/daily-trade UI values | Pending |
 | 5 | Reproduce and fix blank-page failure | Pending |
@@ -289,6 +289,8 @@ Implemented in PR #32:
 
 - **12:06 AM BDT:** Step 2 bounded branch and stacked PR #33 created from the Step 1 branch.
 - **12:06 AM BDT:** Partial-close Journal/PnL synchronization implementation and focused tests added.
+- **12:09 AM BDT:** GitHub Actions CI run #246 completed successfully.
+- **12:10 AM BDT:** README synchronized with final automated Step 2 evidence.
 
 ### Step 2 — Partial-close Journal, fees and realized-PnL repair
 
@@ -317,11 +319,12 @@ Implemented in PR #33:
 |---|---|---|
 | Root cause and bounded scope | **PASS** | PR #33 description and branch diff |
 | Focused tests added | **PASS** | `tests/test_partial_close_journal_sync.py` |
-| Focused tests executed | **PENDING** | Awaiting PR #33 CI |
-| Backend compile | **PENDING** | Awaiting PR #33 CI |
-| Full backend suite | **PENDING** | Awaiting PR #33 CI |
-| Frontend TypeScript/build | **PENDING** | Awaiting PR #33 CI |
-| CI | **PENDING** | PR #33 current-head run required |
+| Focused tests executed | **PASS** | Six focused partial-close tests included in full suite |
+| Backend compile | **PASS** | GitHub Actions run #246 |
+| Full backend suite | **PASS** | **190/190 tests passed** |
+| Frontend TypeScript check | **PASS** | GitHub Actions run #246 |
+| Frontend production build | **PASS** | GitHub Actions run #246 |
+| CI | **PASS** | Run #246 completed successfully |
 | Product Owner merge approval | **PENDING** | No merge requested or performed |
 | Deployed Bybit Demo verification | **PENDING** | Required after Step 1 and Step 2 merge/deploy |
 
@@ -332,7 +335,7 @@ Implemented in PR #33:
 | README PR #31 closure | 5/5 | **100%** | Merged to `main` |
 | Scalping deployed lifecycle verification | 4/10 | **40%** | Runtime repair/deployment still required |
 | Step 1 TP2 profit-lock repair | 7/8 | **87.5%** | Code and CI passed; merge/deploy pending |
-| Step 2 Journal, fees and realized-PnL repair | 4/9 | **44.4%** | Root cause, branch, implementation and tests added; CI pending |
+| Step 2 Journal, fees and realized-PnL repair | 8/10 | **80%** | Code and CI passed; merge/deploy verification pending |
 | Step 3 metadata recovery | 0/5 | **0%** | Not started |
 | Step 4 TP-stage/Risk UI consistency | 0/5 | **0%** | Not started |
 | Step 5 blank-page stability | 0/4 | **0%** | Root cause not confirmed |
@@ -341,8 +344,8 @@ Implemented in PR #33:
 
 ### Current verdict
 
-Step 2 implementation exists on stacked PR #33, but no automated PASS is claimed until the current-head CI run completes. `main` remains unchanged.
+Step 2 implementation and automated verification are **PASS**. Runtime verification remains **PENDING** because PR #32 and PR #33 have not been merged and deployed. `main` remains unchanged.
 
 ### Next task
 
-> **Step 3 — Recover authoritative strategy/profile metadata and lifecycle timestamps after Step 2 automated closure.**
+> **Step 3 — Recover authoritative strategy/profile metadata and lifecycle timestamps after Step 2 merge/deployment approval.**
