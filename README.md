@@ -4,182 +4,180 @@ Bybit-first automated trading terminal built with **FastAPI, React, PostgreSQL a
 
 The project is currently in **Demo Beta / Engineering Verification**. Live-capital trading is not approved.
 
-> **Overall roadmap completion:** 70%  
-> **Current active roadmap:** Scanner → Strategy/Signal → UI Truthfulness  
-> **Latest completed roadmap step:** Step 1 — Scanner Architecture  
-> **Latest scanner merge:** PR #21 — `f30eda65b0ad06cf943ca952f5261a9807a2c477`  
-> **Latest Scanner test evidence:** targeted 12/12, full backend 150/150  
-> **Trade-management profiles:** Scalping and Intraday are separate  
+> **Active roadmap:** 2 of 3 steps complete  
+> **Latest completed step:** Strategy and Signal Pipeline  
+> **Latest merge:** PR #28 — `c216a9af96e87a3d466ca0f1a70e3c4825650444`  
+> **Latest CI evidence:** backend **180/180 passed**, frontend TypeScript and production build passed  
+> **Next bounded task:** Scanner and Signal UI Truthfulness  
 > **Live trading:** blocked by default
 
 ---
 
-## 1. Current 3-Step Roadmap
+## 1. Current Verified Status
 
-This is the active implementation roadmap. Completed items remain checked and each future completed step must be updated here with evidence.
+Three backend workstreams are complete in code and merged:
 
-### [x] Step 1 — Scanner Market Ranking, Trend Classification and Sideways Rejection
+1. ✅ **Trade Management Profiles**
+2. ✅ **Scanner Correction and Profile Separation**
+3. ✅ **Strategy and Signal Pipeline**
 
-**Status:** Complete and merged through PR #21.
+Runtime exchange verification is still required before any live-release decision.
+
+### Latest verified merges
+
+| Workstream | Pull request | Merge commit | CI evidence |
+|---|---:|---|---|
+| Separate Scalping and Intraday Trade Management | #20 | `30ddd4b6aaa076cdb447ac4acd9496d788ee3c53` | profile and execution-management tests passed |
+| Scanner profile separation and Top-30 ranking | #27 | `1e2d31690616553cf1c93d669d132188d783a9c8` | backend **171/171**, frontend checks passed |
+| Canonical Strategy and Signal Pipeline | #28 | `c216a9af96e87a3d466ca0f1a70e3c4825650444` | backend **180/180**, frontend checks passed |
+
+---
+
+## 2. Active 3-Step Roadmap
+
+### [x] Step 1 — Scanner Market Ranking and Profile Separation
+
+**Status:** Complete and merged through PR #27.
 
 Implemented:
 
 - Dynamic Bybit USDT perpetual candidate collection.
 - Liquidity, turnover, movement and spread validation.
-- Multi-timeframe analysis:
-  - 1-hour trend context
-  - 15-minute setup context
-  - 5-minute trigger confirmation
+- Dynamic ranked universe capped at **Top 30** eligible markets.
+- Explicit `market_rank` from 1 to 30.
 - Open/current candles excluded from confirmed analysis.
+- Separate profile pipelines:
+  - **Scalping:** 5-minute trend/setup → 1-minute trigger.
+  - **Intraday:** 1-hour trend → 15-minute setup → 5-minute trigger.
 - Deterministic trend states:
   - `UPTREND`
   - `DOWNTREND`
   - `SIDEWAYS`
   - `INSUFFICIENT_DATA`
+  - stale-data rejection
 - `UPTREND` permits Long setups only.
 - `DOWNTREND` permits Short setups only.
-- `SIDEWAYS`, stale and insufficient-data markets are blocked.
-- Dynamic ranked universe of up to 50 eligible markets.
-- Deterministic market score and score-component metadata.
-- Existing Risk and Execution behavior remains unchanged.
+- Sideways, stale and insufficient-data profiles are blocked before strategy evaluation.
+- Scanner and Strategy/Signal responsibilities are separated.
+- Missing or unknown `trade_type` cannot silently default to Scalping.
 
 Evidence:
 
-- Targeted Scanner tests: **12/12 passed**.
-- Full backend suite: **150/150 passed**.
-- Merge commit: `f30eda65b0ad06cf943ca952f5261a9807a2c477`.
+- Merge commit: `1e2d31690616553cf1c93d669d132188d783a9c8`.
+- Backend suite: **171/171 passed**.
+- Frontend TypeScript check: passed.
+- Frontend production build: passed.
 
-### [ ] Step 2 — Strategy and Signal Pipeline
+### [x] Step 2 — Strategy and Signal Pipeline
 
-**Status:** Pending.
+**Status:** Complete and merged through PR #28.
 
-Scope:
+Implemented:
 
-- Strategy Engine consumes only Scanner-ranked, trend-aligned markets.
-- Approved strategies:
+- Strategy Engine consumes only eligible Scanner-ranked contexts.
+- Registered strategies:
   - EMA Pullback
   - Breakout
   - Pure SMC
-- Canonical result states:
+- Canonical signal states:
   - `NO_SETUP`
   - `NEAR_SETUP`
   - `ACTIVE`
   - `INVALID`
   - `EXPIRED`
-- Confirmed entries use closed candles only.
-- Opposite-trend strategy results are rejected.
-- Signal Engine keeps only useful results:
-  - `NEAR_SETUP` → monitor only
-  - `ACTIVE` → eligible for Risk and Execution gates
-- `INVALID` and `EXPIRED` leave executable monitoring.
-- One primary best-quality signal per symbol.
-- Other valid strategy matches remain confirmation metadata.
-- Signal ranking is deterministic using quality, confidence, freshness and valid risk geometry.
-- Scanner, Risk, Position Sizing and Execution rules are outside this step.
+- `NEAR_SETUP` is monitor-only.
+- Only valid `ACTIVE` signals are execution-eligible before Risk and Execution gates.
+- Opposite-trend results are invalidated.
+- Missing `trade_type` is invalidated.
+- Invalid Long/Short entry, Stop Loss and Take Profit geometry is blocked.
+- Scalping and Intraday contexts are evaluated separately.
+- One deterministic primary useful signal is retained per symbol.
+- Same-direction strategy/profile matches are retained as confirmation metadata.
+- Opposite-direction useful matches are retained as alternates, not duplicate primary signals.
+- Signal score, signal rank, signal key and state counts are exposed.
 
-Completion gates:
+Evidence:
 
-- Focused Strategy/Signal tests pass.
-- Full backend suite passes.
-- Exact changed files and diff are reviewed.
-- Commit and merge require Product Owner approval.
+- Merge commit: `c216a9af96e87a3d466ca0f1a70e3c4825650444`.
+- Backend suite: **180/180 passed**.
+- Frontend TypeScript check: passed.
+- Frontend production build: passed.
 
 ### [ ] Step 3 — Scanner and Signal UI Truthfulness
 
-**Status:** Pending.
+**Status:** Pending — this is the next bounded task.
 
-Scanner UI must show:
+Scanner UI must show real backend values for:
 
 - Symbols checked.
 - Uptrend count.
 - Downtrend count.
-- Sideways rejected count.
+- Sideways rejection count.
 - Insufficient/stale-data count.
-- Ranked markets count.
-- Strategy checks count.
-- Near setups count.
-- Active signals count.
+- Ranked-market count.
+- Strategy-check count.
+- Near-setup count.
+- Active-signal count.
 
 Required presentation rules:
 
-- A strategy-check total must not be shown as a symbol total.
-- Market ranking and signal ranking must be separate layers.
-- Strategy-valid state and account-executable state must be separate.
+- A strategy-check total must not be displayed as a symbol total.
+- Market ranking and signal ranking must remain separate.
+- Strategy validity and account execution eligibility must remain separate.
 - No stale, placeholder or fabricated runtime values.
+- Empty states and unavailable values must be reported honestly.
 
 Signal cards must show:
 
 - Market rank and market score.
+- Signal rank and signal score.
 - Trend state and approved direction.
 - Strategy name and trade type.
-- Entry, Stop Loss and Take Profit levels.
+- Entry, Stop Loss and Take Profit.
 - Risk:Reward.
 - Signal age.
-- Near / Active / Expired state.
-- Risk/Execution eligibility separately from strategy validity.
+- Canonical signal state.
+- Monitor-only or execution-eligible state.
+- Risk and execution eligibility separately from strategy validity.
 
 Completion gates:
 
-- Backend contracts are stable first.
-- Frontend TypeScript checks pass.
+- Backend contracts remain unchanged unless a proven UI requirement needs a bounded contract update.
+- Frontend TypeScript check passes.
 - Frontend production build passes.
-- Screenshots are reviewed by the Product Owner.
+- UI screenshots are reviewed by the Product Owner.
+- No merge to `main` without Product Owner approval.
 
 ---
 
-## 2. Locked End-to-End Flow
+## 3. Locked End-to-End Flow
 
 ```text
 Bybit USDT Perpetual Market
 → Liquidity / Turnover / Movement / Spread Filter
-→ Closed-Candle Multi-Timeframe Analysis
-→ Trend Classification
-→ Reject Sideways / Stale / Insufficient Markets
-→ Rank Eligible Markets
-→ Strategy Engine Evaluates Approved Strategies
-→ Near Setup / Active Signal
-→ Signal Engine Deduplicates and Ranks Useful Signals
-→ Bot Monitors Signal Symbols Only
-→ Active Signal + Risk Gate Passed
-→ Trade Execution
+→ Closed-Candle Profile Analysis
+→ Reject Sideways / Stale / Insufficient Profiles
+→ Rank Top 30 Eligible Markets
+→ Build Separate Scalping and Intraday Contexts
+→ Strategy Engine Evaluates Registered Strategies
+→ Canonical Signal-State Normalization
+→ Validate Trend, Trade Type and Trade Geometry
+→ Select One Primary Useful Signal per Symbol
+→ NEAR_SETUP Monitoring or ACTIVE Risk Gate
+→ Position Sizing and Execution Authority
 → Trade-Type-Specific Management Profile
 → Journal and PnL Reconciliation
 ```
 
 Responsibility boundaries:
 
-- **Scanner:** market filtering, trend classification and market ranking.
-- **Strategy Engine:** setup detection and trade geometry proposals.
-- **Signal Engine:** useful-result storage, deduplication and signal ranking.
+- **Scanner:** market filtering, profile eligibility, trend classification and market ranking.
+- **Strategy Engine:** setup detection and trade-geometry proposals.
+- **Signal Pipeline:** canonical states, validation, deduplication and signal ranking.
 - **Risk Engine:** final risk authority.
+- **Position Sizing:** exchange-compliant quantity authority.
 - **Execution Engine:** final exchange-order authority.
 - **Trade Management:** profile-specific protection, TP stages, break-even, trailing and close lifecycle.
-
----
-
-## 3. Project Progress
-
-### Overall roadmap completion: **70%**
-
-This score represents engineering milestone completion. It is not a profitability, safety or live-release claim.
-
-| # | Milestone | Status | Current evidence / remaining gap |
-|---|---|---|---|
-| 1 | Repository foundation and CI | ✅ Complete | FastAPI, React, compile, backend tests, TypeScript check and frontend build |
-| 2 | Authentication and bot controls | ✅ Complete | Admin login, session verification, start/stop, emergency stop, resume and demo/live gating |
-| 3 | Database persistence and restart safety | ✅ Complete | SQLite local development, PostgreSQL deployment, journal and risk restoration |
-| 4 | Bybit exchange integration | ✅ Complete in code | Wallet, positions, market data, order, leverage, protection and close APIs |
-| 5 | Market Scanner | 🟡 Partial | Step 1 complete; Strategy/Signal pipeline and UI truthfulness remain |
-| 6 | Strategy Engine | 🟡 Partial | EMA Pullback, Breakout and Pure SMC exist; Step 2 pipeline contract remains |
-| 7 | Risk Engine Authority | ✅ Complete in code | Fixed-risk profiles, dynamic daily risk pool and circuit breaker |
-| 8 | Position sizing and exposure | ✅ Complete in code | SL-distance sizing, exchange constraints and portfolio margin ceiling |
-| 9 | Trade Execution Engine | ✅ Complete in code | Reservation, idempotency, fill confirmation and protection verification |
-| 10 | Trade Management Engine | 🟡 Partial | Separate Scalping/Intraday profiles are implemented in code; real demo verification remains |
-| 11 | Journal and exact PnL sync | ✅ Complete in code | Persistent journal, reconciliation and realized-PnL synchronization |
-| 12 | Frontend operations terminal | 🟡 Partial | Main pages exist; Step 3 and Settings remain |
-| 13 | Deployment and observability | 🟡 Partial | Render, health/readiness and Watchdog exist; latest runtime verification remains |
-| 14 | Full Bybit Demo E2E and soak testing | ⬜ Pending | Entry-to-close multi-trade demo evidence required |
-| 15 | Live-release hardening | ⬜ Pending | Security, backup, operations and approved demo evidence required |
 
 ---
 
@@ -188,16 +186,18 @@ This score represents engineering milestone completion. It is not a profitabilit
 DrayFrogd is designed to:
 
 1. Scan liquid Bybit USDT perpetual markets.
-2. Classify market trend and rank eligible symbols.
-3. Evaluate enabled strategies only in the approved direction.
-4. Build and rank useful trading signals.
-5. Recompute trade geometry and risk server-side.
-6. Size positions using fixed USDT risk and SL distance.
-7. Reserve risk and execution state before exchange submission.
-8. Confirm actual fills and verify exchange protection.
-9. Apply the correct Scalping or Intraday management profile.
-10. Persist trade, PnL, risk and operational evidence.
-11. Provide an administrative React terminal for monitoring and control.
+2. Rank a maximum of 30 eligible markets.
+3. Evaluate Scalping and Intraday contexts separately.
+4. Evaluate registered strategies only in the approved direction.
+5. Normalize strategy results into the canonical signal contract.
+6. Keep one primary useful signal per symbol.
+7. Recompute trade geometry and risk server-side.
+8. Size positions using fixed USDT risk and Stop Loss distance.
+9. Reserve risk and execution state before exchange submission.
+10. Confirm actual fills and verify exchange protection.
+11. Apply the correct Scalping or Intraday management profile.
+12. Persist trade, PnL, risk and operational evidence.
+13. Provide an administrative React terminal for monitoring and control.
 
 The application is **demo-first**. Live trading remains disabled until all release gates are completed and explicitly approved.
 
@@ -214,7 +214,7 @@ FastAPI Backend
         |
         +-- Scanner
         +-- Strategy Engine
-        +-- Signal Engine
+        +-- Signal Pipeline
         +-- Risk Engine
         +-- Position Sizing
         +-- Execution Service
@@ -241,7 +241,7 @@ Bybit V5 Demo / Live APIs
 
 ---
 
-## 6. Enabled Strategies
+## 6. Registered Strategies and Signal Contract
 
 Current registered strategies:
 
@@ -249,16 +249,33 @@ Current registered strategies:
 2. **Breakout**
 3. **Pure SMC**
 
-Strategy completion still requires:
+Canonical signal contract:
 
-- Canonical five-state result contract.
-- Direction enforcement through the full pipeline.
-- Useful-signal retention and deduplication.
+| State | Meaning | Execution behavior |
+|---|---|---|
+| `NO_SETUP` | No valid setup exists | Do not monitor or execute |
+| `NEAR_SETUP` | Valid developing setup | Monitor only |
+| `ACTIVE` | Confirmed valid signal | May proceed to Risk and Execution gates |
+| `INVALID` | Contract, trend, trade type or geometry failed | Block |
+| `EXPIRED` | Signal validity window ended | Remove from executable monitoring |
+
+Completed pipeline behavior:
+
+- Direction enforcement.
+- Mandatory explicit `trade_type`.
+- Trade-geometry validation.
+- Useful-signal retention.
 - One primary signal per symbol.
+- Confirmation and alternate-match metadata.
 - Deterministic signal ranking.
-- Strategy version and enable/disable control.
-- Historical backtesting and walk-forward validation.
-- Failure analysis and controlled tuning workflow.
+
+Future strategy work remains separate:
+
+- Strategy versioning and operator enable/disable controls.
+- Historical data storage.
+- Deterministic backtesting.
+- Walk-forward validation.
+- Failure analysis and controlled tuning.
 
 ---
 
@@ -289,17 +306,17 @@ Every managed trade must persist and enforce:
 - selected leverage
 - TP1, TP2 and final/runner target
 - TP allocation percentages
-- break-even/profit-lock rule
+- break-even or profit-lock rule
 - trailing enabled/disabled state
 - maximum holding time
 
-An unknown or missing `trade_type` must not silently inherit a default profile. New management actions must be blocked until the trade profile is authoritative.
+An unknown or missing `trade_type` must not inherit a default profile. New management actions remain blocked until the profile is authoritative.
 
 ### Portfolio controls
 
 - Maximum **5 active trades**.
 - Same-symbol duplicate positions are blocked.
-- Long/short geometry is recomputed by the backend.
+- Long/Short geometry is recomputed by the backend.
 - Total combined margin exposure cannot exceed **50% of account/day equity**.
 - A realized losing close creates a **30-minute symbol cooldown**.
 - Daily reset timezone is **Asia/Dhaka**.
@@ -311,7 +328,7 @@ An unknown or missing `trade_type` must not silently inherit a default profile. 
 ## 8. Authoritative Execution Flow
 
 ```text
-Active Signal
+ACTIVE Signal
 → Fresh executable quote
 → Backend geometry and RR validation
 → Fixed-risk position sizing
@@ -355,7 +372,6 @@ Additional Scalping rules:
 - High-spread symbols are rejected using the repository's verified spread boundary.
 - Trailing stop is disabled.
 - Maximum trade duration is 59 minutes.
-- The remaining 25% after TP2 is protected at the TP1 price.
 
 ### Intraday profile
 
@@ -371,59 +387,24 @@ Additional Intraday rules:
 - Trailing is enabled only after TP2.
 - Maximum trade duration is 6 hours.
 
-### Implemented behavior
+### Runtime verification still required
 
-- TP1 and TP2 use exchange-native GTC reduce-only limit orders.
-- Native order IDs, quantities, targets and statuses are persisted.
-- The dedicated watcher reconciles native order state every 2 seconds.
-- The profile-specific final TP is installed and exchange-verified.
-- Scalping 1R protection is checked by the dedicated watcher.
-- Scalping TP2 applies a TP1-price profit lock to the final 25%.
-- Intraday TP1 moves the remaining position SL to break-even.
-- Intraday TP2 activates trailing protection.
-- Protection updates are verified against the exchange position.
-- Position-size reconciliation remains available as a restart-safe fallback.
-- Eligible existing full-size active trades can be adopted after restart/deploy.
-- Cancelled, rejected or deactivated native orders switch to the mark-price fallback.
-- Native-order mode blocks duplicate polling-based partial closes.
-- Maximum-hold and stagnant-trade exits remain fallback management rules.
-
-### Trade Management work still required
-
-- Real Bybit Demo verification of both Scalping and Intraday TP lifecycles.
-- Native order cancellation/cleanup verification on manual close, SL close and full position close.
-- Orphan-order detection and cleanup after crashes or exchange-side manual actions.
-- Private order/position WebSocket integration; current watcher uses periodic REST reconciliation.
-- Multi-instance worker ownership/locking before horizontal scaling.
-- Extended tests for partial fills, order amendments, rejected amendments and exchange latency.
+- Real Bybit Demo verification of both profile lifecycles.
+- Break-even, TP1, TP2, final target and trailing behavior.
+- Native-order cancellation and cleanup on every close path.
+- Orphan-order detection after crashes or exchange-side manual actions.
+- Restart and deployment recovery evidence.
+- Partial-fill, amendment, rejection and exchange-latency tests.
 
 ---
 
-## 10. Deferred Critical Tasks
+## 10. Remaining Roadmap — Recommended Order
 
-These remain separate bounded tasks after Steps 2 and 3:
+### Phase A — Finish the Active Roadmap
 
-- Journal restart reconciliation and authoritative exchange timestamps.
-- Entry fees, realized PnL and daily net-PnL verification.
-- Strategy and trade-type persistence after restart verification.
-- Bot/manual/external trade classification.
-- Scalping 20x and Intraday 10x runtime verification.
-- Scalping and Intraday TP-ladder runtime verification.
-- Failed or uncertain reservation cleanup.
-- Authentication expiry and server-side logout hardening.
-- Settings completion.
-- Historical data storage, backtesting and tuning.
-- Deployment, demo E2E and soak testing.
-
----
-
-## 11. Remaining Roadmap — Recommended Order
-
-### Phase A — Finish the Active 3-Step Roadmap
-
-1. ✅ Step 1 — Scanner Architecture.
-2. ⬜ Step 2 — Strategy and Signal Pipeline.
-3. ⬜ Step 3 — Scanner and Signal UI Truthfulness.
+1. ✅ Scanner Market Ranking and Profile Separation.
+2. ✅ Strategy and Signal Pipeline.
+3. ⬜ Scanner and Signal UI Truthfulness.
 
 ### Phase B — Runtime Verification
 
@@ -438,7 +419,7 @@ These remain separate bounded tasks after Steps 2 and 3:
 1. Verify TP cleanup on every close path.
 2. Add orphan-order detection.
 3. Add private exchange-stream reconciliation.
-4. Add worker ownership locking.
+4. Add worker-ownership locking.
 5. Complete partial-fill and amendment tests.
 
 ### Phase D — Historical Data, Backtesting and Tuning
@@ -452,11 +433,11 @@ These remain separate bounded tasks after Steps 2 and 3:
 
 ### Phase E — UI and Operator Experience
 
-1. Align all frontend risk values with backend authority.
-2. Show risk pool, live downside risk and breaker reasons.
-3. Show selected trade profile, native TP status and protection state.
-4. Complete Settings.
-5. Remove old project naming.
+1. Complete Scanner and Signal UI Truthfulness.
+2. Align frontend risk values with backend authority.
+3. Show risk pool, live downside risk and circuit-breaker reasons.
+4. Show selected trade profile, native TP status and protection state.
+5. Complete Settings.
 6. Add deployment and runtime-verification panels.
 
 ### Phase F — Production Operations
@@ -470,16 +451,16 @@ These remain separate bounded tasks after Steps 2 and 3:
 
 ---
 
-## 12. Testing and Verification Rules
+## 11. Testing and Verification Rules
 
 Automated checks must include:
 
 - Backend compile check.
-- Backend unit/integration suite.
+- Backend unit and integration suite.
 - Frontend TypeScript check.
 - Frontend production build.
 
-A green automated suite proves only the tested code and build paths. It does **not** prove real exchange fills, latency, TP execution or exchange-side state transitions.
+A green automated suite proves only tested code and build paths. It does **not** prove real exchange fills, latency, TP execution or exchange-side state transitions.
 
 Required release evidence:
 
@@ -487,14 +468,14 @@ Required release evidence:
 - Targeted tests.
 - Full available test suite.
 - CI result.
-- Deployed health/readiness.
+- Deployed health and readiness.
 - Bybit Demo order and position evidence for both profiles.
 - Journal and PnL evidence.
-- Restart/recovery evidence.
+- Restart and recovery evidence.
 
 ---
 
-## 13. Local Development
+## 12. Local Development
 
 ### Backend
 
@@ -517,60 +498,3 @@ Local development database:
 ```text
 sqlite:///./app.db
 ```
-
-Keep `APP_ENV=development` when using SQLite.
-
----
-
-## 14. Required Environment Variables
-
-### Backend
-
-- `APP_ENV`
-- `DATABASE_URL`
-- `FRONTEND_URL`
-- `ADMIN_USERNAME`
-- `ADMIN_PASSWORD_HASH`
-- `SESSION_SECRET`
-- `BYBIT_DEMO_API_KEY`
-- `BYBIT_DEMO_API_SECRET`
-- `BYBIT_LIVE_API_KEY`
-- `BYBIT_LIVE_API_SECRET`
-- `SUPABASE_URL`
-- `SUPABASE_SERVICE_ROLE_KEY`
-
-### Frontend
-
-- `VITE_API_BASE_URL`
-
-Never commit API keys, passwords, session secrets, service-role credentials or `.env` files.
-
----
-
-## 15. Safety and Release Rules
-
-- Default mode is `demo`.
-- Live mode is not production-approved.
-- Scalping and Intraday management rules must remain separate.
-- Unknown trade type must not receive a silent default management profile.
-- Code completion is not runtime verification.
-- Runtime verification is not live-capital approval.
-- Do not describe a test as passed without evidence.
-- Do not claim a deployment without deployment evidence.
-- Use feature branches and pull requests for production changes.
-- Do not merge to `main` without explicit Product Owner approval.
-- Do not enable live trading before demo E2E, soak testing, operations review and release approval.
-
----
-
-## 16. Current Verdict
-
-DrayFrogd has a substantial demo-trading application and core safety architecture.
-
-**Step 1 of the current Scanner roadmap is complete. Steps 2 and 3 remain pending.**
-
-**Scalping and Intraday now have separately documented management profiles.** Runtime enforcement exists in code through PR #20, but both profiles still require full Bybit Demo lifecycle verification.
-
-The project is not finished because Strategy/Signal pipeline completion, truthful Scanner/Signal UI, real Bybit Demo E2E verification, backtesting, operational hardening and live-release gates remain outstanding.
-
-**Current classification: Demo Beta — 70% roadmap complete, runtime verification required, live trading not approved.**
