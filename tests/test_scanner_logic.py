@@ -214,8 +214,8 @@ class ScannerLogicTests(unittest.TestCase):
             },
             timeframes={"trend": "1h", "setup": "15m", "trigger": "5m"},
         )
-        self.assertEqual(result["status"], "near_setup")
-        self.assertEqual(result["original_status"], "active")
+        self.assertEqual(result["signal_state"], "NEAR_SETUP")
+        self.assertEqual(result["raw_status"], "active")
         self.assertEqual(result["rejection_reason"], "waiting_for_5m_choch")
 
     def test_scalping_structure_signal_does_not_use_intraday_gate(self) -> None:
@@ -230,6 +230,7 @@ class ScannerLogicTests(unittest.TestCase):
             timeframes={"trend": "5m", "setup": "5m", "trigger": "1m"},
         )
         self.assertEqual(result["status"], "active")
+        self.assertEqual(result["signal_state"], "ACTIVE")
         self.assertEqual(result["trade_type"], "scalping")
 
     def test_missing_trade_type_is_blocked_instead_of_defaulting_to_scalping(self) -> None:
@@ -240,7 +241,8 @@ class ScannerLogicTests(unittest.TestCase):
             market_ranking={"score": 80, "components": {}},
             scanner_logic={},
         )
-        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["status"], "invalid")
+        self.assertEqual(result["signal_state"], "INVALID")
         self.assertIsNone(result["trade_type"])
         self.assertEqual(result["rejection_reason"], "trade_type_missing_or_invalid")
 
