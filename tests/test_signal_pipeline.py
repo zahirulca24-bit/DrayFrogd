@@ -55,7 +55,7 @@ class SignalPipelineTests(unittest.TestCase):
         primary = result["signals"][0]
         self.assertEqual(primary["symbol"], "BTCUSDT")
         self.assertEqual(primary["strategy_name"], "breakout")
-        self.assertEqual(primary["trade_type"], "intraday")
+        self.assertEqual(primary["trade_type"], "scalping")
         self.assertTrue(primary["primary_signal"])
         self.assertEqual(primary["confirmation_count"], 1)
         self.assertEqual(primary["confirmations"][0]["strategy_name"], "ema_pullback")
