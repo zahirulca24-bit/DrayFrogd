@@ -7,7 +7,7 @@ from app.bot_controls import can_execute, get_execution_mode
 from app.config import settings
 from app.exchange import get_exchange_client
 from app.journal import log_bot_event
-from app.native_profit_orders import reconcile_native_profit_orders
+from app.native_profit_reconcile import reconcile_native_profit_orders
 from app.reconciliation import reconcile_state
 from app.risk import extract_account_equity, refresh_risk_state
 from app.risk_cooldown_sync import sync_loss_cooldowns
