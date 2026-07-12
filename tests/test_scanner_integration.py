@@ -98,7 +98,7 @@ class ScannerIntegrationTests(unittest.TestCase):
         self.assertEqual(result["timeframes"]["intraday"]["setup"], "15m")
         self.assertEqual(result["timeframes"]["intraday"]["trigger"], "5m")
 
-    def test_both_profiles_are_evaluated_separately_with_explicit_trade_type(self) -> None:
+    def test_both_profiles_are_evaluated_but_only_one_primary_signal_is_kept_per_symbol(self) -> None:
         client = FakeScannerClient()
         with patch(
             "app.scanner.analyze_trend",
@@ -111,8 +111,11 @@ class ScannerIntegrationTests(unittest.TestCase):
 
         self.assertEqual(evaluator.call_count, 2)
         self.assertEqual({item["trade_type"] for item in result["results"]}, {"scalping", "intraday"})
-        self.assertEqual({item["trade_type"] for item in result["signals"]}, {"scalping", "intraday"})
-        self.assertEqual(result["signals_found"], 2)
+        self.assertEqual(result["signals_found"], 1)
+        self.assertEqual(len(result["signals"]), 1)
+        self.assertEqual(result["signals"][0]["symbol"], "BTCUSDT")
+        self.assertTrue(result["signals"][0]["primary_signal"])
+        self.assertEqual(result["signals"][0]["confirmation_count"], 1)
 
     def test_sideways_market_never_reaches_strategy_evaluation(self) -> None:
         client = FakeScannerClient()
