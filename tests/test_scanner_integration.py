@@ -59,6 +59,7 @@ class ScannerIntegrationTests(unittest.TestCase):
             scanner._latest_universe_metadata.clear()
             scanner._latest_ranked_markets.clear()
             scanner._latest_signals.clear()
+            scanner._latest_watchlist_signals.clear()
             scanner._latest_scan_results.clear()
 
     def test_scanner_uses_1h_15m_and_5m_only(self) -> None:
@@ -83,12 +84,22 @@ class ScannerIntegrationTests(unittest.TestCase):
         ), patch(
             "app.scanner.analyze_trend",
             return_value={"state": TREND_UP, "strength": 90.0, "reason": "test"},
+        ), patch(
+            "app.scanner.grade_signal",
+            return_value={
+                "grade": "A",
+                "grade_action": "EXECUTE",
+                "grade_score": 90.0,
+                "executable": True,
+                "watchlist_only": False,
+            },
         ):
             result = run_scan(client)
 
         self.assertEqual(result["signals_found"], 1)
         self.assertEqual(result["signals"][0]["status"], "active")
         self.assertTrue(result["signals"][0]["trend_aligned"])
+        self.assertEqual(result["signals"][0]["grade"], "A")
 
     def test_uptrend_blocks_short_signal(self) -> None:
         client = FakeScannerClient()
