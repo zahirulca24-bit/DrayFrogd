@@ -3,6 +3,7 @@ from typing import Any
 
 from app.exchange import BybitDemoClient
 from app.market_quality import MAX_SPREAD_BPS, validate_spread
+from app.scanner_logic import evaluate_multitimeframe_logic
 from app.scanner_trend import (
     TREND_DOWN,
     TREND_INSUFFICIENT,
@@ -25,6 +26,7 @@ TRIGGER_CANDLE_LIMIT = 100
 TREND_INTERVAL = "60"
 SETUP_INTERVAL = "15"
 TRIGGER_INTERVAL = "5"
+STRUCTURE_STRATEGIES = {"pure_smc", "hybrid"}
 
 # Liquidity and execution-quality thresholds for symbol selection.
 MIN_TURNOVER_24H = 50_000_000.0
@@ -79,6 +81,12 @@ def run_scan(client: BybitDemoClient) -> dict[str, Any]:
         closed_15m = closed_candles(candles_15m, interval_minutes=15)
         closed_5m = closed_candles(candles_5m, interval_minutes=5)
         trend = analyze_trend(closed_1h, interval_minutes=60)
+        scanner_logic = evaluate_multitimeframe_logic(
+            symbol,
+            closed_15m,
+            closed_5m,
+            trend_state=str(trend.get("state") or ""),
+        )
         completeness = _data_completeness(closed_1h, closed_15m, closed_5m)
         ticker = ticker_metadata.get(symbol, {})
         market_ranking = score_market_candidate(
@@ -92,6 +100,7 @@ def run_scan(client: BybitDemoClient) -> dict[str, Any]:
             "score_components": market_ranking["components"],
             "spread_bps": market_ranking["spread_bps"],
             "trend": trend,
+            "scanner_logic": scanner_logic,
             "data_completeness": round(completeness, 4),
         }
         ranked_markets.append(market_snapshot)
@@ -107,6 +116,7 @@ def run_scan(client: BybitDemoClient) -> dict[str, Any]:
                 result=result,
                 trend=trend,
                 market_ranking=market_ranking,
+                scanner_logic=scanner_logic,
             )
             scan_results.append(normalized)
             if normalized.get("direction") and normalized.get("status") == "active":
@@ -164,12 +174,14 @@ def _normalize_strategy_result(
     result: dict[str, Any],
     trend: dict[str, Any],
     market_ranking: dict[str, Any],
+    scanner_logic: dict[str, Any],
 ) -> dict[str, Any]:
     original_status = result.get("status")
     direction = result.get("direction")
+    strategy_name = str(result.get("strategy_name") or result.get("strategy") or "")
     normalized = {
         "symbol": symbol,
-        "strategy_name": result.get("strategy_name") or result.get("strategy"),
+        "strategy_name": strategy_name,
         "strategy": result.get("strategy") or result.get("strategy_name"),
         "trade_type": result.get("trade_type") or "scalping",
         "direction": direction,
@@ -187,6 +199,12 @@ def _normalize_strategy_result(
         "trend_aligned": direction_allowed(str(trend.get("state") or ""), direction),
         "market_score": market_ranking.get("score"),
         "market_score_components": market_ranking.get("components"),
+        "scanner_logic_status": scanner_logic.get("status"),
+        "scanner_logic_direction": scanner_logic.get("direction"),
+        "scanner_logic_reason": scanner_logic.get("reason"),
+        "scanner_logic_confidence": scanner_logic.get("confidence_score"),
+        "setup_15m": scanner_logic.get("setup_15m"),
+        "confirmation_5m": scanner_logic.get("confirmation_5m"),
         "timeframes": {"trend": "1h", "setup": "15m", "trigger": "5m"},
     }
 
@@ -194,8 +212,36 @@ def _normalize_strategy_result(
         normalized["original_status"] = original_status
         normalized["status"] = "blocked"
         normalized["rejection_reason"] = _trend_block_reason(str(trend.get("state") or ""), str(direction))
+        return normalized
+
+    if strategy_name.lower() in STRUCTURE_STRATEGIES and direction and original_status in {"active", "near_setup"}:
+        _apply_structure_gate(normalized, scanner_logic)
 
     return normalized
+
+
+def _apply_structure_gate(normalized: dict[str, Any], scanner_logic: dict[str, Any]) -> None:
+    original_status = str(normalized.get("status") or "")
+    direction = str(normalized.get("direction") or "").lower()
+    logic_direction = str(scanner_logic.get("direction") or "").lower()
+    logic_status = str(scanner_logic.get("status") or "")
+
+    if logic_direction and logic_direction != direction:
+        normalized["original_status"] = original_status
+        normalized["status"] = "blocked"
+        normalized["rejection_reason"] = "scanner_logic_direction_mismatch"
+        return
+
+    if original_status == "active" and logic_status != "active":
+        normalized["original_status"] = original_status
+        normalized["status"] = "near_setup" if logic_status == "near_setup" else "blocked"
+        normalized["rejection_reason"] = scanner_logic.get("reason") or "scanner_logic_not_confirmed"
+        return
+
+    if original_status == "near_setup" and logic_status in {"blocked", "rejected"}:
+        normalized["original_status"] = original_status
+        normalized["status"] = "blocked"
+        normalized["rejection_reason"] = scanner_logic.get("reason") or "scanner_logic_not_confirmed"
 
 
 def _resolve_scan_universe(client: BybitDemoClient) -> list[str]:
