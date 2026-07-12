@@ -230,7 +230,9 @@ export default function SignalEngine(props: SignalEngineProps) {
           <SummaryBadge
             label="Sideways / stale"
             value={
-              summary?.sidewaysRejectedProfiles === null || summary?.insufficientOrStaleProfiles === null
+              summary == null ||
+              summary.sidewaysRejectedProfiles == null ||
+              summary.insufficientOrStaleProfiles == null
                 ? "N/A"
                 : summary.sidewaysRejectedProfiles + summary.insufficientOrStaleProfiles
             }
