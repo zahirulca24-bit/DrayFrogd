@@ -107,6 +107,9 @@ class StrategyFoundationTests(unittest.TestCase):
                     "rejection_reason": None,
                 }
             ],
+        ), patch(
+            "app.scanner.analyze_trend",
+            return_value={"state": "UPTREND", "strength": 90.0, "reason": "test_fixture"},
         ):
             result = run_scan(FakeScannerClient())
 
