@@ -62,6 +62,30 @@ class TradeManagementRulesTests(unittest.TestCase):
         action = evaluate_management_action(trade, 114.0, datetime.now(UTC))
         self.assertEqual(action["action"], "trail")
 
+    def test_native_tp_orders_prevent_duplicate_mark_price_partial_close(self) -> None:
+        trade = self.base_trade()
+        trade["management"].update(
+            {
+                "native_tp_enabled": True,
+                "native_tp_degraded": False,
+                "tp1_order_link_id": "df-t1-key",
+                "tp2_order_link_id": "df-t2-key",
+            }
+        )
+        action = evaluate_management_action(trade, 113.0, datetime.now(UTC))
+        self.assertEqual(action["action"], "hold")
+
+    def test_degraded_native_tp_restores_mark_price_fallback(self) -> None:
+        trade = self.base_trade()
+        trade["management"].update(
+            {
+                "native_tp_enabled": True,
+                "native_tp_degraded": True,
+            }
+        )
+        action = evaluate_management_action(trade, 110.1, datetime.now(UTC))
+        self.assertEqual(action["action"], "tp1")
+
     def test_stagnant_action_after_one_hour_without_progress(self) -> None:
         trade = self.base_trade()
         trade["opened_at"] = (datetime.now(UTC) - timedelta(minutes=70)).isoformat()
