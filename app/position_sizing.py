@@ -102,31 +102,40 @@ def calculate_position_size(
     remaining_exposure_margin = max_allowed_margin - existing_margin
     margin_buffer = available_balance * 0.95
 
-    if remaining_exposure_margin <= 0:
-        return _reject("Capital exposure cap exceeded" if fixed_risk_mode else "Exposure cap exceeded")
+    if not fixed_risk_mode:
+        # Preserve the previous API behavior for legacy percentage sizing.
+        selected_leverage = leverage_cap
+        minimum_required_leverage = selected_leverage
+        required_margin = notional / selected_leverage
+        if required_margin > margin_buffer + 1e-9:
+            return _reject("Required margin exceeds available balance")
+        if existing_margin + required_margin > max_allowed_margin + 1e-9:
+            return _reject("Exposure cap exceeded")
+    else:
+        if remaining_exposure_margin <= 0:
+            return _reject("Capital exposure cap exceeded")
 
-    usable_margin = min(remaining_exposure_margin, margin_buffer)
-    if usable_margin <= 0:
-        return _reject("Required margin exceeds available balance")
+        usable_margin = min(remaining_exposure_margin, margin_buffer)
+        if usable_margin <= 0:
+            return _reject("Required margin exceeds available balance")
 
-    # The 50% portfolio exposure limit is a hard ceiling, not a target. The
-    # previous fixed-risk implementation lowered leverage until one trade used
-    # almost the full remaining exposure budget. Fixed-risk trades now use the
-    # approved profile leverage cap (20x scalping / 10x intraday). The minimum
-    # leverage below is only an admission check: if even the profile cap cannot
-    # fit the trade inside available margin and portfolio capacity, reject it.
-    minimum_required_leverage = max(notional / usable_margin, 1.0)
-    if minimum_required_leverage > leverage_cap + 1e-9:
-        return _reject(
-            f"Required leverage {minimum_required_leverage:.2f}x exceeds {leverage_cap:.2f}x profile cap"
-        )
+        # The 50% portfolio exposure limit is a hard ceiling, not a target. The
+        # previous fixed-risk implementation lowered leverage until one trade
+        # used almost the full remaining exposure budget. Fixed-risk trades now
+        # use the approved profile leverage cap (20x scalping / 10x intraday).
+        # The minimum below is only an admission check.
+        minimum_required_leverage = max(notional / usable_margin, 1.0)
+        if minimum_required_leverage > leverage_cap + 1e-9:
+            return _reject(
+                f"Required leverage {minimum_required_leverage:.2f}x exceeds {leverage_cap:.2f}x profile cap"
+            )
 
-    selected_leverage = leverage_cap
-    required_margin = notional / selected_leverage
-    if required_margin > margin_buffer + 1e-9:
-        return _reject("Required margin exceeds available balance")
-    if existing_margin + required_margin > max_allowed_margin + 1e-9:
-        return _reject("Capital exposure cap exceeded" if fixed_risk_mode else "Exposure cap exceeded")
+        selected_leverage = leverage_cap
+        required_margin = notional / selected_leverage
+        if required_margin > margin_buffer + 1e-9:
+            return _reject("Required margin exceeds available balance")
+        if existing_margin + required_margin > max_allowed_margin + 1e-9:
+            return _reject("Capital exposure cap exceeded")
 
     portfolio_margin_after = existing_margin + required_margin
     remaining_margin_after = max(max_allowed_margin - portfolio_margin_after, 0.0)
