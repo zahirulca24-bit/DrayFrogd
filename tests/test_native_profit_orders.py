@@ -3,7 +3,8 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
-from app.native_profit_orders import install_native_profit_orders, reconcile_native_profit_orders
+from app.native_profit_orders import install_native_profit_orders
+from app.native_profit_reconcile import reconcile_native_profit_orders
 
 
 class FakeNativeClient:
@@ -140,7 +141,7 @@ class NativeProfitOrderTests(unittest.TestCase):
 
         saved: dict = {}
         with (
-            patch("app.native_profit_orders.get_active_trades", return_value=[trade]),
+            patch("app.native_profit_reconcile.get_active_trades", return_value=[trade]),
             patch("app.native_profit_orders.update_active_trade", side_effect=lambda journal_id, updates: saved.update(updates)),
             patch("app.native_profit_orders.update_trade_entry", return_value={"journal_id": trade["journal_id"]}),
             patch("app.native_profit_orders.append_trade_event"),
@@ -169,7 +170,7 @@ class NativeProfitOrderTests(unittest.TestCase):
 
         saved: dict = {}
         with (
-            patch("app.native_profit_orders.get_active_trades", return_value=[trade]),
+            patch("app.native_profit_reconcile.get_active_trades", return_value=[trade]),
             patch("app.native_profit_orders.update_active_trade", side_effect=lambda journal_id, updates: saved.update(updates)),
             patch("app.native_profit_orders.update_trade_entry", return_value={"journal_id": trade["journal_id"]}),
             patch("app.native_profit_orders.append_trade_event"),
@@ -192,7 +193,7 @@ class NativeProfitOrderTests(unittest.TestCase):
 
         saved: dict = {}
         with (
-            patch("app.native_profit_orders.get_active_trades", return_value=[trade]),
+            patch("app.native_profit_reconcile.get_active_trades", return_value=[trade]),
             patch("app.native_profit_orders.update_active_trade", side_effect=lambda journal_id, updates: saved.update(updates)),
             patch("app.native_profit_orders.update_trade_entry", return_value={"journal_id": trade["journal_id"]}),
             patch("app.native_profit_orders.append_trade_event"),
@@ -201,6 +202,34 @@ class NativeProfitOrderTests(unittest.TestCase):
 
         self.assertTrue(saved["management"]["native_tp_degraded"])
         self.assertIn("TP1", saved["management"]["native_tp_degraded_reason"])
+
+    def test_unchanged_order_snapshots_do_not_rewrite_trade_state(self) -> None:
+        client = FakeNativeClient()
+        trade = self.install(client, self.base_trade())
+        management = trade["management"]
+        management["tp1_order_status"] = "New"
+        management["tp2_order_status"] = "New"
+        management["tp1_order_snapshot"] = {
+            key: client.orders[management["tp1_order_link_id"]].get(key)
+            for key in ("orderId", "orderLinkId", "orderStatus", "qty", "cumExecQty", "leavesQty", "price")
+        }
+        management["tp2_order_snapshot"] = {
+            key: client.orders[management["tp2_order_link_id"]].get(key)
+            for key in ("orderId", "orderLinkId", "orderStatus", "qty", "cumExecQty", "leavesQty", "price")
+        }
+        trade["management"] = management
+        trade["exchange_metadata"]["management"] = management
+
+        with (
+            patch("app.native_profit_reconcile.get_active_trades", return_value=[trade]),
+            patch("app.native_profit_orders.update_active_trade") as update_active,
+            patch("app.native_profit_orders.update_trade_entry") as update_journal,
+        ):
+            result = reconcile_native_profit_orders(client)
+
+        self.assertTrue(result["ok"])
+        update_active.assert_not_called()
+        update_journal.assert_not_called()
 
 
 if __name__ == "__main__":
