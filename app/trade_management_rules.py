@@ -39,13 +39,22 @@ def evaluate_management_action(trade: dict[str, Any], mark_price: float, now: da
     if tp2_done and trailing_stop is None:
         return {"action": "retry_trailing"}
 
+    native_tp_active = bool(management.get("native_tp_enabled")) and not bool(management.get("native_tp_degraded"))
+    if native_tp_active:
+        # Exchange-native reduce-only orders own TP1/TP2. Mark-price polling must
+        # never submit a duplicate partial market close while those orders are
+        # live. The watcher persists fills as tp1_done/tp2_done.
+        if tp2_done:
+            return {"action": "trail"}
+        return {"action": "hold"}
+
     tp1 = _to_float(management.get("tp1"), entry)
     tp2 = _to_float(management.get("tp2"), entry)
     hit_tp1 = mark_price >= tp1 if direction == "long" else mark_price <= tp1
     hit_tp2 = mark_price >= tp2 if direction == "long" else mark_price <= tp2
 
-    # TP1 must be confirmed before TP2. A price gap through both levels therefore
-    # executes TP1 first and TP2 on the next management cycle.
+    # Legacy/degraded trades retain mark-price fallback. TP1 must be confirmed
+    # before TP2 so a price gap executes one stage per management cycle.
     if hit_tp1 and not tp1_done:
         return {"action": "tp1"}
     if hit_tp2 and tp1_done and not tp2_done:
