@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from typing import Any
 
 from app.execution_core import get_active_trades
@@ -14,15 +15,15 @@ from app.native_profit_orders import (
     _safe_event,
     _set_and_verify_protection,
     _utc_now_iso,
+    install_native_profit_orders,
 )
 
 
 def reconcile_native_profit_orders(client: Any) -> dict[str, Any]:
-    """Reconcile native TP fills without writing unchanged snapshots every cycle."""
+    """Adopt eligible legacy trades and reconcile native TP fills efficiently."""
 
     trades = get_active_trades()
-    native_trades = [trade for trade in trades if _management_state(trade).get("native_tp_enabled")]
-    if not native_trades:
+    if not trades:
         return {"ok": True, "managed": 0, "actions": [], "errors": []}
 
     ok_positions, positions, positions_error = client.safe_fetch_positions()
@@ -36,6 +37,75 @@ def reconcile_native_profit_orders(client: Any) -> dict[str, Any]:
 
     actions: list[dict[str, Any]] = []
     errors: list[str] = []
+    native_trades: list[dict[str, Any]] = []
+
+    for trade in trades:
+        symbol = str(trade.get("symbol") or "").upper().strip()
+        journal_id = str(trade.get("journal_id") or "")
+        position = positions_by_symbol.get(symbol)
+        management = _management_state(trade)
+        if not symbol or not journal_id or position is None:
+            continue
+
+        if management.get("native_tp_enabled"):
+            native_trades.append(trade)
+            continue
+
+        if not _eligible_for_adoption(trade, management, position):
+            continue
+
+        metadata = trade.get("exchange_metadata") if isinstance(trade.get("exchange_metadata"), dict) else {}
+        execution_key = str(
+            trade.get("execution_key")
+            or metadata.get("execution_key")
+            or hashlib.sha256(journal_id.encode("utf-8")).hexdigest()
+        )
+        position_quantity = _positive_float(position.get("size")) or 0.0
+        candidate_management = {
+            **management,
+            "initial_quantity": _positive_float(management.get("initial_quantity")) or position_quantity,
+            "remaining_quantity": position_quantity,
+        }
+        candidate = {
+            **trade,
+            "execution_key": execution_key,
+            "quantity": position_quantity,
+            "remaining_quantity": position_quantity,
+            "management": candidate_management,
+            "exchange_metadata": {
+                **metadata,
+                "execution_key": execution_key,
+                "management": candidate_management,
+            },
+        }
+        adoption = install_native_profit_orders(client, candidate)
+        if not adoption.get("ok"):
+            errors.append(f"{symbol} native TP adoption: {adoption.get('error') or 'failed'}")
+            _safe_event(
+                journal_id,
+                "NATIVE_TP_ADOPTION_SKIPPED",
+                "Existing active trade could not be adopted into native TP management; legacy fallback remains active.",
+                {"symbol": symbol, "error": adoption.get("error")},
+            )
+            continue
+
+        adopted_management = dict(adoption.get("management") or {})
+        candidate["management"] = adopted_management
+        candidate["exchange_metadata"] = {
+            **candidate["exchange_metadata"],
+            "management": adopted_management,
+            "native_profit_orders": adoption.get("orders") or {},
+        }
+        _persist_management_state(candidate, adopted_management, position_quantity)
+        _safe_event(
+            journal_id,
+            "NATIVE_TP_ORDERS_ADOPTED",
+            "Existing active trade was adopted into exchange-native TP1/TP2 management.",
+            {"symbol": symbol, "orders": adoption.get("orders") or {}},
+        )
+        actions.append({"symbol": symbol, "action": "NATIVE_TP_ORDERS_ADOPTED"})
+        native_trades.append(candidate)
+
     for trade in native_trades:
         symbol = str(trade.get("symbol") or "").upper().strip()
         journal_id = str(trade.get("journal_id") or "")
@@ -152,6 +222,23 @@ def reconcile_native_profit_orders(client: Any) -> dict[str, Any]:
             _persist_management_state(trade, management, position_quantity)
 
     return {"ok": not errors, "managed": len(native_trades), "actions": actions, "errors": errors}
+
+
+def _eligible_for_adoption(trade: dict[str, Any], management: dict[str, Any], position: dict[str, Any]) -> bool:
+    if str(trade.get("status") or "active").lower() != "active":
+        return False
+    if management.get("tp1_done") or management.get("tp2_done"):
+        return False
+    if not all(_positive_float(management.get(key)) for key in ("tp1", "tp2", "runner_target")):
+        return False
+    position_quantity = _positive_float(position.get("size"))
+    initial_quantity = _positive_float(management.get("initial_quantity"))
+    if position_quantity is None:
+        return False
+    if initial_quantity is None:
+        return True
+    tolerance = max(initial_quantity * 1e-8, 1e-12)
+    return abs(position_quantity - initial_quantity) <= tolerance
 
 
 def _store_snapshot_if_changed(management: dict[str, Any], prefix: str, snapshot: dict[str, Any] | None) -> bool:
