@@ -96,6 +96,12 @@ const emptyRiskState: RiskStateResponse = {
   active_symbols: [],
   trades_today: 0,
   cooldown_until: null,
+  day_start_equity: null,
+  current_account_equity: null,
+  equity_drawdown_today: null,
+  daily_net_loss_limit_amount: null,
+  circuit_breaker_active: false,
+  circuit_breaker_reason: null,
 };
 
 const emptyWatchdog: WatchdogSnapshot = {

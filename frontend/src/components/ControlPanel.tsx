@@ -91,6 +91,16 @@ function formatPercent(value: number) {
   return `${(Number(value || 0) * 100).toFixed(2)}%`;
 }
 
+function formatMoney(value?: number | null) {
+  return Number.isFinite(Number(value)) ? `$${Number(value).toFixed(2)}` : "N/A";
+}
+
+function formatDailyTradeLimit(riskState: RiskStateResponse) {
+  return riskState.max_trades_per_day > 0
+    ? `${riskState.trades_today} / ${riskState.max_trades_per_day}`
+    : `${riskState.trades_today} / Unlimited`;
+}
+
 function readable(value?: string | null, fallback = "Not confirmed") {
   if (!value) return fallback;
   return value
@@ -166,8 +176,19 @@ export default function ControlPanel({
       maxDailyTrades: Number(riskForm.maxDailyTrades),
     };
 
-    if (Object.values(parsed).some((value) => !Number.isFinite(value) || value <= 0)) {
-      setRiskFormError("All risk settings must be valid positive numbers.");
+    if (
+      !Number.isFinite(parsed.riskPercent) ||
+      parsed.riskPercent <= 0 ||
+      !Number.isFinite(parsed.leverageCap) ||
+      parsed.leverageCap <= 0 ||
+      !Number.isFinite(parsed.exposureCap) ||
+      parsed.exposureCap <= 0 ||
+      !Number.isFinite(parsed.maxOpenTrades) ||
+      parsed.maxOpenTrades <= 0 ||
+      !Number.isFinite(parsed.maxDailyTrades) ||
+      parsed.maxDailyTrades < 0
+    ) {
+      setRiskFormError("Risk values must be positive; max daily trades can be 0 for unlimited.");
       return;
     }
 
@@ -331,10 +352,29 @@ export default function ControlPanel({
             <Metric label="Exposure Cap" value={formatPercent(riskState.exposure_cap)} />
             <Metric label="Minimum RR" value={`${riskState.min_risk_reward.toFixed(1)}R`} />
             <Metric label="Max Open" value={String(riskState.max_open_trades)} />
-            <Metric label="Trades Today" value={`${riskState.trades_today} / ${riskState.max_trades_per_day}`} />
+            <Metric label="Trades Today" value={formatDailyTradeLimit(riskState)} />
             <Metric label="Active Symbols" value={riskState.active_symbols.length ? riskState.active_symbols.join(", ") : "None"} />
             <Metric label="Cooldown" value={riskState.cooldown_until ? formatTime(riskState.cooldown_until) : "CLEAR"} />
           </div>
+
+          <div className="mt-3 grid grid-cols-2 gap-3 lg:grid-cols-4">
+            <Metric label="Day Start Equity" value={formatMoney(riskState.day_start_equity)} />
+            <Metric label="Current Equity" value={formatMoney(riskState.current_account_equity)} />
+            <Metric label="Equity Drawdown" value={formatMoney(riskState.equity_drawdown_today)} />
+            <Metric
+              label="5% Hard Stop"
+              value={
+                riskState.circuit_breaker_active
+                  ? "TRIPPED"
+                  : `${formatMoney(riskState.daily_net_loss_limit_amount)} limit`
+              }
+            />
+          </div>
+          {riskState.circuit_breaker_reason && (
+            <div className="mt-3 rounded-xl border border-rose-500/20 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
+              {riskState.circuit_breaker_reason}
+            </div>
+          )}
 
           <div className="my-5 border-t border-slate-800" />
 

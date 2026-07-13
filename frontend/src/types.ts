@@ -399,6 +399,12 @@ export interface RiskStateResponse {
   active_symbols: string[];
   trades_today: number;
   cooldown_until: string | null;
+  day_start_equity?: number | null;
+  current_account_equity?: number | null;
+  equity_drawdown_today?: number | null;
+  daily_net_loss_limit_amount?: number | null;
+  circuit_breaker_active?: boolean;
+  circuit_breaker_reason?: string | null;
 }
 
 export interface PositionSizeResponse {
