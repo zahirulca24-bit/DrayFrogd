@@ -1,0 +1,44 @@
+name: Apply ledger reconciliation fix
+
+on:
+  push:
+    branches:
+      - fix/ledger-reconciliation-regressions
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/ledger-reconciliation-regressions
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install backend dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Apply bounded repair
+        run: python scripts/apply_ledger_reconciliation_fix.py
+
+      - name: Verify ledger tests
+        run: python -m unittest tests.test_close_fill_sync -v
+
+      - name: Verify full backend suite
+        run: python -m unittest discover -s tests -v
+
+      - name: Commit verified repair and remove one-time helpers
+        run: |
+          git rm scripts/apply_ledger_reconciliation_fix.py
+          git rm .github/workflows/apply-ledger-reconciliation-fix.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/close_fill_sync.py
+          git commit -m "Fix ledger close reconciliation regressions"
+          git push origin HEAD:fix/ledger-reconciliation-regressions
