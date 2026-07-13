@@ -49,7 +49,7 @@ def fetch_exact_close_result(
     )
     if ledger_result is not None:
         return ledger_result, None
-    return None, ledger_error or exact_error
+    return None, exact_error or ledger_error
 
 
 def fetch_transaction_log_close_result(
@@ -456,16 +456,22 @@ def _initial_quantity(trade: dict[str, Any]) -> float | None:
     management = trade.get("management") if isinstance(trade.get("management"), dict) else {}
     metadata = trade.get("exchange_metadata") if isinstance(trade.get("exchange_metadata"), dict) else {}
     metadata_management = metadata.get("management") if isinstance(metadata.get("management"), dict) else {}
-    for value in (
-        management.get("initial_quantity"),
-        metadata_management.get("initial_quantity"),
-        trade.get("quantity"),
-        trade.get("remaining_quantity"),
-    ):
-        numeric = _number(value)
-        if numeric is not None and numeric > 0:
-            return numeric
-    return None
+    candidates = [
+        _number(trade.get("initial_quantity")),
+        _number(trade.get("quantity")),
+        _number(trade.get("remaining_quantity")),
+        _number(management.get("initial_quantity")),
+        _number(metadata_management.get("initial_quantity")),
+    ]
+    positive = [value for value in candidates if value is not None and value > 0]
+    if not positive:
+        return None
+
+    # The initial quantity cannot be smaller than a confirmed current/remaining
+    # quantity. Selecting the largest persisted candidate is fail-safe when old
+    # management metadata conflicts with a newer journal or exchange quantity:
+    # it prevents a partial close from being accepted as a complete close.
+    return max(positive)
 
 
 def _record_time_ms(record: dict[str, Any]) -> int | None:
