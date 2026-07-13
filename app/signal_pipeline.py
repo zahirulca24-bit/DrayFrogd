@@ -186,7 +186,7 @@ def normalize_strategy_result(
     geometry_valid = _valid_trade_geometry(normalized)
     if normalized["signal_state"] in USEFUL_SIGNAL_STATES and not geometry_valid:
         _set_signal_state(normalized, SIGNAL_INVALID, "invalid_trade_geometry")
-    elif normalized["signal_state"] in USEFUL_SIGNAL_STATES and not _meets_trade_type_rr_minimum(normalized):
+    elif normalized["signal_state"] == SIGNAL_ACTIVE and not _meets_trade_type_rr_minimum(normalized):
         _set_signal_state(normalized, SIGNAL_INVALID, "risk_reward_below_trade_type_minimum")
 
     normalized["geometry_valid"] = geometry_valid
