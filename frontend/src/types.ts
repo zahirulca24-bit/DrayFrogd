@@ -224,6 +224,19 @@ export interface SystemReadiness {
     exchange: string | null;
     wallet: string | null;
   };
+  persistence?: {
+    local_journal_storage: {
+      configured: boolean;
+      backend: string;
+      target: string;
+    };
+    external_audit_sink: {
+      configured: boolean;
+      provider: string;
+      target: string;
+      status: string;
+    };
+  };
   ready_for_execution: boolean;
   demo?: {
     mode: string;
