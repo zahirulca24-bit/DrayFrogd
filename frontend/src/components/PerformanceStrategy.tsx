@@ -48,6 +48,14 @@ function numberValue(value: unknown) {
   return Number.isFinite(numeric) ? numeric : 0;
 }
 
+function nullableNumber(value: unknown) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
 function formatMoney(value: number | null | undefined) {
   if (value === null || value === undefined || Number.isNaN(value)) {
     return "N/A";
@@ -113,6 +121,41 @@ function toBdtDate(value?: string | null) {
   return value ? BDT_DATE.format(new Date(value)) : "N/A";
 }
 
+function classifyOutcome(realizedPnl: number | null, rawResult: string) {
+  if (realizedPnl !== null) {
+    if (realizedPnl > 0) return "PROFIT";
+    if (realizedPnl < 0) return "LOSS";
+  }
+
+  if (rawResult === "tp" || rawResult === "profit") return "PROFIT";
+  if (rawResult === "sl" || rawResult === "loss") return "LOSS";
+  return "UNKNOWN";
+}
+
+function deriveLossReason(item: JournalTradeEntry, outcome: "PROFIT" | "LOSS" | "UNKNOWN") {
+  if (outcome !== "LOSS") {
+    return null;
+  }
+
+  const financial = item as FinancialJournalTrade;
+  const slReason = String(item.sl_hit_reason || "").trim();
+  if (slReason) {
+    return slReason;
+  }
+
+  const closeReason = String(financial.close_reason || "").trim().toUpperCase();
+  if (!closeReason) {
+    return "UNKNOWN_LOSS_EXIT";
+  }
+
+  if (closeReason === "EXCHANGE_CLOSED_PNL") return "STOP_LOSS_OR_PROTECTIVE_CLOSE";
+  if (closeReason === "MAX_HOLD_TIME") return "MAX_HOLD_TIME";
+  if (closeReason === "MOMENTUM_FAILED") return "MOMENTUM_FAILED";
+  if (closeReason === "MANUAL_MARKET_CLOSE") return "MANUAL_MARKET_CLOSE";
+  if (closeReason === "ORDER_NOT_ACCEPTED") return "ORDER_NOT_ACCEPTED";
+  return closeReason;
+}
+
 function journalToPerformanceRow(item: JournalTradeEntry, index: number): PerformanceRow {
   const financial = item as FinancialJournalTrade;
   const entryPrice = numberValue(item.entry);
@@ -120,14 +163,10 @@ function journalToPerformanceRow(item: JournalTradeEntry, index: number): Perfor
   const takeProfit = numberValue(item.take_profit);
   const isClosed = String(item.status || "").toLowerCase() === "closed";
   const rawResult = String(item.result || "").toLowerCase();
-  const realizedPnl = financial.realized_pnl === null || financial.realized_pnl === undefined ? 0 : numberValue(financial.realized_pnl);
-  const outcome =
-    realizedPnl > 0 || rawResult === "tp" || rawResult === "profit"
-      ? "PROFIT"
-      : realizedPnl < 0 || rawResult === "sl" || rawResult === "loss"
-      ? "LOSS"
-      : "UNKNOWN";
+  const realizedPnl = nullableNumber(financial.realized_pnl);
+  const outcome = classifyOutcome(realizedPnl, rawResult);
   const closedAt = item.closed_at || item.opened_at || item.detected_at || new Date().toISOString();
+  const lossReason = deriveLossReason(item, outcome);
 
   return {
     id: item.order_id || item.journal_id || `${item.symbol}-${index}`,
@@ -150,9 +189,9 @@ function journalToPerformanceRow(item: JournalTradeEntry, index: number): Perfor
     journalId: item.journal_id,
     executionMode: item.execution_mode || "demo",
     exitPrice: isClosed ? numberValue(financial.exit_price) : 0,
-    pnl: isClosed ? realizedPnl : 0,
+    pnl: isClosed && realizedPnl !== null ? realizedPnl : 0,
     result: outcome as TradeHistoryEntry["result"],
-    reason: financial.close_reason || item.sl_hit_reason || (isClosed ? "unknown" : "open"),
+    reason: lossReason || financial.close_reason || item.sl_hit_reason || (isClosed ? "unknown" : "open"),
     closedAt,
     tradeStatus: item.status || (isClosed ? "closed" : "active"),
     symbol: item.symbol,
@@ -279,7 +318,7 @@ export default function PerformanceStrategy({ authToken, history }: PerformanceS
   );
 
   const slAnalysis = Array.from(
-    rows
+    knownClosedRows
       .filter((row) => row.result === "LOSS")
       .reduce((map, row) => {
         const key = row.reason || "unknown";
