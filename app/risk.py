@@ -273,17 +273,36 @@ def refresh_risk_state(
                 live_risk=live_risk,
             )
             loss_limit = (day_start_equity or 0.0) * DAILY_NET_LOSS_LIMIT_RATIO
-            threshold_hit = bool(
+            realized_threshold_hit = bool(
                 day_start_equity
                 and realized_pnl_today <= -(loss_limit) + 1e-9
             )
-            circuit_breaker_active = previous_breaker or threshold_hit
-            circuit_reason = (
-                f"Daily net realized loss limit reached: {realized_pnl_today:.2f} USDT "
-                f"<= -{loss_limit:.2f} USDT"
-                if circuit_breaker_active
+            equity_drawdown_today = (
+                observed_equity - day_start_equity
+                if observed_equity is not None and day_start_equity
                 else None
             )
+            equity_threshold_hit = bool(
+                day_start_equity
+                and equity_drawdown_today is not None
+                and equity_drawdown_today <= -(loss_limit) + 1e-9
+            )
+            threshold_hit = realized_threshold_hit or equity_threshold_hit
+            circuit_breaker_active = previous_breaker or threshold_hit
+            if equity_threshold_hit:
+                circuit_reason = (
+                    f"Daily account equity drawdown limit reached: {equity_drawdown_today:.2f} USDT "
+                    f"<= -{loss_limit:.2f} USDT"
+                )
+            elif realized_threshold_hit:
+                circuit_reason = (
+                    f"Daily net realized loss limit reached: {realized_pnl_today:.2f} USDT "
+                    f"<= -{loss_limit:.2f} USDT"
+                )
+            elif circuit_breaker_active:
+                circuit_reason = row.circuit_breaker_reason or "Daily loss circuit breaker is active"
+            else:
+                circuit_reason = None
 
             row.trades_day = current_day
             row.trades_today = trades_today
@@ -327,6 +346,8 @@ def refresh_risk_state(
                     for symbol, expiry in cooldowns.items()
                 },
                 "day_start_equity": day_start_equity,
+                "current_account_equity": observed_equity,
+                "equity_drawdown_today": equity_drawdown_today,
                 "realized_pnl_today": realized_pnl_today,
                 "daily_net_loss_limit_ratio": DAILY_NET_LOSS_LIMIT_RATIO,
                 "daily_net_loss_limit_amount": loss_limit,
@@ -354,6 +375,8 @@ def refresh_risk_state(
                     "error_code": "DAILY_NET_LOSS_LIMIT_REACHED",
                     "trades_day": snapshot["trades_day"],
                     "day_start_equity": snapshot["day_start_equity"],
+                    "current_account_equity": snapshot.get("current_account_equity"),
+                    "equity_drawdown_today": snapshot.get("equity_drawdown_today"),
                     "realized_pnl_today": snapshot["realized_pnl_today"],
                     "loss_limit": snapshot["daily_net_loss_limit_amount"],
                 },

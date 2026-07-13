@@ -181,6 +181,45 @@ class RestartSafeRiskTests(unittest.TestCase):
             self.assertEqual(restored["symbol_cooldowns"], {})
             self.assertIsNone(restored["cooldown_until"])
 
+    def test_account_equity_drawdown_trips_daily_loss_breaker_before_journal_sync(self) -> None:
+        now = datetime(2026, 7, 12, 0, 30, tzinfo=UTC)
+        with NamedTemporaryFile(suffix=".db") as database_file:
+            test_engine = create_engine(
+                f"sqlite:///{database_file.name}",
+                connect_args={"check_same_thread": False},
+            )
+            TestSession = sessionmaker(autocommit=False, autoflush=False, bind=test_engine)
+            Base.metadata.create_all(bind=test_engine)
+            db = TestSession()
+            try:
+                db.add(
+                    RiskRuntimeState(
+                        id=1,
+                        trades_day="2026-07-12",
+                        active_symbols="[]",
+                        symbol_cooldowns="{}",
+                        day_start_equity=1000.0,
+                        realized_pnl_today=0.0,
+                    )
+                )
+                db.commit()
+            finally:
+                db.close()
+
+            with (
+                patch("app.risk.engine", test_engine),
+                patch("app.risk.SessionLocal", TestSession),
+                patch("app.risk.stop_bot") as stop_bot,
+                patch("app.risk.log_bot_event"),
+            ):
+                restored = risk.restore_risk_state(now=now, account_equity=940.0)
+
+            self.assertTrue(restored["circuit_breaker_active"])
+            self.assertIn("account equity drawdown", restored["circuit_breaker_reason"])
+            self.assertEqual(restored["current_account_equity"], 940.0)
+            self.assertEqual(restored["equity_drawdown_today"], -60.0)
+            stop_bot.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

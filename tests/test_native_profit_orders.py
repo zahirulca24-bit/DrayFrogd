@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
-from app.native_profit_orders import install_native_profit_orders
+from app.native_profit_orders import _set_and_verify_protection, install_native_profit_orders
 from app.native_profit_reconcile import reconcile_native_profit_orders
 
 
@@ -230,6 +230,28 @@ class NativeProfitOrderTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         update_active.assert_not_called()
         update_journal.assert_not_called()
+
+    def test_not_modified_protection_error_is_verified_as_success(self) -> None:
+        class NotModifiedClient(FakeNativeClient):
+            def set_trading_stop(self, symbol: str, take_profit: str, stop_loss: str):
+                self.position["takeProfit"] = take_profit
+                self.position["stopLoss"] = stop_loss
+                raise RuntimeError("not modified")
+
+        client = NotModifiedClient()
+        result = _set_and_verify_protection(
+            client,
+            trade=self.base_trade(),
+            position=client.position,
+            stop_loss=100.0,
+            take_profit=106.0,
+            tick_size=0.1,
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["response"]["noop"])
+        self.assertEqual(result["stop_loss"], 100.0)
+        self.assertEqual(result["take_profit"], 106.0)
 
 
 if __name__ == "__main__":

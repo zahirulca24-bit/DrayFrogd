@@ -378,27 +378,47 @@ def _set_and_verify_protection(
     tick_size: float,
 ) -> dict[str, Any]:
     symbol = str(trade.get("symbol") or "").upper()
+    response: dict[str, Any] = {}
     try:
         normalized_stop = client.normalize_price(stop_loss, str(tick_size))
         normalized_tp = client.normalize_price(take_profit, str(tick_size))
         response = client.set_trading_stop(symbol=symbol, take_profit=normalized_tp, stop_loss=normalized_stop)
     except Exception as exc:
-        return {"ok": False, "error": str(exc)}
+        if not _is_not_modified_error(str(exc)):
+            return {"ok": False, "error": str(exc)}
+        response = {"noop": True, "message": str(exc)}
+        try:
+            normalized_stop = client.normalize_price(stop_loss, str(tick_size))
+            normalized_tp = client.normalize_price(take_profit, str(tick_size))
+        except Exception as normalize_exc:
+            return {"ok": False, "error": str(normalize_exc), "response": response}
 
+    return _verify_protection_state(
+        client,
+        trade=trade,
+        symbol=symbol,
+        normalized_stop=normalized_stop,
+        normalized_tp=normalized_tp,
+        tick_size=tick_size,
+        response=response,
+    )
+
+
+def _verify_protection_state(
+    client: Any,
+    *,
+    trade: dict[str, Any],
+    symbol: str,
+    normalized_stop: str,
+    normalized_tp: str,
+    tick_size: float,
+    response: dict[str, Any],
+) -> dict[str, Any]:
     ok_positions, positions, error = client.safe_fetch_positions()
     if not ok_positions:
         return {"ok": False, "error": error or "Protection verification position fetch failed", "response": response}
     expected_side = "buy" if str(trade.get("direction") or "").lower() == "long" else "sell"
-    current = next(
-        (
-            item
-            for item in positions
-            if str(item.get("symbol") or "").upper() == symbol
-            and str(item.get("side") or "").lower() == expected_side
-            and (_positive_float(item.get("size")) or 0.0) > 0
-        ),
-        None,
-    )
+    current = _find_open_position(positions, symbol, expected_side)
     if current is None:
         return {"ok": False, "error": "Position unavailable during protection verification", "response": response}
     actual_sl = _positive_float(current.get("stopLoss"))
@@ -411,6 +431,24 @@ def _set_and_verify_protection(
             "response": response,
         }
     return {"ok": True, "stop_loss": float(normalized_stop), "take_profit": float(normalized_tp), "response": response}
+
+
+def _find_open_position(positions: list[dict[str, Any]], symbol: str, expected_side: str) -> dict[str, Any] | None:
+    return next(
+        (
+            item
+            for item in positions
+            if str(item.get("symbol") or "").upper() == symbol
+            and str(item.get("side") or "").lower() == expected_side
+            and (_positive_float(item.get("size")) or 0.0) > 0
+        ),
+        None,
+    )
+
+
+def _is_not_modified_error(message: str) -> bool:
+    lowered = message.lower()
+    return "not modified" in lowered or "same tp/sl" in lowered or "same trading stop" in lowered
 
 
 def _persist_management_state(trade: dict[str, Any], management: dict[str, Any], remaining_quantity: float) -> None:

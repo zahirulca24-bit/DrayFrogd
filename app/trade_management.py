@@ -529,6 +529,10 @@ def _set_protection(
         return result if isinstance(result, dict) else {"ok": True}
     except ExchangeError as exc:
         error_msg = str(exc)
+        if _is_not_modified_error(error_msg):
+            existing = _verify_existing_protection(client, trade, stop_loss, take_profit)
+            if existing.get("ok"):
+                return {"ok": True, "noop": True, "message": error_msg, **existing}
         log_bot_event(
             "TRADE_MANAGEMENT_PROTECTION_FAILED",
             f"Protection update failed for {symbol}",
@@ -541,6 +545,42 @@ def _set_protection(
             },
         )
         return {"error": error_msg}
+
+
+def _verify_existing_protection(
+    client: BybitClient,
+    trade: dict[str, Any],
+    stop_loss: float,
+    take_profit: float,
+) -> dict[str, Any]:
+    ok_positions, positions, error = client.safe_fetch_positions()
+    if not ok_positions:
+        return {"ok": False, "error": error or "Protection verification position fetch failed"}
+    symbol = str(trade.get("symbol", "")).upper()
+    expected_side = "buy" if str(trade.get("direction", "")).lower() == "long" else "sell"
+    current = next(
+        (
+            item
+            for item in positions
+            if str(item.get("symbol", "")).upper() == symbol
+            and str(item.get("side", "")).lower() == expected_side
+            and _position_is_open(item)
+        ),
+        None,
+    )
+    if current is None:
+        return {"ok": False, "error": "Position unavailable during protection verification"}
+    actual_sl = _to_float(current.get("stopLoss"), None)
+    actual_tp = _to_float(current.get("takeProfit"), None)
+    tolerance = max(abs(stop_loss) * 1e-8, abs(take_profit) * 1e-8, 1e-12)
+    if actual_sl is None or actual_tp is None or abs(actual_sl - stop_loss) > tolerance or abs(actual_tp - take_profit) > tolerance:
+        return {"ok": False, "error": f"Protection mismatch: SL={actual_sl}, TP={actual_tp}"}
+    return {"ok": True, "stop_loss": actual_sl, "take_profit": actual_tp}
+
+
+def _is_not_modified_error(message: str) -> bool:
+    lowered = message.lower()
+    return "not modified" in lowered or "same tp/sl" in lowered or "same trading stop" in lowered
 
 
 def _persist_trade_management(trade: dict[str, Any], updates: dict[str, Any]) -> None:
