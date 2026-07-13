@@ -330,6 +330,50 @@ export interface AccountResponse {
   };
 }
 
+export interface LedgerAuditRecord {
+  event_time: string | null;
+  symbol: string;
+  type: string;
+  direction: string;
+  quantity: number | null;
+  filled_price: number | null;
+  fee: number | null;
+  funding: number | null;
+  cash_flow: number | null;
+  change: number | null;
+  wallet_balance: number | null;
+  transaction_id: string;
+}
+
+export interface LedgerAuditResponse {
+  ok: boolean;
+  date: string;
+  start_time?: string;
+  end_time?: string;
+  error: string | null;
+  summary: {
+    record_count: number;
+    trade_count: number;
+    net_change: number;
+    trade_change: number;
+    cash_flow: number;
+    fees: number;
+    funding: number;
+    first_wallet_balance: number | null;
+    last_wallet_balance: number | null;
+    wallet_balance_delta: number | null;
+  };
+  by_symbol: Array<{
+    symbol: string;
+    record_count: number;
+    net_change: number;
+    cash_flow: number;
+    fees: number;
+    latest_event_time: string | null;
+  }>;
+  records: LedgerAuditRecord[];
+}
+
 export interface MarketCandle {
   timestamp: string;
   open: number;

@@ -8,6 +8,7 @@ import {
   ExecutableSignal,
   HealthResponse,
   JournalTradeEntry,
+  LedgerAuditResponse,
   MarketCandlesResponse,
   MarketOverviewResponse,
   MetricsResponse,
@@ -357,6 +358,8 @@ export const api = {
     return response.trades.map((item, index) => toTradeHistoryEntry(toUiTrade(item, index)));
   },
   getJournalTrades: (token: string) => request<{ trades: JournalTradeEntry[] }>("/journal/trades", {}, token),
+  getLedgerAudit: (token: string, date?: string) =>
+    request<LedgerAuditResponse>(`/account/ledger-audit${date ? `?date=${encodeURIComponent(date)}` : ""}`, {}, token),
   getBotEvents: (token: string, limit = 100) => request<{ events: BotEventEntry[] }>(`/bot/events?limit=${limit}`, {}, token),
   getWatchdogStatus: (token: string) => request<WatchdogSnapshot>("/watchdog/status", {}, token),
   getBotStatus: (token: string) => request<BotControlState>("/bot/status", {}, token),

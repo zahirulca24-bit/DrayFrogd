@@ -27,6 +27,7 @@ from app.dependencies import require_authenticated
 from app.execution import execute_signal, get_active_trades, get_closed_trades, replace_active_trades
 from app.exchange import get_exchange_client
 from app.journal import create_trade_entry, get_bot_events, get_closed_trade_history, get_open_trade_history, get_trade_history, log_bot_event
+from app.ledger_audit import get_account_ledger_audit
 from app.metrics import get_metrics, get_portfolio_summary
 from app.middleware import AuthMiddleware
 from app.models import UserSession
@@ -143,6 +144,12 @@ def account(_: dict = Depends(require_authenticated)) -> dict:
         "wallet": {"ok": wallet_ok, "data": wallet_data, "error": wallet_error},
         "positions": {"ok": positions_ok, "data": positions_data, "error": positions_error},
     }
+
+
+@app.get("/account/ledger-audit")
+def account_ledger_audit(date: str | None = None, _: dict = Depends(require_authenticated)) -> dict:
+    client = get_exchange_client(get_execution_mode())
+    return get_account_ledger_audit(client, bdt_date=date)
 
 
 @app.get("/symbols")

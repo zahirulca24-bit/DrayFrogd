@@ -16,11 +16,12 @@ import {
   ShieldAlert,
   ShieldCheck,
   TimerReset,
+  TrendingDown,
   WalletCards,
   XCircle,
 } from "lucide-react";
 import { api } from "../api";
-import { JournalTradeEntry, TradeHistoryEntry } from "../types";
+import { JournalTradeEntry, LedgerAuditResponse, TradeHistoryEntry } from "../types";
 
 interface TradeHistoryProps {
   authToken: string | null;
@@ -465,6 +466,7 @@ function fallbackToRow(trade: TradeHistoryEntry, index: number): JournalRow {
 
 export default function TradeHistory({ authToken, history }: TradeHistoryProps) {
   const [journalTrades, setJournalTrades] = useState<JournalTradeEntry[]>([]);
+  const [ledgerAudit, setLedgerAudit] = useState<LedgerAuditResponse | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -475,8 +477,12 @@ export default function TradeHistory({ authToken, history }: TradeHistoryProps) 
     if (!authToken) return;
     setLoading(true);
     try {
-      const response = await api.getJournalTrades(authToken);
+      const [response, ledger] = await Promise.all([
+        api.getJournalTrades(authToken),
+        api.getLedgerAudit(authToken),
+      ]);
       setJournalTrades(response.trades || []);
+      setLedgerAudit(ledger);
       setError(null);
     } catch (err: any) {
       setError(err?.message || "Failed to load journal trades");
@@ -491,9 +497,13 @@ export default function TradeHistory({ authToken, history }: TradeHistoryProps) 
 
     const refresh = async () => {
       try {
-        const response = await api.getJournalTrades(authToken);
+        const [response, ledger] = await Promise.all([
+          api.getJournalTrades(authToken),
+          api.getLedgerAudit(authToken),
+        ]);
         if (!cancelled) {
           setJournalTrades(response.trades || []);
+          setLedgerAudit(ledger);
           setError(null);
         }
       } catch (err: any) {
@@ -708,6 +718,8 @@ export default function TradeHistory({ authToken, history }: TradeHistoryProps) 
         )}
       </section>
 
+      <LedgerAuditPanel audit={ledgerAudit} />
+
       <section className="grid grid-cols-2 gap-3 md:grid-cols-5">
         <SummaryCard label="Total Trades" value={summary.total} icon={<Database className="h-4 w-4" />} tone="neutral" />
         <SummaryCard label="Open Trades" value={summary.open} icon={<Activity className="h-4 w-4" />} tone="good" />
@@ -794,6 +806,81 @@ export default function TradeHistory({ authToken, history }: TradeHistoryProps) 
       </section>
     </div>
   );
+}
+
+function LedgerAuditPanel({ audit }: { audit: LedgerAuditResponse | null }) {
+  const summary = audit?.summary;
+  const netChange = summary?.net_change ?? null;
+  const rows = audit?.records || [];
+  const symbolRows = audit?.by_symbol?.slice(0, 6) || [];
+
+  return (
+    <section className="rounded-2xl border border-slate-800 bg-bento-card p-4 shadow-md">
+      <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+        <div>
+          <div className="flex items-center gap-2">
+            <span className="rounded-lg border border-rose-500/20 bg-rose-500/10 p-2 text-rose-300">
+              <TrendingDown className="h-4 w-4" />
+            </span>
+            <div>
+              <h2 className="text-sm font-semibold text-white">Bybit Ledger Audit</h2>
+              <p className="mt-1 text-xs text-slate-500">Exchange transaction-log evidence. Journal empty holeo wallet balance-change ekhane dhora porbe.</p>
+            </div>
+          </div>
+          {audit?.error && <p className="mt-3 text-xs text-rose-300">{audit.error}</p>}
+        </div>
+
+        <div className="grid grid-cols-2 gap-2 md:grid-cols-4 xl:min-w-[620px]">
+          <LedgerMetric label="Net Change" value={formatMoney(netChange)} tone={netChange === null ? "neutral" : netChange >= 0 ? "good" : "bad"} />
+          <LedgerMetric label="Trade Change" value={formatMoney(summary?.trade_change ?? null)} />
+          <LedgerMetric label="Fees Paid" value={formatMoney(summary?.fees ?? null)} tone="bad" />
+          <LedgerMetric label="Records" value={String(summary?.record_count ?? 0)} />
+        </div>
+      </div>
+
+      <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-[0.9fr_1.1fr]">
+        <div className="rounded-xl border border-slate-800 bg-[#0A0B0E] p-3">
+          <div className="mb-2 text-[10px] font-mono uppercase tracking-wider text-slate-500">Symbol Breakdown</div>
+          <div className="space-y-2">
+            {symbolRows.map((row) => (
+              <div key={row.symbol} className="flex items-center justify-between gap-3 rounded-lg border border-slate-800/80 bg-slate-950/60 px-3 py-2 text-xs">
+                <span className="font-semibold text-white">{row.symbol}</span>
+                <span className="text-slate-500">{row.record_count} rows</span>
+                <span className={row.net_change >= 0 ? "font-mono text-emerald-400" : "font-mono text-rose-400"}>{formatMoney(row.net_change)}</span>
+              </div>
+            ))}
+            {!symbolRows.length && <div className="py-4 text-center text-xs text-slate-500">No Bybit ledger rows for selected BDT day.</div>}
+          </div>
+        </div>
+
+        <div className="overflow-x-auto rounded-xl border border-slate-800 bg-[#0A0B0E]">
+          <table className="w-full min-w-[760px] whitespace-nowrap text-xs">
+            <thead className="border-b border-slate-800 text-[10px] font-mono uppercase tracking-wider text-slate-500">
+              <tr><th className="p-3 text-left">Time</th><th className="p-3 text-left">Symbol</th><th className="p-3 text-left">Direction</th><th className="p-3 text-right">Fee</th><th className="p-3 text-right">Cash Flow</th><th className="p-3 text-right">Change</th></tr>
+            </thead>
+            <tbody className="divide-y divide-slate-800/50">
+              {rows.slice(0, 8).map((row, index) => (
+                <tr key={row.transaction_id || `${row.event_time}-${index}`}>
+                  <td className="p-3 font-mono text-slate-400">{bdtDateTime(row.event_time)}</td>
+                  <td className="p-3 font-semibold text-white">{row.symbol || "ACCOUNT"}</td>
+                  <td className="p-3 text-slate-400">{row.direction || row.type || "N/A"}</td>
+                  <td className="p-3 text-right font-mono text-rose-300">{formatMoney(row.fee)}</td>
+                  <td className={`p-3 text-right font-mono ${(row.cash_flow || 0) >= 0 ? "text-emerald-400" : "text-rose-400"}`}>{formatMoney(row.cash_flow)}</td>
+                  <td className={`p-3 text-right font-mono font-semibold ${(row.change || 0) >= 0 ? "text-emerald-400" : "text-rose-400"}`}>{formatMoney(row.change)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {!rows.length && <div className="py-8 text-center text-xs text-slate-500">No exchange ledger rows returned.</div>}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function LedgerMetric({ label, value, tone = "neutral" }: { label: string; value: string; tone?: "neutral" | "good" | "bad" }) {
+  const valueClass = tone === "good" ? "text-emerald-400" : tone === "bad" ? "text-rose-400" : "text-white";
+  return <div className="rounded-xl border border-slate-800 bg-[#0A0B0E] p-3"><div className="text-[10px] font-mono uppercase tracking-wider text-slate-500">{label}</div><div className={`mt-2 font-mono text-lg font-semibold ${valueClass}`}>{value}</div></div>;
 }
 
 function ActionButton({ label, icon, onClick, disabled = false }: { label: string; icon: ReactNode; onClick: () => void; disabled?: boolean }) {
