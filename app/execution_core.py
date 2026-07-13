@@ -17,6 +17,7 @@ from app.journal import (
 )
 from app.position_sizing import calculate_position_size
 from app.risk import register_active_trade, start_loss_cooldown, validate_trade
+from app.trade_management_profiles import build_profile_management_state
 
 
 SL_REASON_UNKNOWN = "unknown"
@@ -84,6 +85,7 @@ def execute_signal(client: BybitClient, signal: dict[str, Any], auto_triggered: 
         take_profit=normalized_signal["take_profit"],
         quantity=quantity,
         direction=normalized_signal["direction"],
+        trade_type=validation.get("trade_type"),
     )
     protected_take_profit = client.normalize_price(management["runner_target"], symbol_info["tickSize"])
     execution_key = _build_execution_key(normalized_signal, execution_mode)
@@ -684,34 +686,25 @@ def _add_active_trade_once(trade: dict[str, Any]) -> None:
             _active_order_ids.append(order_id)
 
 
-def _build_management_state(entry: float, stop_loss: float, take_profit: float, quantity: str, direction: str) -> dict[str, Any]:
-    risk = abs(entry - stop_loss)
+def _build_management_state(
+    entry: float,
+    stop_loss: float,
+    take_profit: float,
+    quantity: str,
+    direction: str,
+    trade_type: Any = None,
+) -> dict[str, Any]:
     qty_value = _to_float(quantity, 0.0)
-
-    if direction == "long":
-        tp1 = entry + risk * 2.0
-        tp2 = entry + risk * 2.5
-        runner_target = entry + risk * 3.0
-    else:
-        tp1 = entry - risk * 2.0
-        tp2 = entry - risk * 2.5
-        runner_target = entry - risk * 3.0
-
+    management = build_profile_management_state(
+        entry=float(entry),
+        stop_loss=float(stop_loss),
+        take_profit=float(take_profit),
+        quantity=qty_value,
+        direction=str(direction),
+        trade_type=str(trade_type or "scalping"),
+    )
     return {
-        "tp1": tp1,
-        "tp2": tp2,
-        "strategy_take_profit": take_profit,
-        "runner_target": runner_target,
-        "tp1_fraction": 0.5,
-        "tp2_fraction": 0.25,
-        "runner_fraction": 0.25,
-        "initial_quantity": qty_value,
-        "remaining_quantity": qty_value,
-        "tp1_done": False,
-        "tp2_done": False,
-        "break_even_set": False,
-        "trailing_stop": None,
-        "last_momentum_check": None,
+        **management,
         "last_state_change": _utc_now_iso(),
     }
 

@@ -55,18 +55,18 @@ def validate_execution_logic() -> tuple[bool, list[str]]:
 
         risk = 5.0  # 100 - 95
 
-        # Verify TP1 = RR 1:2
-        expected_tp1 = 100.0 + risk * 1.0  # 105
+        # Verify scalping_v2 TP1 = 1.5R
+        expected_tp1 = 100.0 + risk * 1.5  # 107.5
         if abs(mgmt_long["tp1"] - expected_tp1) > 0.0001:
             errors.append(f"Long TP1 mismatch: got {mgmt_long['tp1']}, expected {expected_tp1}")
 
-        # Verify TP2 = RR 1:2.5
-        expected_tp2 = 100.0 + risk * 1.5  # 107.5
+        # Verify scalping_v2 TP2 = 2.0R
+        expected_tp2 = 100.0 + risk * 2.0  # 110
         if abs(mgmt_long["tp2"] - expected_tp2) > 0.0001:
             errors.append(f"Long TP2 mismatch: got {mgmt_long['tp2']}, expected {expected_tp2}")
 
-        # Verify Runner = RR 1:3
-        expected_runner = 100.0 + risk * 2.0  # 110
+        # Verify scalping_v2 runner = 2.5R
+        expected_runner = 100.0 + risk * 2.5  # 112.5
         if abs(mgmt_long["runner_target"] - expected_runner) > 0.0001:
             errors.append(f"Long Runner mismatch: got {mgmt_long['runner_target']}, expected {expected_runner}")
 
@@ -88,13 +88,13 @@ def validate_execution_logic() -> tuple[bool, list[str]]:
 
         risk_short = 5.0  # 105 - 100
 
-        # Verify short TP1 = RR 1:2
-        expected_tp1_short = 100.0 - risk_short * 1.0  # 95
+        # Verify scalping_v2 short TP1 = 1.5R
+        expected_tp1_short = 100.0 - risk_short * 1.5  # 92.5
         if abs(mgmt_short["tp1"] - expected_tp1_short) > 0.0001:
             errors.append(f"Short TP1 mismatch: got {mgmt_short['tp1']}, expected {expected_tp1_short}")
 
-        # Verify short TP2 = RR 1:2.5
-        expected_tp2_short = 100.0 - risk_short * 1.5  # 92.5
+        # Verify scalping_v2 short TP2 = 2.0R
+        expected_tp2_short = 100.0 - risk_short * 2.0  # 90
         if abs(mgmt_short["tp2"] - expected_tp2_short) > 0.0001:
             errors.append(f"Short TP2 mismatch: got {mgmt_short['tp2']}, expected {expected_tp2_short}")
 

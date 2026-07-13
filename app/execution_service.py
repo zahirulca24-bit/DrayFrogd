@@ -9,7 +9,6 @@ from app.bot_controls import can_execute, get_execution_mode
 from app.execution_core import (
     _add_active_trade_once,
     _build_execution_key,
-    _build_management_state,
     _build_order_link_id,
     _emergency_close,
     _place_market_order,
@@ -32,6 +31,7 @@ from app.risk import (
     release_active_trade,
     validate_trade,
 )
+from app.trade_management_profiles import build_profile_management_state, extract_observed_entry_fee
 
 
 FILL_CONFIRM_ATTEMPTS = 5
@@ -305,13 +305,21 @@ def execute_signal(client: BybitClient, signal: dict[str, Any], auto_triggered: 
         validation=validation,
     )
 
-    management = _build_management_state(
+    provisional_trade_for_fee = {
+        "exchange_metadata": {
+            "fill_confirmation": fill,
+        },
+    }
+    management = build_profile_management_state(
         entry=actual_entry,
         stop_loss=float(stop_loss),
         take_profit=float(execution_signal["take_profit"]),
-        quantity=str(actual_quantity),
+        quantity=actual_quantity,
         direction=execution_signal["direction"],
+        trade_type=str(validation.get("trade_type") or "scalping"),
+        observed_entry_fee=extract_observed_entry_fee(provisional_trade_for_fee),
     )
+    management["last_state_change"] = _utc_now_iso()
     protected_take_profit = client.normalize_price(management["runner_target"], symbol_info["tickSize"])
     opened_at = fill.get("filled_at") or _utc_now_iso()
     trade = {
