@@ -154,6 +154,8 @@ export default function ControlPanel({
     healthStatus === "ONLINE" &&
     criticalModules.length > 0 &&
     criticalModules.every((module) => HEALTHY_MODULE_STATUSES.has(module.status));
+  const localJournal = readiness.persistence?.local_journal_storage;
+  const externalAudit = readiness.persistence?.external_audit_sink;
 
   const saveRiskSettings = async () => {
     const parsed = {
@@ -241,6 +243,23 @@ export default function ControlPanel({
           helper={lastIncident ? `${lastIncident.affected_module} · ${lastIncident.error_code}` : "No incident evidence recorded"}
           icon={<Clock3 className="h-4 w-4" />}
           tone={lastIncident ? "warn" : "good"}
+        />
+      </section>
+
+      <section className="grid grid-cols-1 gap-3 xl:grid-cols-2">
+        <SummaryCard
+          label="Journal Storage"
+          value={localJournal?.configured ? localJournal.backend.toUpperCase() : "UNAVAILABLE"}
+          helper={localJournal ? `Primary save target: ${localJournal.target}` : "Persistence status is unavailable"}
+          icon={<Database className="h-4 w-4" />}
+          tone={localJournal?.configured ? "good" : "bad"}
+        />
+        <SummaryCard
+          label="External Audit"
+          value={externalAudit?.configured ? "SUPABASE READY" : "DISABLED"}
+          helper={externalAudit?.configured ? `Mirror target: ${externalAudit.target}` : "Supabase env vars are not configured; journal saves only to the app database."}
+          icon={<Server className="h-4 w-4" />}
+          tone={externalAudit?.configured ? "good" : "warn"}
         />
       </section>
 
