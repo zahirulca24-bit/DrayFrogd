@@ -69,6 +69,15 @@ function formatMoney(value: number) {
   })}`;
 }
 
+function formatPriceMoney(value: number) {
+  const absolute = Math.abs(value);
+  const maximumFractionDigits = absolute > 0 && absolute < 0.01 ? 8 : absolute < 1 ? 6 : 2;
+  return `$${value.toLocaleString(undefined, {
+    minimumFractionDigits: absolute > 0 && absolute < 1 ? Math.min(maximumFractionDigits, 4) : 2,
+    maximumFractionDigits,
+  })}`;
+}
+
 function formatCompact(value: number) {
   return new Intl.NumberFormat("en-US", {
     notation: "compact",
@@ -506,10 +515,10 @@ function TradeCard({ trade }: { trade: Trade }) {
         </span>
       </div>
       <div className="mt-4 grid grid-cols-2 gap-3 text-xs">
-        <Metric label="Entry" value={formatMoney(numberValue(trade.entryPrice))} />
-        <Metric label="Mark" value={formatMoney(numberValue(trade.currentPrice))} />
-        <Metric label="Stop" value={formatMoney(numberValue(trade.stopLoss))} tone="bad" />
-        <Metric label="Target" value={formatMoney(numberValue(trade.takeProfit))} tone="good" />
+        <Metric label="Entry" value={formatPriceMoney(numberValue(trade.entryPrice))} />
+        <Metric label="Mark" value={formatPriceMoney(numberValue(trade.currentPrice))} />
+        <Metric label="Stop" value={formatPriceMoney(numberValue(trade.stopLoss))} tone="bad" />
+        <Metric label="Target" value={formatPriceMoney(numberValue(trade.takeProfit))} tone="good" />
       </div>
       <div className="mt-4 flex items-center justify-between border-t border-slate-800 pt-3">
         <span className="text-[10px] font-mono text-slate-500">UNREALIZED PNL</span>

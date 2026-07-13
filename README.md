@@ -14,6 +14,11 @@ The project is in **Demo Beta / Engineering Verification**. Live-capital trading
 > **Runtime tracker:** Issue #37  
 > **Live trading:** blocked by default
 
+> **Current audit update:** 13 July 2026, 11:59 PM BDT (`Asia/Dhaka`)
+> **Latest observed `main` commit:** `e6099e8` - execution, journal and RR fixes merged
+> **Current engineering phase:** `JOURNAL-LEDGER-SYNC-002` code repair implemented; runtime verification pending
+> **New repair status:** Bybit transaction-log reconciliation, pending-close status, metrics and UI accounting fixes are implemented; fresh Bybit Demo/Render verification is **PENDING**
+
 ---
 
 # Part A — Locked Master Plan
@@ -380,6 +385,57 @@ The approved hotfix establishes these rules:
 ### Current verdict
 
 PR #41 is merged into `main`. `WS-RUNTIME-001` code and CI are **PASS**, but the corrected build has not yet been verified on Render or against live Bybit Demo WebSocket endpoints. No WebSocket runtime PASS is claimed yet. `STATE-SYNC-001` remains under deployed verification, and REST reconciliation remains the active accounting/state authority.
+
+### `JOURNAL-LEDGER-SYNC-002` repo audit after Bybit transaction-log screenshots
+
+The latest deployed screenshots showed that Bybit Demo transaction history already contains exact trade ledger evidence: direction, quantity, filled price, fee paid, cash flow, change and wallet balance. The application still displayed incomplete Journal rows, zero Performance PnL, incomplete SL-hit analysis and low-price Dashboard cards rounded to `$0.00`.
+
+This audit was performed against repository `main` at commit `e6099e8`. The first code repair is now implemented in the working tree, but no fresh Bybit Demo/Render runtime PASS is claimed yet.
+
+#### Confirmed repo root causes
+
+| Area | Repository evidence | Runtime symptom |
+|---|---|---|
+| Missing Bybit ledger ingestion | `app/exchange.py` has wallet, positions and orders fetchers, but no `/v5/account/transaction-log` fetcher | Bybit Transaction Log has exact rows, but Journal/Performance cannot consume them |
+| Close sync depends on closed-PnL only | `app/close_fill_sync.py` uses `/v5/position/closed-pnl` and rejects partial/over-quantity aggregates | Closed rows can remain without exact exit, fee or realized PnL |
+| Pending close is persisted as closed | `app/reconciliation_persistence.py::_persist_pending_close_sync` writes `status="closed"` even when exact close data is unavailable | Journal shows `CLOSED` with `N/A` financial values and many rows need attention |
+| Win/loss classification mismatch | `app/metrics.py` counts only `result == tp/sl`, while close sync writes `profit/loss/flat/reconciliation_stale` | Win rate, PnL-R and SL-hit metrics can stay wrong or insufficient |
+| Performance fabricates zero PnL for unknown closes | `frontend/src/components/PerformanceStrategy.tsx` maps closed rows with null `realized_pnl` to `pnl: 0` | Performance cards and tables show `$0.00` even when the financial outcome is unknown |
+| Tiny-price formatting is too coarse | `frontend/src/components/DashboardView.tsx` formats all money with exactly 2 decimals | Valid low-price instruments like `TUSDT` display as `$0.00` |
+| Protection no-op logged as error | `app/trade_management.py` logs all `set_trading_stop` exchange exceptions as `PROTECTION_UPDATE_FAILED` | Incident Center can show noisy `not modified` protection errors |
+
+#### Required repair plan
+
+1. Add a Bybit transaction-log client method and safe wrapper for `/v5/account/transaction-log`.
+2. Add ledger reconciliation that pairs `Open Buy/Sell` and `Close Buy/Sell` rows by symbol, side, quantity, time window and wallet change.
+3. Persist exact close evidence from transaction-log rows: exit price, realized PnL/change, cash flow, fees, quantity, close timestamp and source metadata.
+4. Stop marking missing exact close evidence as fully `closed`; keep it in `close_pending_sync` or explicit `sync_incomplete` until terminal evidence exists.
+5. Normalize metrics results from exact `realized_pnl` first, then `profit/loss/tp/sl`, and keep unknown rows out of win/loss calculations.
+6. Update Performance so unknown financial outcomes remain `N/A`, not `$0.00`, while known realized PnL is counted.
+7. Add a shared price formatter so sub-dollar prices keep enough decimals on Dashboard, Active Trades, Journal and Performance.
+8. Treat Bybit `not modified` protection responses as harmless no-op when current SL/TP already match the desired protection.
+
+#### Expected result after implementation
+
+| Surface | Expected behavior |
+|---|---|
+| Journal | Closed trades show exact exit, fee, realized PnL and close source when Bybit ledger evidence exists |
+| Performance | Net PnL, strategy PnL, symbol PnL, win rate and SL-hit analysis use known financial outcomes only |
+| Dashboard | Low-price instruments no longer collapse to `$0.00`; active cards match Active Trades |
+| Active Trades | Realized/unrealized values remain exchange-authoritative and align with Dashboard totals |
+| Incident Center | Harmless protection no-ops stop appearing as high-severity operational errors |
+| Audit trail | Unknown values remain visibly `N/A` or `SYNC PENDING`; the app does not invent zero PnL |
+
+#### Verification gate
+
+`JOURNAL-LEDGER-SYNC-002` must not be called fixed until a fresh Bybit Demo lifecycle proves:
+
+- a new open trade creates a Journal record;
+- partial and final close rows are repaired from Bybit transaction-log evidence;
+- fees, cash flow/change, exit price and realized PnL persist across refresh and restart;
+- Dashboard, Active Trades, Journal, Performance and Bybit agree for the same symbols;
+- unknown rows remain `N/A` or `SYNC PENDING`, never fake `$0.00`;
+- backend tests, frontend TypeScript and frontend production build pass.
 
 ### Next tasks
 

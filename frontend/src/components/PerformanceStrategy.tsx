@@ -23,6 +23,7 @@ type PerformanceRow = TradeHistoryEntry & {
   symbol: string;
   session: "Asia" | "Europe" | "US" | "Late";
   rrValue: number | null;
+  pnlKnown: boolean;
 };
 
 const BDT_DATE = new Intl.DateTimeFormat("en-CA", {
@@ -165,6 +166,7 @@ function journalToPerformanceRow(item: JournalTradeEntry, index: number): Perfor
   const rawResult = String(item.result || "").toLowerCase();
   const realizedPnl = nullableNumber(financial.realized_pnl);
   const outcome = classifyOutcome(realizedPnl, rawResult);
+  const pnlKnown = isClosed && realizedPnl !== null;
   const closedAt = item.closed_at || item.opened_at || item.detected_at || new Date().toISOString();
   const lossReason = deriveLossReason(item, outcome);
 
@@ -189,7 +191,7 @@ function journalToPerformanceRow(item: JournalTradeEntry, index: number): Perfor
     journalId: item.journal_id,
     executionMode: item.execution_mode || "demo",
     exitPrice: isClosed ? numberValue(financial.exit_price) : 0,
-    pnl: isClosed && realizedPnl !== null ? realizedPnl : 0,
+    pnl: pnlKnown ? realizedPnl : 0,
     result: outcome as TradeHistoryEntry["result"],
     reason: lossReason || financial.close_reason || item.sl_hit_reason || (isClosed ? "unknown" : "open"),
     closedAt,
@@ -197,6 +199,7 @@ function journalToPerformanceRow(item: JournalTradeEntry, index: number): Perfor
     symbol: item.symbol,
     session: getSession(closedAt),
     rrValue: calcRr(entryPrice, stopLoss, takeProfit),
+    pnlKnown,
   };
 }
 
@@ -252,33 +255,35 @@ export default function PerformanceStrategy({ authToken, history }: PerformanceS
       symbol: trade.pair,
       session: getSession(trade.closedAt),
       rrValue: calcRr(trade.entryPrice, trade.stopLoss, trade.takeProfit),
+      pnlKnown: trade.result === "PROFIT" || trade.result === "LOSS" || numberValue(trade.pnl) !== 0,
     }));
   }, [history, journalTrades]);
 
   const closedRows = rows.filter((row) => String(row.tradeStatus || row.status).toLowerCase() === "closed" || row.status === "CLOSED");
   const knownClosedRows = closedRows.filter((row) => row.result === "PROFIT" || row.result === "LOSS");
+  const knownPnlClosedRows = closedRows.filter((row) => row.pnlKnown);
   const openRows = rows.filter((row) => !closedRows.includes(row));
 
   const totalTrades = rows.length;
   const winTrades = knownClosedRows.filter((row) => row.result === "PROFIT").length;
   const lossTrades = knownClosedRows.filter((row) => row.result === "LOSS").length;
   const winRate = knownClosedRows.length > 0 ? winTrades / knownClosedRows.length : null;
-  const netPnl = closedRows.length > 0 ? closedRows.reduce((sum, row) => sum + numberValue(row.pnl), 0) : null;
+  const netPnl = knownPnlClosedRows.length > 0 ? knownPnlClosedRows.reduce((sum, row) => sum + numberValue(row.pnl), 0) : null;
   const profitFactor = knownClosedRows.length > 0 ? computeProfitFactor(knownClosedRows) : null;
   const rrValues = rows.map((row) => row.rrValue).filter((value): value is number => value !== null);
   const avgRr = rrValues.length > 0 ? rrValues.reduce((sum, value) => sum + value, 0) / rrValues.length : null;
   const avgWin = winTrades > 0 ? knownClosedRows.filter((row) => row.result === "PROFIT").reduce((sum, row) => sum + numberValue(row.pnl), 0) / winTrades : null;
   const avgLoss = lossTrades > 0 ? knownClosedRows.filter((row) => row.result === "LOSS").reduce((sum, row) => sum + numberValue(row.pnl), 0) / lossTrades : null;
-  const maxDrawdown = closedRows.length > 0 ? computeMaxDrawdown(closedRows) : null;
+  const maxDrawdown = knownPnlClosedRows.length > 0 ? computeMaxDrawdown(knownPnlClosedRows) : null;
 
-  const equityCurve = closedRows.reduce<Array<{ x: string; y: number }>>((acc, row) => {
+  const equityCurve = knownPnlClosedRows.reduce<Array<{ x: string; y: number }>>((acc, row) => {
     const previous = acc[acc.length - 1]?.y || 0;
     acc.push({ x: toBdtDate(row.closedAt), y: previous + numberValue(row.pnl) });
     return acc;
   }, []);
 
   const dailyPnl = Array.from(
-    closedRows.reduce((map, row) => {
+    knownPnlClosedRows.reduce((map, row) => {
       const key = toBdtDate(row.closedAt);
       map.set(key, (map.get(key) || 0) + numberValue(row.pnl));
       return map;
@@ -287,34 +292,43 @@ export default function PerformanceStrategy({ authToken, history }: PerformanceS
 
   const strategyBreakdown = Array.from(
     rows.reduce((map, row) => {
-      const current = map.get(row.strategy) || { trades: 0, pnl: 0, wins: 0 };
+      const current = map.get(row.strategy) || { trades: 0, pnl: 0, wins: 0, knownPnl: 0 };
       current.trades += 1;
-      current.pnl += numberValue(row.pnl);
+      if (row.pnlKnown) {
+        current.pnl += numberValue(row.pnl);
+        current.knownPnl += 1;
+      }
       current.wins += row.result === "PROFIT" ? 1 : 0;
       map.set(row.strategy, current);
       return map;
-    }, new Map<string, { trades: number; pnl: number; wins: number }>()),
+    }, new Map<string, { trades: number; pnl: number; wins: number; knownPnl: number }>()),
   );
 
   const symbolPerformance = Array.from(
     rows.reduce((map, row) => {
-      const current = map.get(row.symbol) || { trades: 0, pnl: 0 };
+      const current = map.get(row.symbol) || { trades: 0, pnl: 0, knownPnl: 0 };
       current.trades += 1;
-      current.pnl += numberValue(row.pnl);
+      if (row.pnlKnown) {
+        current.pnl += numberValue(row.pnl);
+        current.knownPnl += 1;
+      }
       map.set(row.symbol, current);
       return map;
-    }, new Map<string, { trades: number; pnl: number }>()),
+    }, new Map<string, { trades: number; pnl: number; knownPnl: number }>()),
   ).sort((a, b) => b[1].pnl - a[1].pnl);
 
   const sessionPerformance = Array.from(
     rows.reduce((map, row) => {
-      const current = map.get(row.session) || { trades: 0, pnl: 0, wins: 0 };
+      const current = map.get(row.session) || { trades: 0, pnl: 0, wins: 0, knownPnl: 0 };
       current.trades += 1;
-      current.pnl += numberValue(row.pnl);
+      if (row.pnlKnown) {
+        current.pnl += numberValue(row.pnl);
+        current.knownPnl += 1;
+      }
       current.wins += row.result === "PROFIT" ? 1 : 0;
       map.set(row.session, current);
       return map;
-    }, new Map<string, { trades: number; pnl: number; wins: number }>()),
+    }, new Map<string, { trades: number; pnl: number; wins: number; knownPnl: number }>()),
   );
 
   const slAnalysis = Array.from(
@@ -400,7 +414,7 @@ export default function PerformanceStrategy({ authToken, history }: PerformanceS
                     <td className="py-3 px-3 text-white">{name}</td>
                     <td className="py-3 px-3 text-right">{stats.trades}</td>
                     <td className="py-3 px-3 text-right">{stats.trades > 0 ? formatPercent(stats.wins / stats.trades) : "N/A"}</td>
-                    <td className={`py-3 px-3 text-right ${stats.pnl >= 0 ? "text-emerald-400" : "text-rose-400"}`}>{formatMoney(stats.pnl)}</td>
+                    <td className={`py-3 px-3 text-right ${stats.knownPnl === 0 ? "text-slate-500" : stats.pnl >= 0 ? "text-emerald-400" : "text-rose-400"}`}>{stats.knownPnl > 0 ? formatMoney(stats.pnl) : "N/A"}</td>
                   </tr>
                 ))}
               </tbody>
@@ -418,7 +432,7 @@ export default function PerformanceStrategy({ authToken, history }: PerformanceS
                     <div key={symbol} className="flex items-center justify-between rounded-xl border border-slate-800 bg-[#0A0B0E] p-3 text-xs">
                       <span className="text-white">{symbol}</span>
                       <span className="text-slate-400">{stats.trades} trades</span>
-                      <span className={stats.pnl >= 0 ? "text-emerald-400" : "text-rose-400"}>{formatMoney(stats.pnl)}</span>
+                      <span className={stats.knownPnl === 0 ? "text-slate-500" : stats.pnl >= 0 ? "text-emerald-400" : "text-rose-400"}>{stats.knownPnl > 0 ? formatMoney(stats.pnl) : "N/A"}</span>
                     </div>
                   ))}
                 </div>
@@ -430,7 +444,7 @@ export default function PerformanceStrategy({ authToken, history }: PerformanceS
                     <div key={session} className="flex items-center justify-between rounded-xl border border-slate-800 bg-[#0A0B0E] p-3 text-xs">
                       <span className="text-white">{session}</span>
                       <span className="text-slate-400">{stats.trades} trades</span>
-                      <span className={stats.pnl >= 0 ? "text-emerald-400" : "text-rose-400"}>{formatMoney(stats.pnl)}</span>
+                      <span className={stats.knownPnl === 0 ? "text-slate-500" : stats.pnl >= 0 ? "text-emerald-400" : "text-rose-400"}>{stats.knownPnl > 0 ? formatMoney(stats.pnl) : "N/A"}</span>
                     </div>
                   ))}
                 </div>

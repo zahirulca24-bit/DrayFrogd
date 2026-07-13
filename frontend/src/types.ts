@@ -47,7 +47,7 @@ export interface Trade {
 export interface TradeHistoryEntry extends Omit<Trade, 'result' | 'closedAt' | 'exitPrice'> {
   exitPrice: number;
   pnl: number;
-  result: 'PROFIT' | 'LOSS';
+  result: 'PROFIT' | 'LOSS' | 'FLAT' | 'UNKNOWN';
   reason: string;
   closedAt: string;
 }

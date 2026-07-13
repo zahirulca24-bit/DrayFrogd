@@ -11,7 +11,7 @@ def _mark_journal_stale(trade: dict[str, Any], error: str) -> dict[str, Any]:
     previous_reconciliation = metadata.get("reconciliation") if isinstance(metadata.get("reconciliation"), dict) else {}
     return {
         **trade,
-        "status": "closed",
+        "status": "close_pending_sync",
         "result": trade.get("result") or "reconciliation_stale",
         "close_reason": trade.get("close_reason") or "EXCHANGE_POSITION_ABSENT",
         "_reconciliation_event_required": previous_reconciliation.get("status") != "journal_stale",
@@ -101,7 +101,7 @@ def _persist_pending_close_sync(journal_id: str, trade: dict[str, Any]) -> None:
     update_trade_entry(
         journal_id,
         {
-            "status": "closed",
+            "status": "close_pending_sync",
             "result": trade.get("result") or "reconciliation_stale",
             "close_reason": trade.get("close_reason") or "EXCHANGE_POSITION_ABSENT",
             "exchange_metadata": trade.get("exchange_metadata"),

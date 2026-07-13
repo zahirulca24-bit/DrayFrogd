@@ -107,6 +107,27 @@ class BybitClient:
         except ExchangeError as exc:
             return False, [], str(exc)
 
+    def safe_fetch_transaction_log(
+        self,
+        category: str = "linear",
+        account_type: str = "UNIFIED",
+        currency: str = "USDT",
+        start_time: int | None = None,
+        end_time: int | None = None,
+        limit: int = 100,
+    ) -> tuple[bool, list[dict[str, Any]], str | None]:
+        try:
+            return True, self.fetch_transaction_log(
+                category=category,
+                account_type=account_type,
+                currency=currency,
+                start_time=start_time,
+                end_time=end_time,
+                limit=limit,
+            ), None
+        except ExchangeError as exc:
+            return False, [], str(exc)
+
     def safe_set_leverage(self, symbol: str, leverage: float, category: str = "linear") -> tuple[bool, dict[str, Any] | None, str | None]:
         try:
             return True, self.set_leverage(symbol=symbol, leverage=leverage, category=category), None
@@ -128,6 +149,38 @@ class BybitClient:
             {"category": category, "settleCoin": settle_coin, "openOnly": "0", "limit": "50"},
         )
         return payload.get("list", [])
+
+    def fetch_transaction_log(
+        self,
+        category: str = "linear",
+        account_type: str = "UNIFIED",
+        currency: str = "USDT",
+        start_time: int | None = None,
+        end_time: int | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        params: dict[str, str] = {
+            "accountType": account_type,
+            "category": category,
+            "currency": currency,
+            "limit": str(max(1, min(limit, 100))),
+        }
+        if start_time is not None:
+            params["startTime"] = str(start_time)
+        if end_time is not None:
+            params["endTime"] = str(end_time)
+
+        records: list[dict[str, Any]] = []
+        cursor: str | None = None
+        while True:
+            if cursor:
+                params["cursor"] = cursor
+            payload = self._private_get("/v5/account/transaction-log", params)
+            records.extend(payload.get("list", []) or [])
+            cursor = str(payload.get("nextPageCursor") or "").strip() or None
+            if not cursor:
+                break
+        return records
 
     def fetch_order_by_link_id(self, symbol: str, order_link_id: str, category: str = "linear") -> dict[str, Any] | None:
         payload = self._private_get(

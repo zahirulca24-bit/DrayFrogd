@@ -18,9 +18,11 @@ def get_metrics(now: datetime | None = None) -> dict[str, Any]:
     active_trades = list(snapshot.get("trades") or []) if int(snapshot.get("version") or 0) > 0 else get_active_trades()
     closed_trades = get_closed_trades() or get_closed_trade_history()
     total_trades = len(active_trades) + len(closed_trades)
-    win_trades = sum(1 for trade in closed_trades if str(trade.get("result", "")).lower() == "tp")
-    loss_trades = sum(1 for trade in closed_trades if str(trade.get("result", "")).lower() == "sl")
-    win_rate = (win_trades / total_trades) if total_trades else 0.0
+    outcomes = [_classify_outcome(trade) for trade in closed_trades]
+    win_trades = sum(1 for outcome in outcomes if outcome == "win")
+    loss_trades = sum(1 for outcome in outcomes if outcome == "loss")
+    known_closed_trades = win_trades + loss_trades
+    win_rate = (win_trades / known_closed_trades) if known_closed_trades else 0.0
     pnl_r = (win_trades * 2.0) - loss_trades
     current = now or datetime.now(UTC)
     journal_trades = get_trade_history(limit=1000)
@@ -32,6 +34,8 @@ def get_metrics(now: datetime | None = None) -> dict[str, Any]:
         "closed_trades_count": len(closed_trades),
         "win_trades": win_trades,
         "loss_trades": loss_trades,
+        "known_closed_trades": known_closed_trades,
+        "unknown_closed_trades": max(len(closed_trades) - known_closed_trades, 0),
         "win_rate": round(win_rate, 4),
         "pnl_r": round(pnl_r, 4),
         "today_realized_pnl": round(today_realized_pnl, 8),
@@ -80,6 +84,25 @@ def _today_financials(trades: list[dict[str, Any]], now: datetime) -> tuple[floa
         fees += abs(_number(trade.get("fees")) or 0.0)
 
     return realized, fees
+
+
+def _classify_outcome(trade: dict[str, Any]) -> str:
+    realized_pnl = _number(trade.get("realized_pnl"))
+    if realized_pnl is not None:
+        if realized_pnl > 0:
+            return "win"
+        if realized_pnl < 0:
+            return "loss"
+        return "flat"
+
+    result = str(trade.get("result") or "").lower().strip()
+    if result in {"tp", "profit", "win", "take_profit"}:
+        return "win"
+    if result in {"sl", "loss", "stop_loss"}:
+        return "loss"
+    if result in {"flat", "breakeven", "break_even"}:
+        return "flat"
+    return "unknown"
 
 
 def _parse_time(value: Any) -> datetime | None:

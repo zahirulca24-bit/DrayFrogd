@@ -2,7 +2,11 @@ import unittest
 from datetime import UTC, datetime
 from unittest.mock import patch
 
-from app.close_fill_sync import _safe_fetch_closed_pnl, aggregate_closed_pnl_records
+from app.close_fill_sync import (
+    _safe_fetch_closed_pnl,
+    aggregate_closed_pnl_records,
+    aggregate_transaction_log_records,
+)
 from app.reconciliation import reconcile_state
 
 
@@ -114,6 +118,56 @@ class ClosedPnlAggregationTests(unittest.TestCase):
         self.assertEqual([item["orderId"] for item in records], ["1", "2"])
         self.assertEqual(client.calls[0]["limit"], "100")
         self.assertEqual(client.calls[1]["cursor"], "next")
+
+    def test_transaction_log_records_repair_exact_net_close(self) -> None:
+        short_trade = {**trade_payload(), "direction": "short", "entry": 75.23, "quantity": 59.6}
+        records = [
+            {
+                "symbol": "BTCUSDT",
+                "type": "Trade",
+                "direction": "Open Sell",
+                "qty": "59.6",
+                "filledPrice": "75.23",
+                "fee": "2.4660",
+                "cashFlow": "0",
+                "change": "-2.4660",
+                "transactionTime": str(OPENED_MS + 1_000),
+            },
+            {
+                "symbol": "BTCUSDT",
+                "type": "Trade",
+                "direction": "Close Buy",
+                "qty": "29.8",
+                "filledPrice": "74.75",
+                "fee": "0.4455",
+                "cashFlow": "14.3040",
+                "change": "13.8585",
+                "transactionTime": str(OPENED_MS + 60_000),
+            },
+            {
+                "symbol": "BTCUSDT",
+                "type": "Trade",
+                "direction": "Close Buy",
+                "qty": "29.8",
+                "filledPrice": "74.59",
+                "fee": "0.2223",
+                "cashFlow": "9.5360",
+                "change": "9.3137",
+                "transactionTime": str(OPENED_MS + 120_000),
+            },
+        ]
+
+        result, error = aggregate_transaction_log_records(short_trade, records, opened_ms=OPENED_MS)
+
+        self.assertIsNone(error)
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertAlmostEqual(result["exit_price"], 74.67)
+        self.assertAlmostEqual(result["realized_pnl"], 20.7062)
+        self.assertAlmostEqual(result["fees"], 3.1338)
+        self.assertEqual(result["result"], "profit")
+        self.assertEqual(result["close_reason"], "exchange_transaction_log")
+        self.assertEqual(result["exchange_metadata"]["close_sync"]["source"], "bybit_account_transaction_log")
 
 
 class FakeReconciliationClient:

@@ -6,6 +6,7 @@ import logging
 from app.authoritative_reconciliation import reconcile_state
 from app.bot_controls import can_execute, get_execution_mode
 from app.bybit_websocket import websocket_service
+from app.close_fill_sync import repair_incomplete_journal_closes
 from app.config import settings
 from app.exchange import get_exchange_client
 from app.intraday_protection_guard import enforce_intraday_protection
@@ -103,6 +104,10 @@ async def auto_trading_loop() -> None:
                 partial_pnl_result = await asyncio.to_thread(sync_partial_realized_pnl, client)
                 if not partial_pnl_result.get("ok") and partial_pnl_result.get("errors"):
                     logger.debug("Partial realized PnL sync pending: %s", partial_pnl_result.get("errors"))
+
+                ledger_repair_result = await asyncio.to_thread(repair_incomplete_journal_closes, client)
+                if not ledger_repair_result.get("ok") and ledger_repair_result.get("pending"):
+                    logger.debug("Ledger close repair pending: %s", ledger_repair_result.get("pending"))
 
                 await asyncio.to_thread(sync_loss_cooldowns)
 

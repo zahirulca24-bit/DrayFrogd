@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from datetime import UTC, datetime
 from math import isfinite
 from typing import Any
@@ -26,9 +27,103 @@ def fetch_exact_close_result(
     end_ms = int(current.astimezone(UTC).timestamp() * 1000)
     ok, records, error = _safe_fetch_closed_pnl(client, symbol=symbol, start_ms=start_ms, end_ms=end_ms)
     if not ok:
-        return None, error or "Bybit closed PnL query failed"
+        ledger_result, ledger_error = fetch_transaction_log_close_result(
+            client,
+            trade,
+            start_ms=start_ms,
+            end_ms=end_ms,
+        )
+        if ledger_result is not None:
+            return ledger_result, None
+        return None, ledger_error or error or "Bybit closed PnL query failed"
 
-    return aggregate_closed_pnl_records(trade, records, opened_ms=start_ms)
+    exact_result, exact_error = aggregate_closed_pnl_records(trade, records, opened_ms=start_ms)
+    if exact_result is not None:
+        return exact_result, None
+
+    ledger_result, ledger_error = fetch_transaction_log_close_result(
+        client,
+        trade,
+        start_ms=start_ms,
+        end_ms=end_ms,
+    )
+    if ledger_result is not None:
+        return ledger_result, None
+    return None, ledger_error or exact_error
+
+
+def fetch_transaction_log_close_result(
+    client: Any,
+    trade: dict[str, Any],
+    *,
+    start_ms: int,
+    end_ms: int,
+) -> tuple[dict[str, Any] | None, str | None]:
+    ok, records, error = _safe_fetch_transaction_log(client, start_ms=start_ms, end_ms=end_ms)
+    if not ok:
+        return None, error or "Bybit transaction log query failed"
+    return aggregate_transaction_log_records(trade, records, opened_ms=start_ms)
+
+
+def repair_incomplete_journal_closes(client: Any, *, limit: int = 100) -> dict[str, Any]:
+    from app.journal import append_trade_event, get_trade_history, update_trade_entry
+
+    repaired: list[dict[str, Any]] = []
+    pending: list[dict[str, str]] = []
+    current = datetime.now(UTC)
+    end_ms = int(current.timestamp() * 1000)
+
+    for trade in get_trade_history(limit=limit):
+        status = str(trade.get("status") or "").lower()
+        if status not in {"closed", "close_pending_sync"}:
+            continue
+        if all(_number(trade.get(field)) is not None for field in ("exit_price", "realized_pnl", "fees")):
+            continue
+        start_ms = _timestamp_ms(trade.get("opened_at") or trade.get("detected_at"))
+        if start_ms is None:
+            pending.append({"symbol": str(trade.get("symbol") or "UNKNOWN"), "error": "opened_at is unavailable"})
+            continue
+
+        close_result, error = fetch_transaction_log_close_result(
+            client,
+            trade,
+            start_ms=start_ms,
+            end_ms=end_ms,
+        )
+        if close_result is None:
+            pending.append({"symbol": str(trade.get("symbol") or "UNKNOWN"), "error": error or "ledger close unavailable"})
+            continue
+
+        journal_id = str(trade.get("journal_id") or "")
+        updates = {
+            "status": "closed",
+            "result": close_result.get("result"),
+            "sl_hit_reason": close_result.get("sl_hit_reason"),
+            "close_reason": close_result.get("close_reason"),
+            "closed_at": close_result.get("closed_at"),
+            "exit_price": close_result.get("exit_price"),
+            "realized_pnl": close_result.get("realized_pnl"),
+            "fees": close_result.get("fees"),
+            "exchange_metadata": close_result.get("exchange_metadata"),
+        }
+        persisted = update_trade_entry(journal_id, updates) if journal_id else None
+        if persisted is None:
+            pending.append({"symbol": str(trade.get("symbol") or "UNKNOWN"), "error": "journal row not found"})
+            continue
+        append_trade_event(
+            journal_id,
+            "LEDGER_CLOSE_SYNC_REPAIRED",
+            "Exact Bybit transaction-log close evidence repaired an incomplete Journal row.",
+            {
+                "symbol": trade.get("symbol"),
+                "source": "bybit_account_transaction_log",
+                "realized_pnl": close_result.get("realized_pnl"),
+                "fees": close_result.get("fees"),
+            },
+        )
+        repaired.append({"symbol": str(trade.get("symbol") or ""), "journal_id": journal_id})
+
+    return {"ok": not pending, "repaired": repaired, "pending": pending}
 
 
 def aggregate_closed_pnl_records(
@@ -189,6 +284,174 @@ def _safe_fetch_closed_pnl(
     return True, records, None
 
 
+def _safe_fetch_transaction_log(
+    client: Any,
+    *,
+    start_ms: int,
+    end_ms: int,
+) -> tuple[bool, list[dict[str, Any]], str | None]:
+    public_method = getattr(client, "safe_fetch_transaction_log", None)
+    if callable(public_method):
+        try:
+            return public_method(start_time=start_ms, end_time=end_ms)
+        except TypeError:
+            return public_method("linear", "UNIFIED", "USDT", start_ms, end_ms)
+        except Exception as exc:
+            return False, [], str(exc)
+
+    private_get = getattr(client, "_private_get", None)
+    if not callable(private_get):
+        return False, [], "Bybit transaction log client method is unavailable"
+
+    records: list[dict[str, Any]] = []
+    cursor: str | None = None
+    try:
+        while True:
+            params = {
+                "accountType": "UNIFIED",
+                "category": "linear",
+                "currency": "USDT",
+                "startTime": str(start_ms),
+                "endTime": str(end_ms),
+                "limit": str(BYBIT_PAGE_LIMIT),
+            }
+            if cursor:
+                params["cursor"] = cursor
+            payload = private_get("/v5/account/transaction-log", params)
+            records.extend(payload.get("list", []) or [])
+            cursor = str(payload.get("nextPageCursor") or "").strip() or None
+            if not cursor:
+                break
+    except Exception as exc:
+        return False, [], str(exc)
+
+    return True, records, None
+
+
+def aggregate_transaction_log_records(
+    trade: dict[str, Any],
+    records: list[dict[str, Any]],
+    opened_ms: int | None = None,
+) -> tuple[dict[str, Any] | None, str | None]:
+    symbol = str(trade.get("symbol") or "").upper().strip()
+    direction = str(trade.get("direction") or "").lower().strip()
+    entry_side = "Buy" if direction == "long" else "Sell" if direction == "short" else ""
+    close_side = "Sell" if direction == "long" else "Buy" if direction == "short" else ""
+    target_qty = _initial_quantity(trade)
+    opened_ms = opened_ms if opened_ms is not None else _timestamp_ms(trade.get("opened_at") or trade.get("detected_at"))
+
+    if not symbol or not entry_side or not close_side:
+        return None, "trade direction or symbol is invalid"
+    if target_qty is None or target_qty <= 0:
+        return None, "initial trade quantity is unavailable"
+    if opened_ms is None:
+        return None, "trade opened_at is missing or invalid"
+
+    trade_rows: list[dict[str, Any]] = []
+    close_rows: list[dict[str, Any]] = []
+    for record in records:
+        if str(record.get("symbol") or record.get("contract") or "").upper() != symbol:
+            continue
+        event_ms = _transaction_time_ms(record)
+        if event_ms is None or event_ms < opened_ms:
+            continue
+        if str(record.get("type") or "").lower() not in {"trade", ""}:
+            continue
+        direction_value = _transaction_direction(record)
+        if direction_value not in {entry_side, close_side}:
+            continue
+        qty = _number(record.get("qty") or record.get("quantity") or record.get("execQty"))
+        if qty is None or qty <= 0:
+            continue
+        trade_rows.append(record)
+        if direction_value == close_side:
+            close_rows.append(record)
+
+    if not close_rows:
+        return None, "Bybit transaction log close row is not available yet"
+
+    trade_rows.sort(key=lambda item: _transaction_time_ms(item) or 0)
+    close_rows.sort(key=lambda item: _transaction_time_ms(item) or 0)
+
+    selected_close: list[dict[str, Any]] = []
+    closed_size = 0.0
+    tolerance = max(abs(target_qty) * 1e-6, 1e-10)
+    for record in close_rows:
+        qty = _number(record.get("qty") or record.get("quantity") or record.get("execQty")) or 0.0
+        if closed_size + qty > target_qty + tolerance:
+            remaining = target_qty - closed_size
+            if remaining <= tolerance:
+                break
+            return None, f"transaction log close rows exceed expected quantity: {closed_size + qty} > {target_qty}"
+        selected_close.append(record)
+        closed_size += qty
+        if closed_size >= target_qty - tolerance:
+            break
+
+    if closed_size < target_qty - tolerance:
+        return None, f"transaction log partial close data only: {closed_size} of {target_qty}"
+
+    close_keys = {_transaction_key(record) for record in selected_close}
+    latest_close_ms = max(_transaction_time_ms(record) or 0 for record in selected_close)
+    selected_rows = [
+        record
+        for record in trade_rows
+        if (_transaction_direction(record) == entry_side and (_transaction_time_ms(record) or 0) <= latest_close_ms)
+        or _transaction_key(record) in close_keys
+    ]
+
+    weighted_exit = 0.0
+    close_fee_total = 0.0
+    all_fee_total = 0.0
+    close_cash_flow = 0.0
+    net_change = 0.0
+    for record in selected_close:
+        qty = _number(record.get("qty") or record.get("quantity") or record.get("execQty")) or 0.0
+        price = _transaction_price(record)
+        if price is None:
+            return None, "Bybit transaction log close row is missing filled price"
+        weighted_exit += price * qty
+        close_fee_total += abs(_number(record.get("fee") or record.get("feePaid") or record.get("execFee")) or 0.0)
+        close_cash_flow += _number(record.get("cashFlow")) or 0.0
+
+    for record in selected_rows:
+        all_fee_total += abs(_number(record.get("fee") or record.get("feePaid") or record.get("execFee")) or 0.0)
+        net_change += _number(record.get("change")) or 0.0
+
+    avg_exit_price = weighted_exit / closed_size
+    realized_pnl = net_change if selected_rows else close_cash_flow - close_fee_total
+    result = "profit" if realized_pnl > 0 else "loss" if realized_pnl < 0 else "flat"
+    closed_at = datetime.fromtimestamp(latest_close_ms / 1000, tz=UTC).isoformat() if latest_close_ms else datetime.now(UTC).isoformat()
+    existing_metadata = trade.get("exchange_metadata") if isinstance(trade.get("exchange_metadata"), dict) else {}
+    compact_records = [_compact_transaction_record(record) for record in selected_rows]
+
+    close_sync = {
+        "source": "bybit_account_transaction_log",
+        "authoritative_pnl_field": "change",
+        "closed_size": closed_size,
+        "avg_exit_price": avg_exit_price,
+        "realized_pnl": realized_pnl,
+        "cash_flow": close_cash_flow,
+        "fees": all_fee_total,
+        "close_fees": close_fee_total,
+        "record_count": len(compact_records),
+        "record_keys": [record["record_key"] for record in compact_records],
+        "synced_at": datetime.now(UTC).isoformat(),
+        "records": compact_records,
+    }
+
+    return {
+        "result": result,
+        "sl_hit_reason": None,
+        "close_reason": "exchange_transaction_log",
+        "closed_at": closed_at,
+        "exit_price": avg_exit_price,
+        "realized_pnl": realized_pnl,
+        "fees": all_fee_total,
+        "exchange_metadata": {**existing_metadata, "close_sync": close_sync},
+    }, None
+
+
 def _initial_quantity(trade: dict[str, Any]) -> float | None:
     management = trade.get("management") if isinstance(trade.get("management"), dict) else {}
     metadata = trade.get("exchange_metadata") if isinstance(trade.get("exchange_metadata"), dict) else {}
@@ -215,6 +478,69 @@ def _record_time_ms(record: dict[str, Any]) -> int | None:
         if numeric > 0:
             return numeric
     return None
+
+
+def _transaction_time_ms(record: dict[str, Any]) -> int | None:
+    for key in ("transactionTime", "transactTime", "execTime", "createdTime", "updatedTime"):
+        value = record.get(key)
+        try:
+            numeric = int(value)
+        except (TypeError, ValueError):
+            continue
+        if numeric > 0:
+            return numeric
+    value = record.get("time")
+    if value:
+        return _timestamp_ms(value)
+    return None
+
+
+def _transaction_direction(record: dict[str, Any]) -> str:
+    value = str(record.get("side") or record.get("direction") or "").strip().lower()
+    if value in {"buy", "open buy", "close buy"}:
+        return "Buy"
+    if value in {"sell", "open sell", "close sell"}:
+        return "Sell"
+    return ""
+
+
+def _transaction_price(record: dict[str, Any]) -> float | None:
+    return _number(record.get("tradePrice") or record.get("filledPrice") or record.get("execPrice") or record.get("price"))
+
+
+def _transaction_key(record: dict[str, Any]) -> str:
+    for key in ("id", "transactionId", "orderId", "execId"):
+        value = str(record.get(key) or "").strip()
+        if value:
+            return f"{key}:{value}"
+    raw = "|".join(
+        str(value or "")
+        for value in (
+            record.get("symbol") or record.get("contract"),
+            _transaction_direction(record),
+            _transaction_time_ms(record),
+            record.get("qty") or record.get("quantity") or record.get("execQty"),
+            _transaction_price(record),
+            record.get("change"),
+        )
+    )
+    return f"transaction:{hashlib.sha256(raw.encode('utf-8')).hexdigest()[:24]}"
+
+
+def _compact_transaction_record(record: dict[str, Any]) -> dict[str, Any]:
+    event_ms = _transaction_time_ms(record)
+    return {
+        "record_key": _transaction_key(record),
+        "symbol": str(record.get("symbol") or record.get("contract") or "").upper(),
+        "direction": str(record.get("direction") or record.get("side") or ""),
+        "quantity": _number(record.get("qty") or record.get("quantity") or record.get("execQty")) or 0.0,
+        "filled_price": _transaction_price(record),
+        "fee": abs(_number(record.get("fee") or record.get("feePaid") or record.get("execFee")) or 0.0),
+        "cash_flow": _number(record.get("cashFlow")),
+        "change": _number(record.get("change")),
+        "wallet_balance": _number(record.get("cashBalance") or record.get("walletBalance")),
+        "created_at": datetime.fromtimestamp(event_ms / 1000, tz=UTC).isoformat() if event_ms else None,
+    }
 
 
 def _timestamp_ms(value: Any) -> int | None:

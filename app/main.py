@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.active_trade_control import enrich_active_trades, request_market_close
 from app.auth import authenticate_admin, create_session_token, is_auth_configured
 from app.background_worker import auto_trading_loop
+from app.close_fill_sync import repair_incomplete_journal_closes
 from app.bot_controls import (
     activate_emergency_stop,
     can_execute,
@@ -411,6 +412,10 @@ def trade_history(_: dict = Depends(require_authenticated)) -> dict:
 
 @app.get("/journal/trades")
 def journal_trades(_: dict = Depends(require_authenticated)) -> dict:
+    try:
+        repair_incomplete_journal_closes(get_exchange_client(get_execution_mode()))
+    except Exception:
+        pass
     return {"trades": get_trade_history()}
 
 

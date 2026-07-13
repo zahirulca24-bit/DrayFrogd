@@ -11,6 +11,48 @@ NOW = datetime(2026, 7, 12, 19, 0, tzinfo=UTC)  # 13 July 2026, 01:00 BDT
 
 
 class MetricsPartialRealizedTests(unittest.TestCase):
+    def test_win_loss_counts_use_realized_pnl_and_profit_loss_synonyms(self) -> None:
+        closed_profit = {
+            "journal_id": "jrnl-profit",
+            "status": "closed",
+            "result": "profit",
+            "closed_at": "2026-07-12T18:10:00+00:00",
+            "realized_pnl": None,
+            "fees": 0.1,
+            "exchange_metadata": {},
+        }
+        closed_loss = {
+            "journal_id": "jrnl-loss",
+            "status": "closed",
+            "result": None,
+            "closed_at": "2026-07-12T18:20:00+00:00",
+            "realized_pnl": -2.5,
+            "fees": 0.2,
+            "exchange_metadata": {},
+        }
+        closed_unknown = {
+            "journal_id": "jrnl-unknown",
+            "status": "closed",
+            "result": "reconciliation_stale",
+            "closed_at": "2026-07-12T18:30:00+00:00",
+            "realized_pnl": None,
+            "fees": None,
+            "exchange_metadata": {},
+        }
+
+        with (
+            patch("app.metrics.get_active_trades", return_value=[]),
+            patch("app.metrics.get_closed_trades", return_value=[closed_profit, closed_loss, closed_unknown]),
+            patch("app.metrics.get_trade_history", return_value=[closed_profit, closed_loss, closed_unknown]),
+        ):
+            metrics = get_metrics(now=NOW)
+
+        self.assertEqual(metrics["win_trades"], 1)
+        self.assertEqual(metrics["loss_trades"], 1)
+        self.assertEqual(metrics["known_closed_trades"], 2)
+        self.assertEqual(metrics["unknown_closed_trades"], 1)
+        self.assertEqual(metrics["win_rate"], 0.5)
+
     def test_open_partial_realized_is_included_in_bdt_daily_metrics(self) -> None:
         open_partial = {
             "journal_id": "jrnl-open",
