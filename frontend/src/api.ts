@@ -17,6 +17,7 @@ import {
   PortfolioSummary,
   RiskValidationResponse,
   RiskStateResponse,
+  StrategyAuditResponse,
   SystemReadiness,
   Trade,
   TradeHistoryEntry,
@@ -360,6 +361,8 @@ export const api = {
   getJournalTrades: (token: string) => request<{ trades: JournalTradeEntry[] }>("/journal/trades", {}, token),
   getLedgerAudit: (token: string, date?: string) =>
     request<LedgerAuditResponse>(`/account/ledger-audit${date ? `?date=${encodeURIComponent(date)}` : ""}`, {}, token),
+  getStrategyAudit: (token: string, date?: string) =>
+    request<StrategyAuditResponse>(`/strategy-audit${date ? `?date=${encodeURIComponent(date)}` : ""}`, {}, token),
   getBotEvents: (token: string, limit = 100) => request<{ events: BotEventEntry[] }>(`/bot/events?limit=${limit}`, {}, token),
   getWatchdogStatus: (token: string) => request<WatchdogSnapshot>("/watchdog/status", {}, token),
   getBotStatus: (token: string) => request<BotControlState>("/bot/status", {}, token),

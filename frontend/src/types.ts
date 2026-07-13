@@ -374,6 +374,62 @@ export interface LedgerAuditResponse {
   records: LedgerAuditRecord[];
 }
 
+export interface StrategyAuditTrade {
+  journal_id: string | null;
+  symbol: string;
+  strategy: string;
+  direction: string;
+  status: string;
+  opened_at: string | null;
+  closed_at: string | null;
+  entry: number | null;
+  exit_price: number | null;
+  quantity: number | null;
+  realized_pnl: number | null;
+  fees: number | null;
+  result: "profit" | "loss" | "flat" | "unknown";
+  pnl_source: "bybit_ledger" | "journal" | "unmatched";
+  pnl_known: boolean;
+  audit_note: string | null;
+  ledger_record_count: number;
+}
+
+export interface StrategyAuditResponse {
+  ok: boolean;
+  date: string;
+  error: string | null;
+  summary: {
+    trade_count: number;
+    known_pnl_trades: number;
+    ledger_matched_trades: number;
+    journal_fallback_trades: number;
+    unmatched_trades: number;
+    wins: number;
+    losses: number;
+    flats: number;
+    net_pnl: number;
+    win_rate: number | null;
+  };
+  strategies: Array<{
+    strategy: string;
+    trade_count: number;
+    known_pnl_trades: number;
+    ledger_matched_trades: number;
+    journal_fallback_trades: number;
+    unmatched_trades: number;
+    wins: number;
+    losses: number;
+    flats: number;
+    net_pnl: number;
+    gross_profit: number;
+    gross_loss: number;
+    avg_win: number | null;
+    avg_loss: number | null;
+    win_rate: number | null;
+  }>;
+  trades: StrategyAuditTrade[];
+}
+
 export interface MarketCandle {
   timestamp: string;
   open: number;

@@ -37,6 +37,7 @@ from app.reconciliation import reconcile_state
 from app.risk import get_risk_state, validate_trade
 from app.scanner import SCANNER_SYMBOLS, get_active_signals, get_latest_signals, run_scan
 from app.schemas import BacktestRequest, BotConfigRequest, ExecuteSignalRequest, LoginRequest, PositionSizeRequest, RiskSignalRequest, SessionVerifyResponse, TokenResponse
+from app.strategy_audit import get_strategy_audit
 from app.symbols import get_symbol_metadata, refresh_symbol_metadata
 from app.trade_management import manage_open_trades
 from app.watchdog import get_watchdog_snapshot
@@ -439,6 +440,19 @@ def journal_trades(_: dict = Depends(require_authenticated)) -> dict:
     except Exception:
         pass
     return {"trades": get_trade_history()}
+
+
+@app.get("/strategy-audit")
+def strategy_audit(date: str | None = None, _: dict = Depends(require_authenticated)) -> dict:
+    try:
+        repair_incomplete_journal_closes(get_exchange_client(get_execution_mode()))
+    except Exception:
+        pass
+    return get_strategy_audit(
+        get_exchange_client(get_execution_mode()),
+        journal_trades=get_trade_history(limit=500),
+        bdt_date=date,
+    )
 
 
 @app.get("/bot/events")

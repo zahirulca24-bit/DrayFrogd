@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Activity, BarChart3, LineChart, ShieldAlert, Target } from "lucide-react";
 import { api } from "../api";
-import { JournalTradeEntry, TradeHistoryEntry } from "../types";
+import { JournalTradeEntry, StrategyAuditResponse, TradeHistoryEntry } from "../types";
 
 interface PerformanceStrategyProps {
   authToken: string | null;
@@ -205,6 +205,7 @@ function journalToPerformanceRow(item: JournalTradeEntry, index: number): Perfor
 
 export default function PerformanceStrategy({ authToken, history }: PerformanceStrategyProps) {
   const [journalTrades, setJournalTrades] = useState<JournalTradeEntry[]>([]);
+  const [strategyAudit, setStrategyAudit] = useState<StrategyAuditResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const bdtDayRef = useRef(BDT_DATE.format(new Date()));
 
@@ -216,9 +217,13 @@ export default function PerformanceStrategy({ authToken, history }: PerformanceS
 
     const loadJournal = async () => {
       try {
-        const response = await api.getJournalTrades(authToken);
+        const [response, auditResponse] = await Promise.all([
+          api.getJournalTrades(authToken),
+          api.getStrategyAudit(authToken, bdtDayRef.current),
+        ]);
         if (!cancelled) {
           setJournalTrades(response.trades || []);
+          setStrategyAudit(auditResponse);
           setError(null);
         }
       } catch (err: any) {
@@ -341,6 +346,10 @@ export default function PerformanceStrategy({ authToken, history }: PerformanceS
       }, new Map<string, number>()),
   );
 
+  const auditStrategies = strategyAudit?.ok ? strategyAudit.strategies : [];
+  const auditSummary = strategyAudit?.ok ? strategyAudit.summary : null;
+  const auditedTrades = strategyAudit?.ok ? strategyAudit.trades : [];
+
   const healthCards = [
     {
       title: "Strategy Stability",
@@ -397,6 +406,68 @@ export default function PerformanceStrategy({ authToken, history }: PerformanceS
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+        <DataCard title="Strategy Audit Panel" icon={<Target className="w-4 h-4 text-cyan-300" />}>
+          {strategyAudit?.ok ? (
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 xl:grid-cols-4 gap-3">
+                <MiniAuditCard label="Known PnL" value={`${auditSummary?.known_pnl_trades || 0}/${auditSummary?.trade_count || 0}`} />
+                <MiniAuditCard label="Bybit Ledger" value={String(auditSummary?.ledger_matched_trades || 0)} />
+                <MiniAuditCard label="Journal Fallback" value={String(auditSummary?.journal_fallback_trades || 0)} />
+                <MiniAuditCard label="Net PnL" value={formatMoney(auditSummary?.net_pnl ?? null)} tone={(auditSummary?.net_pnl || 0) >= 0 ? "good" : "bad"} />
+              </div>
+              {auditStrategies.length > 0 ? (
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="border-b border-slate-800 text-[10px] font-mono uppercase tracking-wider text-slate-500">
+                      <th className="py-3 px-3">Strategy</th>
+                      <th className="py-3 px-3 text-right">W/L</th>
+                      <th className="py-3 px-3 text-right">Ledger</th>
+                      <th className="py-3 px-3 text-right">Unknown</th>
+                      <th className="py-3 px-3 text-right">Net PnL</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800/30 text-xs font-mono">
+                    {auditStrategies.map((stats) => (
+                      <tr key={stats.strategy}>
+                        <td className="py-3 px-3 text-white">{stats.strategy}</td>
+                        <td className="py-3 px-3 text-right">
+                          <span className="text-emerald-400">{stats.wins}</span>
+                          <span className="text-slate-600"> / </span>
+                          <span className="text-rose-400">{stats.losses}</span>
+                        </td>
+                        <td className="py-3 px-3 text-right text-cyan-300">{stats.ledger_matched_trades}</td>
+                        <td className="py-3 px-3 text-right text-amber-300">{stats.unmatched_trades}</td>
+                        <td className={`py-3 px-3 text-right ${stats.known_pnl_trades === 0 ? "text-slate-500" : stats.net_pnl >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
+                          {stats.known_pnl_trades > 0 ? formatMoney(stats.net_pnl) : "N/A"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ) : (
+                <EmptyState text="No audited strategy records for selected BDT day" />
+              )}
+              <div className="space-y-2">
+                <div className="text-[10px] font-mono uppercase tracking-wider text-slate-500">Recent Audited Trades</div>
+                {auditedTrades.slice(0, 5).map((trade) => (
+                  <div key={trade.journal_id || `${trade.symbol}-${trade.opened_at}`} className="grid grid-cols-[1fr_auto_auto] gap-3 rounded-xl border border-slate-800 bg-[#0A0B0E] p-3 text-xs">
+                    <div>
+                      <div className="font-semibold text-white">{trade.symbol}</div>
+                      <div className="mt-1 text-[10px] font-mono text-slate-500">{trade.strategy} / {trade.direction.toUpperCase()}</div>
+                    </div>
+                    <SourceBadge source={trade.pnl_source} />
+                    <div className={trade.pnl_known ? (Number(trade.realized_pnl || 0) >= 0 ? "text-emerald-400" : "text-rose-400") : "text-slate-500"}>
+                      {trade.pnl_known ? formatMoney(trade.realized_pnl) : "N/A"}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <EmptyState text={strategyAudit?.error || "Strategy audit unavailable"} />
+          )}
+        </DataCard>
+
         <DataCard title="Strategy Comparison" icon={<Target className="w-4 h-4 text-violet-400" />}>
           {strategyBreakdown.length > 0 ? (
             <table className="w-full text-left border-collapse">
@@ -489,6 +560,21 @@ function KpiCard({ label, value }: { label: string; value: string }) {
       <div className="mt-3 text-lg font-semibold text-white">{value}</div>
     </div>
   );
+}
+
+function MiniAuditCard({ label, value, tone = "neutral" }: { label: string; value: string; tone?: "neutral" | "good" | "bad" }) {
+  return (
+    <div className="rounded-xl border border-slate-800 bg-[#0A0B0E] p-3">
+      <div className="text-[9px] font-mono uppercase tracking-wider text-slate-500">{label}</div>
+      <div className={`mt-2 text-sm font-semibold ${tone === "good" ? "text-emerald-400" : tone === "bad" ? "text-rose-400" : "text-white"}`}>{value}</div>
+    </div>
+  );
+}
+
+function SourceBadge({ source }: { source: "bybit_ledger" | "journal" | "unmatched" }) {
+  const label = source === "bybit_ledger" ? "BYBIT LEDGER" : source === "journal" ? "JOURNAL" : "UNMATCHED";
+  const tone = source === "bybit_ledger" ? "border-cyan-700/60 bg-cyan-950/30 text-cyan-300" : source === "journal" ? "border-amber-700/60 bg-amber-950/30 text-amber-300" : "border-slate-700 bg-slate-950/60 text-slate-500";
+  return <span className={`h-fit rounded-full border px-2 py-1 text-[9px] font-mono font-semibold ${tone}`}>{label}</span>;
 }
 
 function ChartCard({ title, icon, children }: { title: string; icon: React.ReactNode; children: React.ReactNode }) {
