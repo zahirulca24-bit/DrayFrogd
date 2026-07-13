@@ -248,10 +248,15 @@ class BybitWebSocketService:
                     self._reconcile.wait(), timeout=RECONCILIATION_IDLE_SECONDS
                 )
             except TimeoutError:
-                continue
-            self._reconcile.clear()
-            await asyncio.sleep(0.25)
-            reason = self._last_reconcile_reason
+                reason = "periodic_rest_refresh"
+            else:
+                self._reconcile.clear()
+                await asyncio.sleep(0.25)
+                reason = self._last_reconcile_reason
+
+            if self._stop.is_set():
+                break
+
             mode = get_execution_mode()
             try:
                 client = get_exchange_client(mode)
