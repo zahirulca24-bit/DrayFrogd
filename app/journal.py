@@ -211,12 +211,13 @@ def get_bot_events(limit: int = 100) -> list[dict[str, Any]]:
 
 
 def log_bot_event(event_type: str, message: str, level: str = "info", metadata: dict[str, Any] | None = None) -> None:
+    created_at = _utc_now()
     payload = {
         "event_type": event_type,
         "level": level,
         "message": message,
         "event_metadata": json.dumps(metadata or {}, separators=(",", ":")),
-        "created_at": _utc_now_iso(),
+        "created_at": created_at,
     }
 
     db = SessionLocal()
@@ -226,7 +227,11 @@ def log_bot_event(event_type: str, message: str, level: str = "info", metadata: 
     finally:
         db.close()
 
-    _send_supabase("bot_events", payload, upsert=False)
+    _send_supabase(
+        "bot_events",
+        {**payload, "created_at": created_at.isoformat()},
+        upsert=False,
+    )
 
 
 def serialize_trade_entry(row: TradeJournal) -> dict[str, Any]:

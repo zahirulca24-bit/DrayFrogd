@@ -115,7 +115,10 @@ class ScannerIntegrationTests(unittest.TestCase):
         self.assertEqual(len(result["signals"]), 1)
         self.assertEqual(result["signals"][0]["symbol"], "BTCUSDT")
         self.assertTrue(result["signals"][0]["primary_signal"])
-        self.assertEqual(result["signals"][0]["confirmation_count"], 1)
+        self.assertEqual(result["signals"][0]["confirmation_count"], 0)
+        intraday_result = next(item for item in result["results"] if item["trade_type"] == "intraday")
+        self.assertEqual(intraday_result["signal_state"], "INVALID")
+        self.assertEqual(intraday_result["rejection_reason"], "risk_reward_below_trade_type_minimum")
 
     def test_sideways_market_never_reaches_strategy_evaluation(self) -> None:
         client = FakeScannerClient()

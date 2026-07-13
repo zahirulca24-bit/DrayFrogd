@@ -78,6 +78,8 @@ export type SignalGrade = 'A+' | 'A' | 'B+' | 'REJECT';
 export interface Signal {
   id: string;
   pair: string;
+  strategyName?: string;
+  tradeType?: 'scalping' | 'intraday' | null;
   timeframe: string;
   direction: 'LONG' | 'SHORT';
   indicator: string;

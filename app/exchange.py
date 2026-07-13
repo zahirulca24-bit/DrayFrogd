@@ -24,7 +24,7 @@ class BybitClient:
     api_key: str
     api_secret: str
     mode: str = "demo"
-    recv_window: str = "5000"
+    recv_window: str = "20000"
     timeout: int = 10
 
     def has_credentials(self) -> bool:

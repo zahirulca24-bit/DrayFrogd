@@ -144,6 +144,9 @@ type MarketCloseResponse = {
 
 type RiskPayload = {
   symbol: string;
+  strategy_name?: string | null;
+  strategy?: string | null;
+  trade_type?: "scalping" | "intraday" | null;
   direction: string;
   entry: number;
   stop_loss: number;
@@ -188,6 +191,8 @@ function toUiSignal(item: BackendSignal, index: number): ExecutableSignal {
   return {
     id: `${item.symbol}-${strategyName}-${item.detected_at || index}`,
     pair: item.symbol,
+    strategyName,
+    tradeType: item.trade_type === "intraday" ? "intraday" : item.trade_type === "scalping" ? "scalping" : null,
     timeframe: "5M bias / 1M trigger",
     direction,
     indicator: strategyName,

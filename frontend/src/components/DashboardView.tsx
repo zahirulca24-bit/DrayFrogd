@@ -99,20 +99,35 @@ function isTodayInBdt(value?: string | null) {
   return itemDay === currentDay;
 }
 
-function resolveUnrealizedPnl(wallet: Record<string, string | number>, account: AccountResponse) {
+function resolveUnrealizedPnl(
+  wallet: Record<string, string | number>,
+  account: AccountResponse,
+  activeTrades: Trade[],
+) {
   const walletUnrealized = numberValue(wallet.totalPerpUPL);
   if (walletUnrealized !== 0) return walletUnrealized;
-  return (account.positions.data || []).reduce(
+
+  const positionUnrealized = (account.positions.data || []).reduce(
     (sum, position) => sum + numberValue(position.unrealisedPnl),
     0,
   );
+  if (positionUnrealized !== 0) return positionUnrealized;
+
+  return activeTrades.reduce((sum, trade) => sum + numberValue(trade.unrealizedPnl), 0);
 }
 
-function resolveExposure(account: AccountResponse) {
-  return (account.positions.data || []).reduce((sum, position) => {
+function resolveExposure(account: AccountResponse, activeTrades: Trade[]) {
+  const positionExposure = (account.positions.data || []).reduce((sum, position) => {
     const positionValue = numberValue(position.positionValue);
     if (positionValue !== 0) return sum + Math.abs(positionValue);
     return sum + Math.abs(numberValue(position.size) * numberValue(position.markPrice));
+  }, 0);
+
+  if (positionExposure !== 0) return positionExposure;
+
+  return activeTrades.reduce((sum, trade) => {
+    const liveNotional = numberValue(trade.size) * numberValue(trade.currentPrice || trade.entryPrice);
+    return sum + Math.abs(liveNotional);
   }, 0);
 }
 
@@ -137,8 +152,8 @@ export default function DashboardView({
   const availableBalance = numberValue(
     wallet.totalAvailableBalance || wallet.totalAvailableBalanceByMp || wallet.totalWalletBalance,
   );
-  const unrealizedPnl = resolveUnrealizedPnl(wallet, account);
-  const exposure = resolveExposure(account);
+  const unrealizedPnl = resolveUnrealizedPnl(wallet, account, activeTrades);
+  const exposure = resolveExposure(account, activeTrades);
   const [reportedRealizedPnl, setReportedRealizedPnl] = useState<number | null>(null);
 
   const closedOnlyTodayRealizedPnl = useMemo(

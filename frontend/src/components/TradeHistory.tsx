@@ -163,6 +163,20 @@ function todayBdtDate() {
   return BDT_DATE.format(new Date());
 }
 
+function defaultFilters() {
+  return {
+    dateFrom: "",
+    dateTo: "",
+    symbol: "ALL",
+    status: "ALL",
+    result: "ALL",
+    strategy: "ALL",
+    side: "ALL",
+    exitReason: "ALL",
+    search: "",
+  };
+}
+
 function readable(value?: string | null, fallback = "Not recorded") {
   if (!value) return fallback;
   return value
@@ -455,17 +469,7 @@ export default function TradeHistory({ authToken, history }: TradeHistoryProps) 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
-  const [filters, setFilters] = useState({
-    dateFrom: todayBdtDate(),
-    dateTo: todayBdtDate(),
-    symbol: "ALL",
-    status: "ALL",
-    result: "ALL",
-    strategy: "ALL",
-    side: "ALL",
-    exitReason: "ALL",
-    search: "",
-  });
+  const [filters, setFilters] = useState(defaultFilters);
 
   const loadJournal = async () => {
     if (!authToken) return;
@@ -561,6 +565,30 @@ export default function TradeHistory({ authToken, history }: TradeHistoryProps) 
     }
   }, [filteredRows, selectedId]);
 
+  useEffect(() => {
+    if (!rows.length || filteredRows.length > 0) {
+      return;
+    }
+
+    const hasOnlyDateFilters =
+      (filters.dateFrom || filters.dateTo)
+      && filters.symbol === "ALL"
+      && filters.status === "ALL"
+      && filters.result === "ALL"
+      && filters.strategy === "ALL"
+      && filters.side === "ALL"
+      && filters.exitReason === "ALL"
+      && !filters.search.trim();
+
+    if (hasOnlyDateFilters) {
+      setFilters((current) => ({
+        ...current,
+        dateFrom: "",
+        dateTo: "",
+      }));
+    }
+  }, [filteredRows.length, filters, rows.length]);
+
   const summary = useMemo(() => ({
     total: rows.length,
     open: rows.filter((row) => !row.isClosed && !isPendingSyncStatus(row.auditStatus)).length,
@@ -570,18 +598,7 @@ export default function TradeHistory({ authToken, history }: TradeHistoryProps) 
   }), [rows]);
 
   const resetFilters = () => {
-    const today = todayBdtDate();
-    setFilters({
-      dateFrom: today,
-      dateTo: today,
-      symbol: "ALL",
-      status: "ALL",
-      result: "ALL",
-      strategy: "ALL",
-      side: "ALL",
-      exitReason: "ALL",
-      search: "",
-    });
+    setFilters(defaultFilters());
   };
 
   const exportCsv = () => {
@@ -704,14 +721,15 @@ export default function TradeHistory({ authToken, history }: TradeHistoryProps) 
           <FilterField label="Search" icon={<Search className="h-3.5 w-3.5" />}>
             <input
               type="search"
+              autoComplete="off"
               value={filters.search}
               onChange={(event) => setFilters((current) => ({ ...current, search: event.target.value }))}
               placeholder="Symbol, order ID, strategy..."
               className="dashboard-input"
             />
           </FilterField>
-          <FilterField label="Date From"><input type="date" value={filters.dateFrom} onChange={(event) => setFilters((current) => ({ ...current, dateFrom: event.target.value }))} className="dashboard-input" /></FilterField>
-          <FilterField label="Date To"><input type="date" value={filters.dateTo} onChange={(event) => setFilters((current) => ({ ...current, dateTo: event.target.value }))} className="dashboard-input" /></FilterField>
+          <FilterField label="Date From"><input type="date" autoComplete="off" value={filters.dateFrom} onChange={(event) => setFilters((current) => ({ ...current, dateFrom: event.target.value }))} className="dashboard-input" /></FilterField>
+          <FilterField label="Date To"><input type="date" autoComplete="off" value={filters.dateTo} onChange={(event) => setFilters((current) => ({ ...current, dateTo: event.target.value }))} className="dashboard-input" /></FilterField>
           <FilterField label="Status"><select value={filters.status} onChange={(event) => setFilters((current) => ({ ...current, status: event.target.value }))} className="dashboard-input"><option value="ALL">All statuses</option>{statuses.map((value) => <option key={value} value={value}>{value}</option>)}</select></FilterField>
           <div className="flex items-end gap-2">
             <button type="button" onClick={() => setShowAdvanced((current) => !current)} className="inline-flex h-[42px] flex-1 items-center justify-center gap-2 rounded-xl border border-slate-800 bg-[#0A0B0E] px-4 text-xs font-semibold text-slate-300 hover:border-slate-700">

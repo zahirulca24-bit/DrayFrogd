@@ -136,6 +136,23 @@ class SignalPipelineTests(unittest.TestCase):
         self.assertEqual(result["signal_state"], SIGNAL_INVALID)
         self.assertFalse(result["is_executable"])
 
+    def test_intraday_requires_two_r_minimum(self) -> None:
+        raw = self._raw_signal(status="active")
+        raw["risk_reward"] = 1.5
+        result = normalize_strategy_result(
+            symbol="BTCUSDT",
+            result=raw,
+            trade_type="intraday",
+            market_rank=1,
+            trend=self._trend("UPTREND"),
+            market_ranking={"score": 90.0, "components": {}},
+            scanner_logic={"status": "active", "direction": "long"},
+        )
+
+        self.assertEqual(result["signal_state"], SIGNAL_INVALID)
+        self.assertEqual(result["rejection_reason"], "risk_reward_below_trade_type_minimum")
+        self.assertFalse(result["is_executable"])
+
     def test_expired_and_no_setup_results_are_not_kept_as_useful_signals(self) -> None:
         context = self._context("SOLUSDT", "scalping", 3)
         with patch(

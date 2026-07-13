@@ -6,7 +6,7 @@ from math import isfinite
 from typing import Any
 
 from app.bot_controls import can_execute, get_execution_mode
-from app.execution import (
+from app.execution_core import (
     _add_active_trade_once,
     _build_execution_key,
     _build_management_state,
@@ -79,6 +79,15 @@ def execute_signal(client: BybitClient, signal: dict[str, Any], auto_triggered: 
         "entry": quote["price"],
         "status": "active",
     }
+    quote_geometry = calculate_authoritative_risk_reward(
+        direction=execution_signal["direction"],
+        entry=float(execution_signal["entry"]),
+        stop_loss=float(execution_signal["stop_loss"]),
+        take_profit=float(execution_signal["take_profit"]),
+    )
+    if quote_geometry is None:
+        return {"ok": False, "error": "Live quote invalidated entry/SL/TP geometry", "pre_order_quote": quote}
+    execution_signal["risk_reward"] = quote_geometry["risk_reward"]
     refresh_risk_state(account_equity=account_equity)
     validation = validate_trade(execution_signal, account_equity=account_equity)
     if not validation.get("allowed"):

@@ -19,6 +19,9 @@ interface SignalEngineProps {
   onRefresh: () => Promise<void>;
   onExecuteSignal: (signal: {
     symbol: string;
+    strategy_name?: string | null;
+    strategy?: string | null;
+    trade_type?: "scalping" | "intraday" | null;
     direction: string;
     entry: number;
     stop_loss: number;

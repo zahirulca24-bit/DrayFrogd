@@ -16,6 +16,10 @@ from app.strategy import evaluate_registered_strategies
 
 VALID_TRADE_TYPES = {"scalping", "intraday"}
 STRUCTURE_STRATEGIES = {"pure_smc", "hybrid"}
+MIN_RISK_REWARD_BY_TRADE_TYPE = {
+    "scalping": 1.5,
+    "intraday": 2.0,
+}
 
 SIGNAL_NO_SETUP = "NO_SETUP"
 SIGNAL_NEAR_SETUP = "NEAR_SETUP"
@@ -35,6 +39,7 @@ _INVALID_REASONS = {
     "trade_type_missing_or_invalid",
     "invalid_trade_levels",
     "invalid_trade_geometry",
+    "risk_reward_below_trade_type_minimum",
     "setup_invalidated",
     "opposite_pullback_structure",
     "scanner_logic_direction_mismatch",
@@ -181,6 +186,8 @@ def normalize_strategy_result(
     geometry_valid = _valid_trade_geometry(normalized)
     if normalized["signal_state"] in USEFUL_SIGNAL_STATES and not geometry_valid:
         _set_signal_state(normalized, SIGNAL_INVALID, "invalid_trade_geometry")
+    elif normalized["signal_state"] in USEFUL_SIGNAL_STATES and not _meets_trade_type_rr_minimum(normalized):
+        _set_signal_state(normalized, SIGNAL_INVALID, "risk_reward_below_trade_type_minimum")
 
     normalized["geometry_valid"] = geometry_valid
     normalized["is_executable"] = normalized["signal_state"] == SIGNAL_ACTIVE and geometry_valid
@@ -350,6 +357,14 @@ def _valid_trade_geometry(item: dict[str, Any]) -> bool:
     if direction == "long":
         return stop_loss < entry < take_profit
     return take_profit < entry < stop_loss
+
+
+def _meets_trade_type_rr_minimum(item: dict[str, Any]) -> bool:
+    trade_type = _normalize_trade_type(item.get("trade_type"))
+    risk_reward = _number(item.get("risk_reward"))
+    if trade_type is None or risk_reward is None:
+        return False
+    return risk_reward + 1e-9 >= MIN_RISK_REWARD_BY_TRADE_TYPE[trade_type]
 
 
 def _signal_score(item: dict[str, Any]) -> float:
