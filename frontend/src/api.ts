@@ -1,5 +1,6 @@
 import {
   AccountResponse,
+  BacktestResponse,
   BotControlState,
   BotEventEntry,
   ExchangeStatusResponse,
@@ -373,6 +374,15 @@ export const api = {
     request<BotControlState>("/bot/config", { method: "POST", body: JSON.stringify(payload) }, token),
   emergencyStop: (token: string) => request<BotControlState>("/bot/emergency-stop", { method: "POST" }, token),
   resumeBot: (token: string) => request<BotControlState>("/bot/resume", { method: "POST" }, token),
+  runBacktest: (token: string, payload: {
+    symbol: string;
+    strategy: string;
+    candle_limit: number;
+    risk_amount: number;
+    fee_bps: number;
+    min_risk_reward: number;
+  }) =>
+    request<BacktestResponse>("/backtest/run", { method: "POST", body: JSON.stringify(payload) }, token),
 };
 
 

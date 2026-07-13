@@ -26,6 +26,7 @@ import TradeHistory from "./components/TradeHistory";
 import PerformanceStrategy from "./components/PerformanceStrategy";
 import PageShell from "./components/PageShell";
 import Watchdog from "./components/Watchdog";
+import SettingsBacktest from "./components/SettingsBacktest";
 
 
 const emptyReadiness: SystemReadiness = {
@@ -416,10 +417,7 @@ export default function App() {
         );
       case "settings":
         return (
-          <PageShell
-            title="Settings"
-            subtitle="Administrative settings, session controls, and future platform preferences will appear here once the backend exposes them."
-          />
+          <SettingsBacktest authToken={authToken} />
         );
       case "control-panel":
         return (

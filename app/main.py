@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.active_trade_control import enrich_active_trades, request_market_close
 from app.auth import authenticate_admin, create_session_token, is_auth_configured
+from app.backtest import run_strategy_backtest
 from app.background_worker import auto_trading_loop
 from app.close_fill_sync import repair_incomplete_journal_closes
 from app.bot_controls import (
@@ -34,7 +35,7 @@ from app.readiness import get_readiness_status
 from app.reconciliation import reconcile_state
 from app.risk import get_risk_state, validate_trade
 from app.scanner import SCANNER_SYMBOLS, get_active_signals, get_latest_signals, run_scan
-from app.schemas import BotConfigRequest, ExecuteSignalRequest, LoginRequest, PositionSizeRequest, RiskSignalRequest, SessionVerifyResponse, TokenResponse
+from app.schemas import BacktestRequest, BotConfigRequest, ExecuteSignalRequest, LoginRequest, PositionSizeRequest, RiskSignalRequest, SessionVerifyResponse, TokenResponse
 from app.symbols import get_symbol_metadata, refresh_symbol_metadata
 from app.trade_management import manage_open_trades
 from app.watchdog import get_watchdog_snapshot
@@ -231,6 +232,20 @@ def market_overview(_: dict = Depends(require_authenticated)) -> dict:
 @app.get("/readiness")
 def readiness() -> dict:
     return get_readiness_status()
+
+
+@app.post("/backtest/run")
+def run_backtest(payload: BacktestRequest, _: dict = Depends(require_authenticated)) -> dict:
+    client = get_exchange_client(get_execution_mode())
+    return run_strategy_backtest(
+        client,
+        symbol=payload.symbol,
+        strategy=payload.strategy,
+        candle_limit=payload.candle_limit,
+        risk_amount=payload.risk_amount,
+        fee_bps=payload.fee_bps,
+        min_risk_reward=payload.min_risk_reward,
+    )
 
 
 def _run_scan_cycle(mode: str, *, trigger: str) -> dict:

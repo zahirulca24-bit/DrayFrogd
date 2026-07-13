@@ -439,6 +439,49 @@ export interface ExecuteTradeResponse {
   sizing?: Record<string, unknown>;
 }
 
+export interface BacktestTrade {
+  strategy: string;
+  direction: "long" | "short";
+  entry: number;
+  stop_loss: number;
+  take_profit: number;
+  exit_price: number;
+  result: "win" | "loss";
+  opened_at: string;
+  closed_at: string;
+  risk_reward: number;
+  quantity: number;
+  gross_pnl: number;
+  fees: number;
+  net_pnl: number;
+  pnl_r: number;
+}
+
+export interface BacktestResponse {
+  ok: boolean;
+  error?: string;
+  symbol?: string;
+  strategy?: string;
+  candles_1m?: number;
+  candles_5m?: number;
+  risk_amount?: number;
+  fee_bps?: number;
+  min_risk_reward?: number;
+  summary?: {
+    trades: number;
+    wins: number;
+    losses: number;
+    win_rate: number;
+    net_pnl: number;
+    pnl_r: number;
+    profit_factor: number | null;
+    max_drawdown: number;
+    skipped_signals: number;
+  };
+  trades?: BacktestTrade[];
+  equity_curve?: number[];
+}
+
 export interface JournalTradeEntry {
   journal_id: string;
   symbol: string;

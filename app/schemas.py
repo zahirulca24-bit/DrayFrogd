@@ -66,3 +66,12 @@ class BotConfigRequest(BaseModel):
     exposure_cap: float | None = None
     max_open_trades: int | None = None
     max_daily_trades: int | None = None
+
+
+class BacktestRequest(BaseModel):
+    symbol: str = "BTCUSDT"
+    strategy: str = "all"
+    candle_limit: int = 1000
+    risk_amount: float = 20.0
+    fee_bps: float = 5.5
+    min_risk_reward: float = 1.5
