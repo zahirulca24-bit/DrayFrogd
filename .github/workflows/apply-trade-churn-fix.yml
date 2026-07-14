@@ -67,11 +67,24 @@ jobs:
           path: churn-full-tests.log
 
       - name: Commit verified implementation
+        shell: bash
         run: |
-          rm -f churn-full-tests.log
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git rm tools/apply_trade_churn_fix.py
-          git add app tests
-          git commit -m 'Add trade churn and repeat-entry guards'
-          git push origin HEAD:fix/trade-churn-guards
+          set -o pipefail
+          {
+            rm -f churn-full-tests.log
+            git status --short
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git rm tools/apply_trade_churn_fix.py
+            git add app tests
+            git status --short
+            git commit -m 'Add trade churn and repeat-entry guards'
+            git push origin HEAD:fix/trade-churn-guards
+          } 2>&1 | tee churn-commit-step.log
+
+      - name: Upload commit-step log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trade-churn-commit-step
+          path: churn-commit-step.log
