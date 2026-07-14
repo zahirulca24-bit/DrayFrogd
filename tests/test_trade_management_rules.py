@@ -21,7 +21,7 @@ class TradeManagementRulesTests(unittest.TestCase):
                 "tp2": 110.0 if scalping else 112.5,
                 "runner_target": 112.5 if scalping else 115.0,
                 "break_even_trigger_r": 1.0 if scalping else 2.0,
-                "max_hold_seconds": 59 * 60 if scalping else 6 * 60 * 60,
+                "max_hold_seconds": 30 * 60 if scalping else 6 * 60 * 60,
                 "trailing_enabled": not scalping,
                 "tp1_done": False,
                 "tp2_done": False,
@@ -79,9 +79,9 @@ class TradeManagementRulesTests(unittest.TestCase):
         action = evaluate_management_action(trade, 111.0, datetime.now(UTC))
         self.assertEqual(action["action"], "hold")
 
-    def test_scalping_max_hold_is_fifty_nine_minutes(self) -> None:
+    def test_scalping_max_hold_is_thirty_minutes(self) -> None:
         trade = self.base_trade("scalping")
-        trade["opened_at"] = (datetime.now(UTC) - timedelta(minutes=59)).isoformat()
+        trade["opened_at"] = (datetime.now(UTC) - timedelta(minutes=30)).isoformat()
         action = evaluate_management_action(trade, 106.0, datetime.now(UTC))
         self.assertEqual(action["action"], "max_hold_close")
 
