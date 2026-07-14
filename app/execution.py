@@ -40,6 +40,7 @@ from app.execution_core import (
     add_closed_trades,
     close_trade,
     get_active_trades,
+    get_operator_active_trades,
     get_closed_trades,
     replace_active_trades,
     update_active_trade,
@@ -329,6 +330,7 @@ def _sync_active_safety_state(result: dict[str, Any]) -> None:
 __all__ = [
     "execute_signal",
     "get_active_trades",
+    "get_operator_active_trades",
     "get_closed_trades",
     "replace_active_trades",
     "update_active_trade",
