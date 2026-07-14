@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - fix/intraday-profile-targets
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: write
