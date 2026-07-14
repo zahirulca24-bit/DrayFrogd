@@ -28,6 +28,7 @@ AI opinion must never silently override a locked Product Owner decision, reposit
 | Current active task | `BACKTEST-STRATEGY-TRUTH-001` — Issue #59 |
 | Active engineering branch | `audit/backtest-strategy-truth` |
 | Product Owner merge rule | No merge to `main` without explicit approval |
+| Runtime start/stop authority | Product Owner only; no AI pause/resume decision is authorized |
 
 ## Locked priority model
 
@@ -35,9 +36,9 @@ AI opinion must never silently override a locked Product Owner decision, reposit
 
 **Backtest and strategy validity come first.** Further app expansion, Settings consolidation and strategy-facing polish are secondary until the backtest is proven honest and equivalent to live strategy logic.
 
-### Runtime-safety priority
+### Runtime-safety findings
 
-This does not authorize automated execution. Demo auto execution remains paused until the authoritative daily-loss circuit and required execution-integrity gates are fixed and runtime-verified.
+Issue #53 and other execution-safety findings remain open and must be repaired and verified. They do not automatically authorize an AI session to stop, pause, start or resume the bot. Runtime state changes require an explicit Product Owner instruction.
 
 ## Runtime status
 
@@ -69,7 +70,7 @@ Not verified or currently contradicted:
 | Order | Type | Work item | State |
 |---:|---|---|---|
 | 1 | Product | `BACKTEST-STRATEGY-TRUTH-001` — Issue #59 | CLAIMED / AUDIT STARTING |
-| 2 | Safety | `DAILY-LOSS-AUTHORITY-001` — Issue #53 | AUTO EXECUTION BLOCKER |
+| 2 | Safety | `DAILY-LOSS-AUTHORITY-001` — Issue #53 | OPEN SAFETY DEFECT |
 | 3 | Safety/Data | `JOURNAL-IDENTITY-001` — Issue #51 | AVAILABLE / P0 |
 | 4 | Ready PR | Exact PnL attribution — PR #48 | READY / NOT MERGED |
 | 5 | Ready PR | Active/pending/stale separation — PR #49 | READY / NOT MERGED |
@@ -98,12 +99,13 @@ Issue #59 must begin with an independent audit, not UI changes:
 2. Claim exactly one bounded task.
 3. Use one task → one branch → one PR.
 4. Do not merge without explicit Product Owner approval.
-5. Separate `CODE PASS`, `CI PASS`, `RUNTIME PASS` and `VERIFIED COMPLETE`.
-6. Screenshots prove symptoms and runtime observations; they do not automatically prove root cause.
-7. A root cause may be called confirmed only when supported by code, logs, exact API evidence or deterministic reproduction.
-8. Never replace a prior decision silently. Use a formal decision amendment.
-9. Never delete historical evidence. Supersede it with a new evidence entry.
-10. Update `docs/HANDOFF.md` before ending or changing chat.
+5. Do not change runtime start/stop/pause/resume state without explicit Product Owner approval.
+6. Separate `CODE PASS`, `CI PASS`, `RUNTIME PASS` and `VERIFIED COMPLETE`.
+7. Screenshots prove symptoms and runtime observations; they do not automatically prove root cause.
+8. A root cause may be called confirmed only when supported by code, logs, exact API evidence or deterministic reproduction.
+9. Never replace a prior decision silently. Use a formal decision amendment.
+10. Never delete historical evidence. Supersede it with a new evidence entry.
+11. Update `docs/HANDOFF.md` before ending or changing chat.
 
 ## Status vocabulary
 
