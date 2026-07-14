@@ -1,0 +1,55 @@
+name: Apply P0 trade status separation
+
+on:
+  push:
+    branches:
+      - fix/p0-trade-status-separation
+    paths:
+      - '.p0/**'
+      - '.github/workflows/apply-p0-trade-status.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-verify:
+    if: ${{ !contains(github.event.head_commit.message, '[p0-status-applied]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/p0-trade-status-separation
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Apply status separation patches
+        run: |
+          git apply .p0/trade_state.patch
+          git apply .p0/execution.patch
+          git apply .p0/execution_core.patch
+          git apply .p0/journal.patch
+          git apply .p0/main.patch
+          git apply .p0/metrics.patch
+          git apply .p0/watchdog.patch
+          git apply .p0/status_tests.patch
+
+      - name: Run focused tests
+        run: python -m unittest tests.test_trade_status_separation tests.test_execution_reservation tests.test_execution_public_api
+
+      - name: Run full backend tests
+        run: python -m unittest discover -s tests -p 'test_*.py'
+
+      - name: Commit verified fix and remove helpers
+        run: |
+          rm -rf .p0 .github/workflows/apply-p0-trade-status.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'fix: separate active pending and stale trades [p0-status-applied]'
+          git push origin HEAD:fix/p0-trade-status-separation
