@@ -23,6 +23,7 @@ Rules:
 - Claim exactly one task.
 - Use one task, one branch and one PR.
 - Do not merge to main without explicit Product Owner approval.
+- Do not start, stop, pause or resume the bot without explicit Product Owner approval.
 - Separate CODE PASS, CI PASS, RUNTIME PASS and VERIFIED COMPLETE.
 - Screenshots prove observations, not automatic root cause.
 - State facts and inferences separately.
@@ -46,5 +47,5 @@ Do not begin implementation when another task is already active unless the Produ
 When a chat must be changed quickly:
 
 ```text
-Read PROJECT_CONTROL.md and docs/HANDOFF.md first. Continue only the active task in docs/TASK_REGISTER.md. Do not revise locked decisions, start another task or merge any PR without Product Owner approval. Verify every claim against docs/EVIDENCE_REGISTER.md and actual code.
+Read PROJECT_CONTROL.md and docs/HANDOFF.md first. Continue only the active task in docs/TASK_REGISTER.md. Do not revise locked decisions, start another task, change the bot's runtime state or merge any PR without Product Owner approval. Verify every claim against docs/EVIDENCE_REGISTER.md and actual code.
 ```
