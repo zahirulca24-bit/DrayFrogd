@@ -1,6 +1,9 @@
 name: Apply P0 authentication security
 
 on:
+  pull_request:
+    branches:
+      - main
   push:
     branches:
       - fix/p0-auth-security
