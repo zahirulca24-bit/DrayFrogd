@@ -42,13 +42,28 @@ jobs:
         run: python -m unittest tests.test_scalping_timeout_suppression -v
 
       - name: Run full backend suite
+        id: full_backend
         shell: bash
         run: |
           set +e
           python -m unittest discover -s tests -p 'test_*.py' > full-backend.log 2>&1
           status=$?
-          cat full-backend.log
+          if [ "$status" -ne 0 ]; then
+            tail -n 160 full-backend.log > failure-summary.log
+            cat failure-summary.log
+          else
+            tail -n 20 full-backend.log
+          fi
           exit $status
+
+      - name: Upload backend failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scalping-timeout-failure-summary
+          path: |
+            full-backend.log
+            failure-summary.log
 
       - name: Set up Node
         uses: actions/setup-node@v4
