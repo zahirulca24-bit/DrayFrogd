@@ -2,20 +2,20 @@
 
 > **DayForge — Forge Better Trading Every Day**
 
-Bybit-first automated trading terminal built with FastAPI, React, PostgreSQL and Bybit V5 REST/WebSocket APIs.
+Bybit-first automated trading terminal built with FastAPI, React and Bybit V5 REST/WebSocket APIs.
 
 ## Start here — mandatory for every new session
 
-Before reviewing, coding or giving a new opinion, read these files in order:
+Read in this order before reviewing, coding or giving a new opinion:
 
-1. [`PROJECT_CONTROL.md`](PROJECT_CONTROL.md) — current project truth and operating rules
-2. [`docs/DECISION_LOG.md`](docs/DECISION_LOG.md) — Product Owner decisions that cannot be silently changed
-3. [`docs/TASK_REGISTER.md`](docs/TASK_REGISTER.md) — current single active task and queue
-4. [`docs/EVIDENCE_REGISTER.md`](docs/EVIDENCE_REGISTER.md) — confirmed, suspected and contradicted claims
-5. [`docs/HANDOFF.md`](docs/HANDOFF.md) — short current-session handoff
-6. [`docs/SESSION_START_PROMPT.md`](docs/SESSION_START_PROMPT.md) — exact prompt for a new ChatGPT/Codex session
+1. [`PROJECT_CONTROL.md`](PROJECT_CONTROL.md)
+2. [`docs/DECISION_LOG.md`](docs/DECISION_LOG.md)
+3. [`docs/TASK_REGISTER.md`](docs/TASK_REGISTER.md)
+4. [`docs/EVIDENCE_REGISTER.md`](docs/EVIDENCE_REGISTER.md)
+5. [`docs/HANDOFF.md`](docs/HANDOFF.md)
+6. [`docs/SESSION_START_PROMPT.md`](docs/SESSION_START_PROMPT.md)
 
-**Chat memory is not project truth. The repository control files are project truth.**
+**Chat memory is not project truth. Repository control files are project truth.**
 
 ## Current project status
 
@@ -26,12 +26,44 @@ Before reviewing, coding or giving a new opinion, read these files in order:
 | Live-capital approval | **BLOCKED / NOT APPROVED** |
 | Current `main` head | `52604c387d54b948b46ff7f1b45856c6be57cb27` |
 | Main automated verification | Backend **213/213 PASS** after PR #47 |
-| Current operator evidence | Public WS connected; Private WS intermittently stuck at `CONNECTING`; REST/ledger visible |
-| Runtime verdict | **PARTIAL PASS / P0 SAFETY, IDENTITY AND DURABILITY BLOCKERS OPEN** |
+| Active product task | **Issue #59 — Backtest/Strategy Truth Audit** |
+| Active engineering branch | `audit/backtest-strategy-truth` |
+| Demo auto execution | **SHOULD REMAIN PAUSED** until Issue #53 is verified |
 | Product Owner merge rule | No PR merge without explicit approval |
 | Last status update | 14 July 2026, BDT |
 
-Historical milestones and the former long daily log are kept in [`docs/STATUS_HISTORY.md`](docs/STATUS_HISTORY.md). The previous full README remains available through Git history.
+Historical milestones are kept in [`docs/STATUS_HISTORY.md`](docs/STATUS_HISTORY.md). The previous long README remains available through Git history.
+
+---
+
+## Locked priority model
+
+### Product-value priority — Backtest first
+
+The application has no trading value unless the strategy and backtest are trustworthy. Therefore:
+
+1. Audit the backtest against the exact live strategy implementation.
+2. Remove look-ahead, candle-timing, fee, entry/exit and rule-divergence defects.
+3. Build a deterministic simulator with auditable trade-level results.
+4. Evaluate the strategy with sufficient in-sample and out-of-sample evidence.
+5. Only then approve strategy parameters or expand strategy-facing features.
+
+See:
+
+- Issue #59 — `BACKTEST-STRATEGY-TRUTH-001`
+- [`docs/BACKTEST_STRATEGY_PLAN.md`](docs/BACKTEST_STRATEGY_PLAN.md)
+- Decisions `DEC-016` and `DEC-017`
+
+`CONFIG-AUTHORITY-001` remains important but is deferred until after the backtest audit.
+
+### Runtime-safety priority — execution remains blocked
+
+Backtest research can continue offline, but Demo auto execution must not resume until required safety gates pass:
+
+- authoritative 5% BDT-day daily-loss circuit;
+- reliable order/execution identity;
+- safe readiness/private-WS behavior;
+- durable runtime storage and lifecycle verification.
 
 ---
 
@@ -41,34 +73,33 @@ DayForge must:
 
 1. Scan liquid Bybit USDT perpetual markets.
 2. Build separate Scalping and Intraday contexts.
-3. Reject sideways, stale, insufficient-data and high-spread markets.
-4. Produce deterministic canonical signals.
-5. Allow only `ACTIVE` signals into Risk and Execution.
-6. Size positions from the approved risk source and Stop Loss distance.
-7. Confirm actual exchange fills and native protection.
-8. Reconcile positions, orders, executions, fees and realized PnL from Bybit evidence.
-9. Preserve one authoritative operator view across Dashboard, Active Trades, Journal and Performance.
-10. Retain an auditable lifecycle across refresh and backend restart.
+3. Produce deterministic canonical signals from closed candles.
+4. Replay the exact same strategy rules in an honest deterministic backtest.
+5. Reject sideways, stale, insufficient-data and high-spread markets.
+6. Allow only `ACTIVE` signals into Risk and Execution.
+7. Size positions from the approved risk model and Stop Loss distance.
+8. Confirm actual exchange fills and native protection.
+9. Reconcile positions, orders, executions, fees and realized PnL from Bybit evidence.
+10. Preserve one authoritative operator view across Dashboard, Active Trades, Journal and Performance.
 
 ## Core architecture
 
 ```text
 React + TypeScript Frontend
         |
-        | Authenticated REST API
         v
 FastAPI Backend
         |
+        +-- Historical Data / Backtest Simulator
         +-- Scanner / Strategy / Signal
         +-- Risk / Position Sizing / Execution
         +-- Trade Management
         +-- Journal and Authoritative Reconciliation
         +-- Bybit Private/Public WebSocket
         +-- Periodic Bybit REST truth refresh
-        +-- Watchdog and Bot Controls
         |
         +-- Durable production database required
-        +-- SQLite allowed only for verified local development
+        +-- SQLite only for verified local development
         v
 Bybit V5 Demo APIs
 ```
@@ -98,15 +129,63 @@ Bybit V5 Demo APIs
 | Daily reset timezone | Asia/Dhaka |
 | Daily hard stop | 5% net realized loss for the BDT day |
 
-When the daily hard stop is active, new execution must stop. Existing positions must continue to be protected and reconciled.
+When the daily hard stop is active, new execution must stop. Existing positions must continue protection and reconciliation.
 
 ### Release controls
 
-- Demo is the default and only approved runtime mode.
+- Demo is the only approved runtime mode.
 - Code/CI PASS is not runtime PASS.
 - Runtime PASS is not live-capital approval.
-- Feature branches and pull requests are mandatory.
+- One task → one branch → one PR.
 - Do not merge to `main` without explicit Product Owner approval.
+
+---
+
+## Backtest strategy acceptance gates
+
+### Gate A — Live/backtest rule equivalence
+
+- Live and backtest strategy functions are mapped rule by rule.
+- No duplicated simplified strategy implementation remains.
+- Scalping and Intraday timeframe pipelines match their approved live definitions.
+
+### Gate B — Historical data integrity
+
+- Bybit historical source, date range, timeframes and candle counts are visible.
+- Pagination, order, deduplication and missing-candle behavior are verified.
+- Current/open candles are excluded.
+
+### Gate C — No look-ahead
+
+- Candles replay sequentially.
+- Entry occurs only after all required information was available.
+- No future indicator, future candle or same-candle decision leakage exists.
+- When SL and TP both touch within one candle, the approved conservative rule is applied deterministically.
+
+### Gate D — Honest execution model
+
+Every simulated trade records:
+
+- signal and entry timestamps;
+- strategy, side and timeframes;
+- entry, SL and targets;
+- quantity/risk assumptions;
+- exit price and reason;
+- gross PnL, fees, net PnL and R multiple.
+
+### Gate E — Strategy evaluation
+
+Required metrics include:
+
+- net PnL after fees;
+- win rate from known terminal outcomes only;
+- profit factor, expectancy and average R;
+- maximum drawdown and consecutive losses;
+- symbol/session/direction/strategy/regime breakdown;
+- out-of-sample or walk-forward comparison;
+- reproducible trade-level export.
+
+A short profitable run does not approve a strategy. Minimum sample size, test period and approval thresholds require Product Owner approval after the baseline audit.
 
 ---
 
@@ -114,117 +193,62 @@ When the daily hard stop is active, new execution must stop. Existing positions 
 
 ### Confirmed working
 
-- Public Bybit WebSocket displays `CONNECTED`.
-- Private and public channel statuses are independently displayed.
-- Periodic REST reconciliation is merged and runs during WebSocket idle periods.
+- Strategy Backtest Engine UI is deployed.
 - Bybit Ledger Audit reads account transaction-log evidence.
+- Public and private WebSocket states are independently displayed.
+- Periodic REST reconciliation is merged.
 - Active positions and floating PnL are visible from exchange-derived state.
-- Unknown financial values remain `N/A` instead of being fabricated as zero.
+- Unknown financial values can remain `N/A` instead of fabricated zero.
 
-### Confirmed blockers from 14 July screenshots
+### Not yet proven
 
-- Bybit Ledger Audit showed approximately `-$61.7476` trade/net change and `$80.2055` fees while the bot remained `RUNNING`, auto execution remained `ENABLED`, and Loss Cooldown displayed `CLEAR`.
-- Dashboard/Active Trades showed only approximately `+$13.0446` realized PnL from one known Journal fallback, proving the daily-loss gate was not using complete authoritative exchange results.
-- Private WS remained `CONNECTING` across several minutes while Control Center reported `HEALTHY` and readiness `READY`.
-- Risk/trade displayed `2.15%` on Control Center/Settings but `1.00%` on Dashboard; trade counts/limits also disagreed.
-- Control Center reported `SQLITE` as primary Journal storage on the deployed runtime while production durability was not proven.
-- Performance showed W/L `1/0` with two unknown outcomes but displayed `33.33%` win rate.
-- Incident Center repeatedly logged `AUTO_EXECUTION_FAILED` for an unchanged `symbol already has an active trade` guard.
-- Journal rows still lacked reliable `orderId`, `orderLinkId`, `execId`, protection evidence and exact PnL source.
+- Backtest/live strategy equivalence.
+- Closed-candle and no-look-ahead correctness.
+- Honest entry/SL/TP/fee simulation.
+- Deterministic/reproducible results.
+- Strategy profitability or robustness.
 
----
+### Confirmed runtime blockers
 
-## Active blockers and ready PRs
-
-| Priority | Work item | Current status |
-|---:|---|---|
-| 1 | `DAILY-LOSS-AUTHORITY-001` — stop execution from authoritative Bybit daily loss | **Issue #53 OPEN / DEMO EXECUTION SHOULD BE PAUSED** |
-| 2 | `JOURNAL-IDENTITY-001` — persist/backfill `orderId`, `orderLinkId`, `execId` and fills | **Issue #51 OPEN / NOT FIXED** |
-| 3 | Exact PnL attribution for overlapping same-symbol trades | **PR #48 READY / NOT MERGED** |
-| 4 | Separate active, pending, stale and closed operator states | **PR #49 READY / NOT MERGED** |
-| 5 | `WS-READINESS-001` — surface private-stream degradation and safe fallback | **Issue #54 OPEN** |
-| 6 | `CONFIG-AUTHORITY-001` — one risk/settings/trade-count source | **Issue #55 OPEN** |
-| 7 | `RUNTIME-STORAGE-001` — prove durable production Journal storage | **Issue #56 OPEN** |
-| 8 | `PERFORMANCE-TRUTH-001` — exclude unknown outcomes from metrics | **Issue #57 OPEN** |
-| 9 | Expiring sessions, logout revocation and login throttling | **PR #50 READY / NOT MERGED** |
-| 10 | Full TP/partial-close/Journal/restart lifecycle verification | **Issue #37 OPEN** |
-| 11 | `INCIDENT-DEDUPE-001` — bounded active-symbol skip logging | **Issue #58 OPEN** |
-
-Only one bounded repair should be implemented at a time. Each fix must use its own branch and PR. No open PR is approved for merge merely because it appears in this table.
+- Bybit Ledger showed approximately `-$61.7476` while the bot remained `RUNNING/AUTO ENABLED`; Issue #53.
+- Journal lacked reliable `orderId`, `orderLinkId`, `execId` and exact PnL identity; Issue #51.
+- Private WS remained `CONNECTING` while readiness showed `READY/HEALTHY`; Issue #54.
+- Risk/trade and trade-count settings disagreed across pages; Issue #55.
+- Render displayed SQLite as primary Journal storage without durability proof; Issue #56.
+- Unknown outcomes contaminated displayed performance metrics; Issue #57.
+- Repeated active-symbol blocks flooded Incident Center; Issue #58.
 
 ---
 
-## Required live verification
+## Current queue
 
-Use one fresh controlled Bybit Demo trade only after Issues #53 and #51 are repaired on a preview deployment. Capture Bybit, Dashboard, Active Trades, Journal, Performance and Control Center at matching timestamps.
-
-### Gate 1 — Safety before entry
-
-- Authoritative BDT-day Bybit net realized PnL including fees is visible.
-- A 5% daily loss triggers a persisted hard stop and blocks new entries.
-- Existing positions remain protected and reconciled.
-- Effective risk, limits and trade counts agree on every page.
-- Private WS/readiness state is truthful; unsafe identity capture blocks new execution.
-
-### Gate 2 — Order and fill identity
-
-- Journal reservation is created.
-- Bybit accepts the order.
-- Journal stores the same `orderId` / `orderLinkId`.
-- Fill stores the same `execId`, quantity, entry price and fee.
-
-**Fail immediately if an accepted trade still shows `Order ID: Unavailable`.**
-
-### Gate 3 — Native protection and partials
-
-- Stop Loss, TP1, TP2 and final target exist on Bybit with correct quantities.
-- TP1 closes approximately 50% and persists exact partial exit, fee and realized PnL.
-- Required break-even protection is visible on Bybit.
-- TP2 closes approximately 25%; Intraday trailing protection activates when required.
-- Final 25% closes and all surfaces converge to the same result.
-
-### Gate 4 — Accounting and performance truth
-
-- Exact exit, fees, realized PnL, close reason and source persist.
-- Unknown/pending/rejected rows stay outside win/loss and realized metrics.
-- Dashboard, Active Trades, Journal, Performance and Bybit agree.
-- Performance does not derive win rate, R, profit factor or drawdown from unknown outcomes.
-
-### Gate 5 — Refresh, restart and storage
-
-- Repeated browser refresh does not duplicate or erase lifecycle data.
-- Render restart and redeploy preserve Journal rows, identities, events, settings and risk state exactly once.
-- Closed rows do not reopen and no orphan native orders remain.
-- The runtime explicitly proves a durable primary database.
+| Order | Type | Work item | Status |
+|---:|---|---|---|
+| 1 | Product | Backtest/strategy truth | **Issue #59 CLAIMED / AUDIT STARTING** |
+| 2 | Safety | Authoritative daily-loss hard stop | **Issue #53 OPEN / AUTO EXECUTION BLOCKER** |
+| 3 | Safety/Data | Journal order/execution identity | **Issue #51 OPEN** |
+| 4 | Ready PR | Exact overlapping-trade PnL matching | **PR #48 NOT MERGED** |
+| 5 | Ready PR | Active/pending/stale separation | **PR #49 NOT MERGED** |
+| 6 | Ready PR | Authentication hardening | **PR #50 NOT MERGED** |
+| 7 | Runtime | Private WS/readiness truth | **Issue #54 OPEN** |
+| 8 | Configuration | Settings single source | **Issue #55 DEFERRED AFTER BACKTEST** |
+| 9 | Storage | Durable production database | **Issue #56 OPEN** |
+| 10 | Reporting | Reconciled-only performance metrics | **Issue #57 OPEN** |
+| 11 | Operations | Incident deduplication | **Issue #58 OPEN** |
 
 ---
 
-## After data integrity and safety are proven
+## Required live verification before Demo auto execution resumes
 
-Only then investigate the reported loss cluster:
+Use a controlled preview deployment only after Issues #53 and #51 are repaired.
 
-1. trade-by-trade net PnL sequence;
-2. strategy and trade-type attribution;
-3. cooldown and re-entry timing;
-4. fees versus gross outcome;
-5. market regime and signal quality;
-6. backtest/live-rule equivalence.
-
-Do not tune strategy rules from incomplete Journal statistics.
-
----
-
-## Lower-priority engineering backlog
-
-- Bybit history pagination and date-range guards.
-- Decimal-based financial persistence instead of binary Float.
-- Versioned Alembic migrations.
-- Multi-worker protection against duplicate bot loops.
-- Durable audit/outbox retry for external persistence.
-- Dependency pinning and cleanup of unused frontend packages.
-- Replace silent broad exception handling with auditable errors.
-- ACTIVE-signal Risk/Execution decision visibility (`EXEC-QUEUE-001`).
-- Historical backtesting only after runtime closure.
+- Authoritative BDT-day PnL including fees is visible and triggers the 5% stop.
+- Journal stores matching `orderId`, `orderLinkId`, `execId`, fills and fees.
+- SL/TP/partial-close/final-close evidence matches Bybit.
+- Dashboard, Active Trades, Journal and Performance agree.
+- Refresh/restart does not erase, duplicate or reopen trades.
+- Durable primary storage is proven.
+- Private WS degradation produces truthful readiness and safe fallback.
 
 ---
 
@@ -232,11 +256,10 @@ Do not tune strategy rules from incomplete Journal statistics.
 
 ```text
 DEMO BETA
-MAIN STABLE AT LAST MERGED FIX
-P0 SAFETY AND DATA-INTEGRITY BLOCKERS OPEN
-DEMO AUTO EXECUTION SHOULD REMAIN PAUSED UNTIL ISSUE #53 IS VERIFIED
-PRIVATE WS / READINESS DEGRADATION OPEN
-P0 PRs READY BUT NOT MERGED
-FULL BYBIT DEMO LIFECYCLE VERIFICATION PENDING
-LIVE-CAPITAL TRADING NOT APPROVED
+BACKTEST/STRATEGY TRUTH AUDIT IS THE ACTIVE PRODUCT TASK
+BACKTEST CORRECTNESS AND STRATEGY PROFITABILITY ARE NOT YET PROVEN
+DEMO AUTO EXECUTION SHOULD REMAIN PAUSED
+P0 SAFETY AND DATA-INTEGRITY BLOCKERS REMAIN OPEN
+OPEN PRs ARE NOT APPROVED FOR MERGE
+LIVE-CAPITAL TRADING IS NOT APPROVED
 ```
