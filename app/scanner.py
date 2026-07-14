@@ -78,7 +78,7 @@ def run_scan(client: BybitDemoClient, now: datetime | None = None) -> dict[str, 
         closed_5m = closed_candles(fetched.get("5m", []), interval_minutes=5, now=reference)
         closed_1m = closed_candles(fetched.get("1m", []), interval_minutes=1, now=reference)
 
-        scalping_trend = _profile_trend(closed_5m, interval_minutes=5, now=reference)
+        scalping_trend = _profile_trend(closed_15m, interval_minutes=15, now=reference)
         intraday_trend = _profile_trend(closed_1h, interval_minutes=60, now=reference)
 
         scalping_reason = _profile_rejection_reason(
@@ -185,7 +185,7 @@ def run_scan(client: BybitDemoClient, now: datetime | None = None) -> dict[str, 
                     "scanner_logic": {
                         "status": "eligible",
                         "direction": _approved_direction(scalping_trend),
-                        "reason": "scalping_5m_trend_eligible",
+                        "reason": "scalping_15m_trend_eligible",
                         "confidence_score": scalping_trend.get("strength"),
                     },
                     "setup_candles": closed_5m,
@@ -465,7 +465,7 @@ def _data_completeness(
 
 def _scalping_timeframes() -> dict[str, Any]:
     return {
-        "trend": "5m",
+        "trend": "15m",
         "setup": "5m",
         "trigger": "1m",
         "open_candle_confirmation": False,
