@@ -165,7 +165,15 @@ export default function App() {
     setMobileSidebarOpen(false);
   }, [activeTab]);
 
-  const logout = () => {
+  const logout = async () => {
+    const token = authToken;
+    if (token) {
+      try {
+        await api.logout(token);
+      } catch {
+        // A locally expired token may already be invalid server-side.
+      }
+    }
     localStorage.removeItem("scalp_token");
     setAuthToken(null);
     setSignals([]);

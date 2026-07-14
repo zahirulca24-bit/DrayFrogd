@@ -309,10 +309,13 @@ function toTradeHistoryEntry(trade: FinancialTrade): TradeHistoryEntry {
 
 export const api = {
   login: (username: string, password: string) =>
-    request<{ access_token: string; token_type: string }>("/login", {
+    request<{ access_token: string; token_type: string; expires_in: number }>("/login", {
       method: "POST",
       body: JSON.stringify({ username, password }),
     }),
+
+  logout: (token: string) =>
+    request<{ ok: boolean }>("/logout", { method: "POST" }, token),
 
   verifySession: (token: string) =>
     request<{ authenticated: boolean; username: string }>("/session/verify", {}, token),
