@@ -24,13 +24,20 @@ Issue: #59
 
 Backtest and strategy validity are the highest product-value priority. Settings single-source work is deferred until the strategy/backtest engine is proven useful and honest.
 
-This does not waive safety: Demo auto execution remains paused until Issue #53 and required execution-safety gates pass.
+No Product Owner instruction was given to stop, pause, start or resume Demo auto execution.
+
+## Correction recorded
+
+- The AI previously wrote an unauthorized `DEC-017` saying Demo auto execution was paused.
+- That entry is now `REJECTED / INVALID`.
+- No Render or bot stop action was performed by the AI.
+- Runtime start/stop/pause/resume remains Product Owner-controlled.
 
 ## Governance work completed
 
 - Project Control System created on PR #52.
 - README compacted and runtime blockers recorded.
-- DEC-016/DEC-017 lock product priority versus execution-safety priority.
+- DEC-016 locks backtest-first product priority.
 - Issue #59 created with audit, deterministic simulator and evaluation acceptance criteria.
 - `docs/BACKTEST_STRATEGY_PLAN.md` added.
 
@@ -40,14 +47,14 @@ This does not waive safety: Demo auto execution remains paused until Issue #53 a
 - PR #49 — active/pending/stale classification
 - PR #50 — authentication hardening
 
-## Critical execution blockers
+## Critical open safety issues
 
 1. Issue #53 — authoritative Bybit daily-loss hard stop
 2. Issue #51 — Journal order/execution identity persistence
 3. Issue #54 — Private WS degradation/readiness
 4. Issue #56 — Render storage durability
 
-These blockers prevent Demo auto execution approval but do not prevent offline backtest research/audit.
+These issues require repair and verification. They do not authorize an AI session to change the bot's runtime state.
 
 ## Exact next action
 
@@ -65,5 +72,5 @@ Audit actual `main` code for Issue #59:
 - Do not claim the backtest is correct because the UI renders.
 - Do not tune strategy parameters before live/backtest rule equivalence is proven.
 - Do not infer strategy profitability from incomplete live Journal data.
-- Do not resume Demo auto execution.
+- Do not change the bot's start/stop/pause/resume state without explicit Product Owner approval.
 - Do not merge any PR without explicit Product Owner approval.
