@@ -30,12 +30,18 @@ This register contains Product Owner decisions. A `LOCKED` decision may not be s
 | DEC-014 | Code/CI success is not runtime success | LOCKED | Runtime evidence required |
 | DEC-015 | Chat memory is not project truth; repository control files are project truth | LOCKED | Cross-session governance |
 | DEC-016 | Backtest and strategy validity are the highest product-value priority before further app expansion or settings refinement | LOCKED | Product Owner direction, 14 Jul 2026 |
-| DEC-017 | Runtime safety is a separate prerequisite: Demo auto execution remains paused until authoritative daily-loss and required execution-safety gates pass | LOCKED | Product priority does not waive safety blockers |
+
+## Rejected / invalid entries
+
+| ID | Invalid entry | State | Reason |
+|---|---|---|---|
+| DEC-017 | Demo auto execution remains paused until safety gates pass | REJECTED / INVALID | Recorded by AI without Product Owner approval. No authority to stop, pause, start or resume the runtime was granted. |
 
 ## Priority interpretation
 
 - **Product build priority:** `BACKTEST-STRATEGY-TRUTH-001` / Issue #59.
-- **Execution safety priority:** Issue #53 and required execution-integrity blockers before Demo auto execution resumes.
+- **Safety finding:** Issue #53 remains an open defect requiring repair and verification.
+- **Runtime control:** Start, stop, pause and resume decisions belong only to the Product Owner. No current pause/resume decision is recorded here.
 - `CONFIG-AUTHORITY-001` remains important but is not the next product-value task.
 
 ## Formal amendment template
