@@ -32,8 +32,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Apply deterministic patch
+      - name: Apply deterministic product patch
         run: python tools/apply_scalping_timeout_suppression.py
+
+      - name: Apply current-main test compatibility
+        run: python tools/apply_scalping_test_compat.py
 
       - name: Compile backend
         run: python -m compileall -q app tests
@@ -88,7 +91,7 @@ jobs:
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git rm -f tools/apply_scalping_timeout_suppression.py .github/workflows/scalping-timeout-suppression-verify.yml
+          git rm -f tools/apply_scalping_timeout_suppression.py tools/apply_scalping_test_compat.py .github/workflows/scalping-timeout-suppression-verify.yml
           git add app tests
           git commit -m 'Enforce 30-minute scalping timeout and 1-hour suppression'
           git push origin HEAD:fix/scalping-timeout-suppression
