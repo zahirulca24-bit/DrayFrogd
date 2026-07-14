@@ -233,7 +233,7 @@ def _select_primary_signals(results: list[dict[str, Any]]) -> list[dict[str, Any
 
     primary_signals: list[dict[str, Any]] = []
     for symbol in sorted(grouped):
-        candidates = sorted(grouped[symbol], key=_primary_sort_key)
+        candidates = sorted(grouped[symbol], key=_primary_candidate_sort_key)
         primary = candidates[0]
         primary["primary_signal"] = True
 
@@ -449,7 +449,7 @@ def _trend_block_reason(trend_state: str, direction: str) -> str:
     return "trend_not_aligned"
 
 
-def _primary_sort_key(item: dict[str, Any]) -> tuple[int, int, float, int, float, str, str]:
+def _primary_candidate_sort_key(item: dict[str, Any]) -> tuple[int, int, float, int, float, str, str]:
     state_priority = {SIGNAL_ACTIVE: 0, SIGNAL_NEAR_SETUP: 1}
     trade_type_priority = {"intraday": 0, "scalping": 1}
     return (
@@ -458,6 +458,19 @@ def _primary_sort_key(item: dict[str, Any]) -> tuple[int, int, float, int, float
         -float(item.get("signal_score") or 0.0),
         int(item.get("market_rank") or 9999),
         -_timestamp_value(item.get("detected_at")),
+        str(item.get("strategy_name") or ""),
+        str(item.get("signal_key") or ""),
+    )
+
+
+def _primary_sort_key(item: dict[str, Any]) -> tuple[int, float, int, float, str, str, str]:
+    state_priority = {SIGNAL_ACTIVE: 0, SIGNAL_NEAR_SETUP: 1}
+    return (
+        state_priority.get(str(item.get("signal_state") or ""), 9),
+        -float(item.get("signal_score") or 0.0),
+        int(item.get("market_rank") or 9999),
+        -_timestamp_value(item.get("detected_at")),
+        str(item.get("trade_type") or ""),
         str(item.get("strategy_name") or ""),
         str(item.get("signal_key") or ""),
     )

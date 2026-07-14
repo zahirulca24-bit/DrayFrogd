@@ -36,6 +36,18 @@ class ProfileSelectionPriorityTests(unittest.TestCase):
         intraday = next(item for item in result["results"] if item["trade_type"] == "intraday")
         self.assertEqual(intraday["signal_state"], SIGNAL_NEAR_SETUP)
 
+    def test_different_symbols_keep_score_based_global_ranking(self) -> None:
+        contexts = [self._context("ETHUSDT", "scalping"), self._context("BTCUSDT", "intraday")]
+        outputs = [
+            [self._signal("long", "active", confidence=60)],
+            [self._signal("long", "active", confidence=99)],
+        ]
+        with patch("app.signal_pipeline.evaluate_registered_strategies", side_effect=outputs):
+            result = evaluate_signal_contexts(contexts)
+
+        self.assertEqual([item["symbol"] for item in result["signals"]], ["ETHUSDT", "BTCUSDT"])
+        self.assertEqual([item["trade_type"] for item in result["signals"]], ["scalping", "intraday"])
+
     def test_opposite_active_profile_directions_block_execution(self) -> None:
         scalping = self._context("SOLUSDT", "scalping")
         scalping["trend"] = {"state": "DOWNTREND", "strength": 90.0, "reason": "test"}
