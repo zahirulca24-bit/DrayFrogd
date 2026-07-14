@@ -136,8 +136,9 @@ class SignalPipelineTests(unittest.TestCase):
         self.assertEqual(result["signal_state"], SIGNAL_INVALID)
         self.assertFalse(result["is_executable"])
 
-    def test_intraday_requires_two_r_minimum(self) -> None:
+    def test_intraday_profile_retargets_current_strategy_to_two_r(self) -> None:
         raw = self._raw_signal(status="active")
+        raw["take_profit"] = 101.5
         raw["risk_reward"] = 1.5
         result = normalize_strategy_result(
             symbol="BTCUSDT",
@@ -149,9 +150,49 @@ class SignalPipelineTests(unittest.TestCase):
             scanner_logic={"status": "active", "direction": "long"},
         )
 
-        self.assertEqual(result["signal_state"], SIGNAL_INVALID)
-        self.assertEqual(result["rejection_reason"], "risk_reward_below_trade_type_minimum")
-        self.assertFalse(result["is_executable"])
+        self.assertEqual(result["signal_state"], SIGNAL_ACTIVE)
+        self.assertTrue(result["is_executable"])
+        self.assertEqual(result["take_profit"], 102.0)
+        self.assertEqual(result["risk_reward"], 2.0)
+        self.assertEqual(result["strategy_take_profit"], 101.5)
+        self.assertEqual(result["strategy_risk_reward"], 1.5)
+        self.assertEqual(result["target_authority"], "trade_management_profile")
+
+    def test_scalping_profile_remains_one_point_five_r(self) -> None:
+        result = normalize_strategy_result(
+            symbol="BTCUSDT",
+            result=self._raw_signal(status="active"),
+            trade_type="scalping",
+            market_rank=1,
+            trend=self._trend("UPTREND"),
+            market_ranking={"score": 90.0, "components": {}},
+            scanner_logic={"status": "eligible", "direction": "long"},
+        )
+
+        self.assertEqual(result["signal_state"], SIGNAL_ACTIVE)
+        self.assertEqual(result["take_profit"], 101.5)
+        self.assertEqual(result["risk_reward"], 1.5)
+        self.assertEqual(result["strategy_take_profit"], 102.0)
+        self.assertEqual(result["strategy_risk_reward"], 2.0)
+
+    def test_intraday_short_profile_retargets_to_two_r(self) -> None:
+        raw = self._raw_signal(direction="short", status="active")
+        raw["take_profit"] = 98.5
+        raw["risk_reward"] = 1.5
+        result = normalize_strategy_result(
+            symbol="BTCUSDT",
+            result=raw,
+            trade_type="intraday",
+            market_rank=1,
+            trend=self._trend("DOWNTREND"),
+            market_ranking={"score": 90.0, "components": {}},
+            scanner_logic={"status": "active", "direction": "short"},
+        )
+
+        self.assertEqual(result["signal_state"], SIGNAL_ACTIVE)
+        self.assertTrue(result["is_executable"])
+        self.assertEqual(result["take_profit"], 98.0)
+        self.assertEqual(result["risk_reward"], 2.0)
 
     def test_expired_and_no_setup_results_are_not_kept_as_useful_signals(self) -> None:
         context = self._context("SOLUSDT", "scalping", 3)

@@ -12,6 +12,7 @@ from app.scanner_trend import (
     direction_allowed,
 )
 from app.strategy import evaluate_registered_strategies
+from app.trade_management_profiles import TRADE_MANAGEMENT_PROFILES, price_at_r
 
 
 VALID_TRADE_TYPES = {"scalping", "intraday"}
@@ -144,7 +145,10 @@ def normalize_strategy_result(
         "entry": result.get("entry"),
         "stop_loss": result.get("stop_loss"),
         "take_profit": result.get("take_profit"),
+        "strategy_take_profit": result.get("take_profit"),
         "risk_reward": result.get("risk_reward"),
+        "strategy_risk_reward": result.get("risk_reward"),
+        "target_authority": "strategy_output",
         "detected_at": result.get("detected_at"),
         "raw_status": original_status,
         "status": original_status,
@@ -182,6 +186,8 @@ def normalize_strategy_result(
         and normalized["signal_state"] in USEFUL_SIGNAL_STATES
     ):
         _apply_structure_gate(normalized, scanner_logic)
+
+    _apply_profile_target(normalized)
 
     geometry_valid = _valid_trade_geometry(normalized)
     if normalized["signal_state"] in USEFUL_SIGNAL_STATES and not geometry_valid:
@@ -342,6 +348,39 @@ def _normalize_trade_type(value: Any) -> str | None:
 def _normalize_direction(value: Any) -> str | None:
     normalized = str(value or "").strip().lower()
     return normalized if normalized in {"long", "short"} else None
+
+
+def _apply_profile_target(item: dict[str, Any]) -> None:
+    """Use the approved trade-management profile as canonical TP authority.
+
+    Strategies identify the setup, direction, entry and structural stop. The
+    selected Scalping/Intraday profile owns the executable reward target. Raw
+    strategy TP/RR values remain persisted separately for audit evidence.
+    """
+
+    if item.get("signal_state") not in USEFUL_SIGNAL_STATES:
+        return
+
+    trade_type = _normalize_trade_type(item.get("trade_type"))
+    direction = _normalize_direction(item.get("direction"))
+    entry = _number(item.get("entry"))
+    stop_loss = _number(item.get("stop_loss"))
+    if trade_type is None or direction is None or entry is None or stop_loss is None:
+        return
+    if direction == "long" and not stop_loss < entry:
+        return
+    if direction == "short" and not entry < stop_loss:
+        return
+
+    profile = TRADE_MANAGEMENT_PROFILES.get(trade_type) or {}
+    target_r = _number(profile.get("tp1_r"))
+    if target_r is None or target_r <= 0:
+        return
+
+    item["take_profit"] = price_at_r(entry, stop_loss, direction, target_r)
+    item["risk_reward"] = target_r
+    item["profile_target_r"] = target_r
+    item["target_authority"] = "trade_management_profile"
 
 
 def _valid_trade_geometry(item: dict[str, Any]) -> bool:
