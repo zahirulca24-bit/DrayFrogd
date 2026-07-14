@@ -26,8 +26,8 @@ replace_once(
 
 replace_once(
     "tests/test_strategy_persistence.py",
-    '            "strategy_name": "ema_pullback",\n            "direction": "long",',
-    '            "strategy_name": "ema_pullback",\n            "trade_type": "scalping",\n            "direction": "long",',
+    '        signal = {\n            "symbol": "BTCUSDT",\n            "strategy_name": "ema_pullback",\n            "direction": "long",',
+    '        signal = {\n            "symbol": "BTCUSDT",\n            "strategy_name": "ema_pullback",\n            "trade_type": "scalping",\n            "direction": "long",',
 )
 
 replace_once(
