@@ -31,10 +31,13 @@ function time(value?: string | null) {
 export default function SettingsBacktest({ authToken }: SettingsBacktestProps) {
   const [symbol, setSymbol] = useState("BTCUSDT");
   const [strategy, setStrategy] = useState("all");
+  const [tradeType, setTradeType] = useState<"scalping" | "intraday">("scalping");
   const [candleLimit, setCandleLimit] = useState("1000");
+  const [candleOffset, setCandleOffset] = useState("0");
   const [riskAmount, setRiskAmount] = useState("20");
   const [feeBps, setFeeBps] = useState("5.5");
   const [minRr, setMinRr] = useState("1.5");
+  const [maxHoldCandles, setMaxHoldCandles] = useState("240");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<BacktestResponse | null>(null);
@@ -50,10 +53,13 @@ export default function SettingsBacktest({ authToken }: SettingsBacktestProps) {
       const response = await api.runBacktest(authToken, {
         symbol: symbol.trim().toUpperCase(),
         strategy,
+        trade_type: tradeType,
         candle_limit: Number(candleLimit),
+        candle_offset: Number(candleOffset),
         risk_amount: Number(riskAmount),
         fee_bps: Number(feeBps),
         min_risk_reward: Number(minRr),
+        max_hold_candles: Number(maxHoldCandles),
       });
       if (!response.ok) {
         setError(response.error || "Backtest failed.");
@@ -81,7 +87,7 @@ export default function SettingsBacktest({ authToken }: SettingsBacktestProps) {
               <div>
                 <h1 className="text-xl font-bold text-white">Strategy Backtest Engine</h1>
                 <p className="mt-1 max-w-3xl text-xs leading-5 text-slate-500">
-                  Replays current strategy logic on recent Bybit 1m/5m candles. This is research-only: no order is submitted.
+                  Replays current strategy logic on Bybit candles. Scalping uses 5m/1m; Intraday uses 15m/5m. This is research-only: no order is submitted.
                 </p>
               </div>
             </div>
@@ -100,8 +106,25 @@ export default function SettingsBacktest({ authToken }: SettingsBacktestProps) {
           </button>
         </div>
 
-        <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-6">
+        <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <BacktestInput label="Symbol" value={symbol} onChange={setSymbol} />
+          <label className="space-y-2">
+            <span className="text-[10px] font-mono uppercase tracking-wider text-slate-500">Profile</span>
+            <select
+              value={tradeType}
+              onChange={(event) => {
+                const next = event.target.value as "scalping" | "intraday";
+                setTradeType(next);
+                setRiskAmount(next === "intraday" ? "50" : "20");
+                setMinRr(next === "intraday" ? "2.0" : "1.5");
+                setMaxHoldCandles(next === "intraday" ? "72" : "240");
+              }}
+              className="dashboard-input"
+            >
+              <option value="scalping">Scalping: 5m setup / 1m trigger</option>
+              <option value="intraday">Intraday: 15m setup / 5m trigger</option>
+            </select>
+          </label>
           <label className="space-y-2">
             <span className="text-[10px] font-mono uppercase tracking-wider text-slate-500">Strategy</span>
             <select value={strategy} onChange={(event) => setStrategy(event.target.value)} className="dashboard-input">
@@ -110,10 +133,15 @@ export default function SettingsBacktest({ authToken }: SettingsBacktestProps) {
               ))}
             </select>
           </label>
-          <BacktestInput label="1m Candles" value={candleLimit} onChange={setCandleLimit} type="number" />
+          <BacktestInput label="Trigger Candles" value={candleLimit} onChange={setCandleLimit} type="number" />
+          <BacktestInput label="Data Offset" value={candleOffset} onChange={setCandleOffset} type="number" />
           <BacktestInput label="Risk USDT" value={riskAmount} onChange={setRiskAmount} type="number" />
           <BacktestInput label="Fee bps/side" value={feeBps} onChange={setFeeBps} type="number" />
           <BacktestInput label="Min RR" value={minRr} onChange={setMinRr} type="number" />
+          <BacktestInput label="Max Hold Candles" value={maxHoldCandles} onChange={setMaxHoldCandles} type="number" />
+        </div>
+        <div className="mt-3 rounded-xl border border-slate-800 bg-[#0A0B0E] px-4 py-3 text-[11px] text-slate-400">
+          Data Offset moves the historical window backwards. Example: offset 500 skips the newest 500 trigger candles so you can tune older market sessions.
         </div>
       </section>
 
@@ -132,7 +160,8 @@ export default function SettingsBacktest({ authToken }: SettingsBacktestProps) {
           <Stat label="Profit Factor" value={summary.profit_factor === null ? "N/A" : number(summary.profit_factor)} />
           <Stat label="Max DD" value={money(summary.max_drawdown)} tone="bad" />
           <Stat label="Skipped" value={String(summary.skipped_signals)} />
-          <Stat label="Candles" value={`${result?.candles_1m || 0} / ${result?.candles_5m || 0}`} />
+          <Stat label="Candles" value={`${result?.candles_trigger || 0} / ${result?.candles_setup || 0}`} />
+          <Stat label="Profile" value={`${result?.trade_type || tradeType} ${result?.candle_offset ? `@-${result.candle_offset}` : ""}`} />
         </section>
       )}
 
@@ -153,6 +182,7 @@ export default function SettingsBacktest({ authToken }: SettingsBacktestProps) {
                   <th className="px-3 py-3">SL</th>
                   <th className="px-3 py-3">TP</th>
                   <th className="px-3 py-3">Result</th>
+                  <th className="px-3 py-3">Why</th>
                   <th className="px-3 py-3">Fees</th>
                   <th className="px-3 py-3 text-right">Net</th>
                 </tr>
@@ -203,6 +233,7 @@ function TradeRow({ trade }: { trade: BacktestTrade }) {
       <td className="px-3 py-3 font-mono text-rose-300">${trade.stop_loss}</td>
       <td className="px-3 py-3 font-mono text-emerald-300">${trade.take_profit}</td>
       <td className={won ? "px-3 py-3 font-semibold text-emerald-300" : "px-3 py-3 font-semibold text-rose-300"}>{trade.result.toUpperCase()}</td>
+      <td className="px-3 py-3 max-w-[260px] truncate text-[10px] text-slate-400" title={trade.diagnosis || trade.exit_reason || ""}>{trade.diagnosis || trade.exit_reason || "N/A"}</td>
       <td className="px-3 py-3 font-mono text-amber-300">{money(trade.fees)}</td>
       <td className={trade.net_pnl >= 0 ? "px-3 py-3 text-right font-mono text-emerald-300" : "px-3 py-3 text-right font-mono text-rose-300"}>{money(trade.net_pnl)}</td>
     </tr>

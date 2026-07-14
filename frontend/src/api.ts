@@ -383,10 +383,13 @@ export const api = {
   runBacktest: (token: string, payload: {
     symbol: string;
     strategy: string;
+    trade_type: "scalping" | "intraday";
     candle_limit: number;
+    candle_offset: number;
     risk_amount: number;
     fee_bps: number;
     min_risk_reward: number;
+    max_hold_candles: number;
   }) =>
     request<BacktestResponse>("/backtest/run", { method: "POST", body: JSON.stringify(payload) }, token),
 };

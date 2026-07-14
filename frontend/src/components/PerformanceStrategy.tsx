@@ -349,6 +349,7 @@ export default function PerformanceStrategy({ authToken, history }: PerformanceS
   const auditStrategies = strategyAudit?.ok ? strategyAudit.strategies : [];
   const auditSummary = strategyAudit?.ok ? strategyAudit.summary : null;
   const auditedTrades = strategyAudit?.ok ? strategyAudit.trades : [];
+  const auditedLosses = auditedTrades.filter((trade) => trade.pnl_known && trade.result === "loss");
 
   const healthCards = [
     {
@@ -527,7 +528,33 @@ export default function PerformanceStrategy({ authToken, history }: PerformanceS
 
       <div className="grid grid-cols-1 xl:grid-cols-[0.7fr_0.3fr] gap-6">
         <DataCard title="SL-Hit Analysis" icon={<ShieldAlert className="w-4 h-4 text-rose-400" />}>
-          {slAnalysis.length > 0 ? (
+          {auditedLosses.length > 0 ? (
+            <div className="space-y-3">
+              {auditedLosses.slice(0, 8).map((trade) => (
+                <div key={trade.journal_id || `${trade.symbol}-${trade.opened_at}`} className="rounded-xl border border-slate-800 bg-[#0A0B0E] p-4 text-xs">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <div className="font-semibold text-white">{trade.symbol} <span className="text-slate-500">/ {trade.strategy}</span></div>
+                      <div className="mt-1 text-[10px] font-mono text-slate-500">{trade.direction.toUpperCase()} · {trade.loss_diagnosis?.category || trade.sl_hit_reason || trade.close_reason || "LOSS_EXIT_UNCLASSIFIED"}</div>
+                    </div>
+                    <div className="text-right">
+                      <SourceBadge source={trade.pnl_source} />
+                      <div className="mt-2 font-mono text-rose-300">{formatMoney(trade.realized_pnl)}</div>
+                    </div>
+                  </div>
+                  <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-4">
+                    <MiniAuditCard label="Entry" value={formatMoney(trade.loss_diagnosis?.entry ?? trade.entry)} />
+                    <MiniAuditCard label="Stop" value={formatMoney(trade.loss_diagnosis?.stop_loss ?? trade.stop_loss ?? null)} tone="bad" />
+                    <MiniAuditCard label="Exit" value={formatMoney(trade.loss_diagnosis?.exit_price ?? trade.exit_price)} tone="bad" />
+                    <MiniAuditCard label="Exit vs SL" value={trade.loss_diagnosis?.exit_vs_sl == null ? "N/A" : trade.loss_diagnosis.exit_vs_sl.toFixed(6)} />
+                  </div>
+                  <div className="mt-3 rounded-lg border border-slate-900 bg-slate-950/60 px-3 py-2 text-[11px] leading-5 text-slate-400">
+                    {trade.loss_diagnosis?.detail || trade.audit_note || "Loss recorded, but no detailed diagnosis was available."}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : slAnalysis.length > 0 ? (
             <div className="space-y-3">
               {slAnalysis.map(([reason, count]) => (
                 <div key={reason} className="flex items-center justify-between rounded-xl border border-slate-800 bg-[#0A0B0E] p-3 text-xs">

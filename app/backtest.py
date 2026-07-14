@@ -13,32 +13,60 @@ def run_strategy_backtest(
     *,
     symbol: str,
     strategy: str = "all",
+    trade_type: str = "scalping",
     candle_limit: int = 1000,
+    candle_offset: int = 0,
     risk_amount: float = 20.0,
     fee_bps: float = 5.5,
     min_risk_reward: float = 1.5,
+    max_hold_candles: int = 240,
 ) -> dict[str, Any]:
     normalized_symbol = str(symbol or "").upper().strip()
     normalized_strategy = str(strategy or "all").lower().strip()
-    limit = max(260, min(int(candle_limit or 1000), 1000))
+    normalized_trade_type = str(trade_type or "scalping").lower().strip()
+    if normalized_trade_type not in {"scalping", "intraday"}:
+        return {"ok": False, "error": "trade_type must be scalping or intraday"}
+    profile = _profile_config(normalized_trade_type)
+    limit = max(260, min(int(candle_limit or 1000), 3000))
+    offset = max(0, min(int(candle_offset or 0), 5000))
     risk_usdt = max(float(risk_amount or 20.0), 1.0)
     fee_rate = max(float(fee_bps or 0.0), 0.0) / 10_000
+    hold_limit = max(5, min(int(max_hold_candles or profile["max_hold_candles"]), 2000))
 
-    ok_1m, candles_1m, error_1m = client.safe_fetch_recent_candles(normalized_symbol, interval="1", limit=limit)
-    if not ok_1m:
-        return {"ok": False, "error": error_1m or "1m candles unavailable"}
+    trigger_fetch_limit = min(5000, limit + offset)
+    ok_trigger, trigger_raw, trigger_error = client.safe_fetch_recent_candles(
+        normalized_symbol,
+        interval=profile["trigger_interval"],
+        limit=trigger_fetch_limit,
+    )
+    if not ok_trigger:
+        return {"ok": False, "error": trigger_error or f"{profile['trigger_interval']}m candles unavailable"}
+    candles_trigger = _window_with_offset(trigger_raw, limit=limit, offset=offset)
 
-    five_min_limit = max(260, min(1000, (limit // 5) + 260))
-    ok_5m, candles_5m, error_5m = client.safe_fetch_recent_candles(normalized_symbol, interval="5", limit=five_min_limit)
-    if not ok_5m:
-        return {"ok": False, "error": error_5m or "5m candles unavailable"}
+    setup_limit = max(260, min(3000, (limit // profile["setup_ratio"]) + offset + 260))
+    ok_setup, candles_setup, setup_error = client.safe_fetch_recent_candles(
+        normalized_symbol,
+        interval=profile["setup_interval"],
+        limit=setup_limit,
+    )
+    if not ok_setup:
+        return {"ok": False, "error": setup_error or f"{profile['setup_interval']}m candles unavailable"}
 
-    if len(candles_1m) < 80 or len(candles_5m) < 220:
+    trend_count = 0
+    if profile["trend_interval"]:
+        ok_trend, candles_trend, _trend_error = client.safe_fetch_recent_candles(
+            normalized_symbol,
+            interval=profile["trend_interval"],
+            limit=max(260, min(1000, (limit // profile["trend_ratio"]) + offset + 260)),
+        )
+        trend_count = len(candles_trend) if ok_trend else 0
+
+    if len(candles_trigger) < 80 or len(candles_setup) < 220:
         return {
             "ok": False,
             "error": "Not enough candle history for strategy warm-up",
-            "candles_1m": len(candles_1m),
-            "candles_5m": len(candles_5m),
+            "candles_trigger": len(candles_trigger),
+            "candles_setup": len(candles_setup),
         }
 
     trades: list[dict[str, Any]] = []
@@ -46,17 +74,17 @@ def run_strategy_backtest(
     skipped_signals = 0
     last_signal_key: str | None = None
     index = 40
-    while index < len(candles_1m) - 2:
-        now = _timestamp(candles_1m[index])
+    while index < len(candles_trigger) - 2:
+        now = _timestamp(candles_trigger[index])
         if now is None:
             index += 1
             continue
-        window_5m = [candle for candle in candles_5m if (_timestamp(candle) or now) <= now]
-        if len(window_5m) < 220:
+        window_setup = [candle for candle in candles_setup if (_timestamp(candle) or now) <= now]
+        if len(window_setup) < 220:
             index += 1
             continue
 
-        signal = _evaluate(normalized_strategy, normalized_symbol, window_5m, candles_1m[: index + 1], now)
+        signal = _evaluate(normalized_strategy, normalized_symbol, window_setup, candles_trigger[: index + 1], now)
         if str(signal.get("status") or "").lower() != "active":
             index += 1
             continue
@@ -80,10 +108,11 @@ def run_strategy_backtest(
 
         outcome = _simulate_trade(
             signal,
-            candles_1m,
+            candles_trigger,
             start_index=index + 1,
             risk_amount=risk_usdt,
             fee_rate=fee_rate,
+            max_hold_candles=hold_limit,
         )
         if outcome is None:
             skipped_signals += 1
@@ -104,11 +133,18 @@ def run_strategy_backtest(
         "ok": True,
         "symbol": normalized_symbol,
         "strategy": normalized_strategy,
-        "candles_1m": len(candles_1m),
-        "candles_5m": len(candles_5m),
+        "trade_type": normalized_trade_type,
+        "profile": profile,
+        "candles_1m": len(candles_trigger) if profile["trigger_interval"] == "1" else 0,
+        "candles_5m": len(candles_trigger) if profile["trigger_interval"] == "5" else len(candles_setup) if profile["setup_interval"] == "5" else 0,
+        "candles_trigger": len(candles_trigger),
+        "candles_setup": len(candles_setup),
+        "candles_trend": trend_count,
+        "candle_offset": offset,
         "risk_amount": risk_usdt,
         "fee_bps": fee_bps,
         "min_risk_reward": min_risk_reward,
+        "max_hold_candles": hold_limit,
         "summary": {
             "trades": len(trades),
             "wins": len(wins),
@@ -147,6 +183,7 @@ def _simulate_trade(
     start_index: int,
     risk_amount: float,
     fee_rate: float,
+    max_hold_candles: int,
 ) -> dict[str, Any] | None:
     direction = str(signal.get("direction") or "").lower()
     entry = _number(signal.get("entry"))
@@ -162,7 +199,8 @@ def _simulate_trade(
     quantity = risk_amount / risk_distance
     notional = entry * quantity
     fees = notional * fee_rate * 2
-    for exit_index in range(start_index, len(candles)):
+    max_exit_index = min(len(candles), start_index + max_hold_candles)
+    for exit_index in range(start_index, max_exit_index):
         candle = candles[exit_index]
         high = _number(candle.get("high"))
         low = _number(candle.get("low"))
@@ -193,6 +231,16 @@ def _simulate_trade(
             "take_profit": target,
             "exit_price": exit_price,
             "result": result,
+            "exit_reason": "stop_loss" if stop_hit else "take_profit",
+            "diagnosis": _backtest_diagnosis(
+                direction=direction,
+                stop_hit=stop_hit,
+                target_hit=target_hit,
+                candle=candle,
+                entry=entry,
+                stop=stop,
+                target=target,
+            ),
             "opened_at": signal.get("detected_at") or candles[start_index - 1].get("timestamp"),
             "closed_at": candle.get("timestamp"),
             "exit_index": exit_index,
@@ -204,6 +252,66 @@ def _simulate_trade(
             "pnl_r": net_pnl / risk_amount if risk_amount else 0.0,
         }
     return None
+
+
+def _profile_config(trade_type: str) -> dict[str, Any]:
+    if trade_type == "intraday":
+        return {
+            "trade_type": "intraday",
+            "label": "Intraday",
+            "trend_interval": "60",
+            "setup_interval": "15",
+            "trigger_interval": "5",
+            "setup_ratio": 3,
+            "trend_ratio": 12,
+            "default_risk_amount": 50.0,
+            "default_min_risk_reward": 2.0,
+            "max_hold_candles": 72,
+        }
+    return {
+        "trade_type": "scalping",
+        "label": "Scalping",
+        "trend_interval": None,
+        "setup_interval": "5",
+        "trigger_interval": "1",
+        "setup_ratio": 5,
+        "trend_ratio": 60,
+        "default_risk_amount": 20.0,
+        "default_min_risk_reward": 1.5,
+        "max_hold_candles": 240,
+    }
+
+
+def _window_with_offset(candles: list[dict[str, Any]], *, limit: int, offset: int) -> list[dict[str, Any]]:
+    if offset <= 0:
+        return candles[-limit:]
+    end = max(len(candles) - offset, 0)
+    start = max(end - limit, 0)
+    return candles[start:end]
+
+
+def _backtest_diagnosis(
+    *,
+    direction: str,
+    stop_hit: bool,
+    target_hit: bool,
+    candle: dict[str, Any],
+    entry: float,
+    stop: float,
+    target: float,
+) -> str:
+    if stop_hit and target_hit:
+        return "SL_AND_TP_SAME_CANDLE_CONSERVATIVE_SL_FIRST"
+    if stop_hit:
+        high = _number(candle.get("high"))
+        low = _number(candle.get("low"))
+        adverse = high if direction == "short" else low
+        return (
+            f"STOP_LEVEL_TOUCHED adverse={adverse} entry={entry} sl={stop} tp={target}"
+            if adverse is not None
+            else "STOP_LEVEL_TOUCHED"
+        )
+    return "TAKE_PROFIT_TOUCHED"
 
 
 def _timestamp(candle: dict[str, Any]) -> datetime | None:

@@ -383,8 +383,12 @@ export interface StrategyAuditTrade {
   opened_at: string | null;
   closed_at: string | null;
   entry: number | null;
+  stop_loss?: number | null;
+  take_profit?: number | null;
   exit_price: number | null;
   quantity: number | null;
+  close_reason?: string | null;
+  sl_hit_reason?: string | null;
   realized_pnl: number | null;
   fees: number | null;
   result: "profit" | "loss" | "flat" | "unknown";
@@ -392,6 +396,17 @@ export interface StrategyAuditTrade {
   pnl_known: boolean;
   audit_note: string | null;
   ledger_record_count: number;
+  loss_diagnosis?: {
+    category: string;
+    detail: string;
+    distance_to_sl: number | null;
+    exit_vs_sl: number | null;
+    adverse_move: number | null;
+    entry: number | null;
+    stop_loss: number | null;
+    take_profit: number | null;
+    exit_price: number | null;
+  } | null;
 }
 
 export interface StrategyAuditResponse {
@@ -547,6 +562,8 @@ export interface BacktestTrade {
   take_profit: number;
   exit_price: number;
   result: "win" | "loss";
+  exit_reason?: "stop_loss" | "take_profit";
+  diagnosis?: string;
   opened_at: string;
   closed_at: string;
   risk_reward: number;
@@ -562,11 +579,23 @@ export interface BacktestResponse {
   error?: string;
   symbol?: string;
   strategy?: string;
+  trade_type?: "scalping" | "intraday";
+  profile?: {
+    label: string;
+    trend_interval: string | null;
+    setup_interval: string;
+    trigger_interval: string;
+  };
   candles_1m?: number;
   candles_5m?: number;
+  candles_trigger?: number;
+  candles_setup?: number;
+  candles_trend?: number;
+  candle_offset?: number;
   risk_amount?: number;
   fee_bps?: number;
   min_risk_reward?: number;
+  max_hold_candles?: number;
   summary?: {
     trades: number;
     wins: number;

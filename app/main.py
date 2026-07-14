@@ -249,10 +249,13 @@ def run_backtest(payload: BacktestRequest, _: dict = Depends(require_authenticat
         client,
         symbol=payload.symbol,
         strategy=payload.strategy,
+        trade_type=payload.trade_type,
         candle_limit=payload.candle_limit,
+        candle_offset=payload.candle_offset,
         risk_amount=payload.risk_amount,
         fee_bps=payload.fee_bps,
         min_risk_reward=payload.min_risk_reward,
+        max_hold_candles=payload.max_hold_candles,
     )
 
 

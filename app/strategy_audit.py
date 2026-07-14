@@ -110,6 +110,7 @@ def build_strategy_audit(
                 )
 
         rows.append(row)
+        row["loss_diagnosis"] = _loss_diagnosis(row)
 
     strategies = _summarize_strategies(rows)
     known_rows = [row for row in rows if row["pnl_known"]]
@@ -201,8 +202,12 @@ def _row_from_trade(trade: dict[str, Any]) -> dict[str, Any]:
         "opened_at": trade.get("opened_at") or trade.get("detected_at"),
         "closed_at": trade.get("closed_at"),
         "entry": _number(trade.get("entry")),
+        "stop_loss": _number(trade.get("stop_loss")),
+        "take_profit": _number(trade.get("take_profit")),
         "exit_price": _number(trade.get("exit_price")),
         "quantity": _number(trade.get("quantity")),
+        "close_reason": trade.get("close_reason"),
+        "sl_hit_reason": trade.get("sl_hit_reason"),
         "realized_pnl": None,
         "fees": None,
         "result": "unknown",
@@ -210,6 +215,58 @@ def _row_from_trade(trade: dict[str, Any]) -> dict[str, Any]:
         "pnl_known": False,
         "audit_note": None,
         "ledger_record_count": 0,
+    }
+
+
+def _loss_diagnosis(row: dict[str, Any]) -> dict[str, Any] | None:
+    if row.get("result") != "loss":
+        return None
+    entry = _number(row.get("entry"))
+    stop = _number(row.get("stop_loss"))
+    exit_price = _number(row.get("exit_price"))
+    take_profit = _number(row.get("take_profit"))
+    direction = str(row.get("direction") or "").lower()
+    reason = str(row.get("sl_hit_reason") or row.get("close_reason") or "").upper().strip()
+
+    if entry is None or stop is None:
+        return {
+            "category": reason or "LOSS_WITH_INCOMPLETE_LEVELS",
+            "detail": "Entry/stop data missing; cannot measure stop distance.",
+            "distance_to_sl": None,
+            "exit_vs_sl": None,
+        }
+
+    risk = abs(entry - stop)
+    exit_vs_sl = abs(exit_price - stop) if exit_price is not None else None
+    near_sl = exit_vs_sl is not None and risk > 0 and exit_vs_sl <= max(risk * 0.10, abs(stop) * 0.0005)
+
+    if near_sl:
+        category = "STOP_LOSS_LEVEL_HIT"
+        detail = "Exit price is close to the planned stop-loss."
+    elif reason:
+        category = reason
+        detail = "Loss came from exchange/journal close reason, not a confirmed stop-price match."
+    else:
+        category = "LOSS_EXIT_UNCLASSIFIED"
+        detail = "Ledger showed negative PnL but no specific stop-loss reason was recorded."
+
+    if direction == "long" and exit_price is not None:
+        adverse_move = entry - exit_price
+    elif direction == "short" and exit_price is not None:
+        adverse_move = exit_price - entry
+    else:
+        adverse_move = None
+
+    return {
+        "category": category,
+        "detail": detail,
+        "distance_to_sl": risk,
+        "exit_vs_sl": exit_vs_sl,
+        "adverse_move": adverse_move,
+        "entry": entry,
+        "stop_loss": stop,
+        "take_profit": take_profit,
+        "exit_price": exit_price,
     }
 
 

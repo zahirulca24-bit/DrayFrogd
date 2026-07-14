@@ -71,7 +71,10 @@ class BotConfigRequest(BaseModel):
 class BacktestRequest(BaseModel):
     symbol: str = "BTCUSDT"
     strategy: str = "all"
+    trade_type: str = "scalping"
     candle_limit: int = 1000
+    candle_offset: int = 0
     risk_amount: float = 20.0
     fee_bps: float = 5.5
     min_risk_reward: float = 1.5
+    max_hold_candles: int = 240
