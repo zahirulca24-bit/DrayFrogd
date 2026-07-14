@@ -9,6 +9,7 @@ from app.exchange import BybitClient
 
 SIGNAL_MAX_AGE_MINUTES = 10
 DEFAULT_MIN_NOTIONAL = 5.0
+DEFAULT_FEE_BPS_PER_SIDE = 5.5
 
 
 def calculate_position_size(
@@ -70,7 +71,16 @@ def calculate_position_size(
     if not tick_size:
         return _reject("Symbol tickSize is unavailable")
 
-    raw_quantity = target_risk_amount / sl_distance
+    fee_bps_per_side = _non_negative_float(settings.get("fee_bps_per_side"))
+    if fee_bps_per_side is None:
+        fee_bps_per_side = DEFAULT_FEE_BPS_PER_SIDE
+    fee_rate = fee_bps_per_side / 10_000
+    estimated_fee_per_unit = (entry + stop_loss) * fee_rate
+    risk_per_unit_with_fees = sl_distance + estimated_fee_per_unit
+    if risk_per_unit_with_fees <= 0 or not isfinite(risk_per_unit_with_fees):
+        return _reject("Position risk including fees is invalid")
+
+    raw_quantity = target_risk_amount / risk_per_unit_with_fees
     normalized_quantity = client.normalize_quantity(raw_quantity, str(qty_step))
     quantity = _positive_float(normalized_quantity)
     if quantity is None:
@@ -93,11 +103,15 @@ def calculate_position_size(
         if notional < min_notional:
             return _reject("Minimum notional cannot be satisfied with symbol precision")
 
-    actual_risk_amount = quantity * sl_distance
-    if actual_risk_amount <= 0 or not isfinite(actual_risk_amount):
+    price_risk_amount = quantity * sl_distance
+    estimated_open_fee = quantity * entry * fee_rate
+    estimated_stop_fee = quantity * stop_loss * fee_rate
+    estimated_round_trip_fees = estimated_open_fee + estimated_stop_fee
+    actual_risk_amount = price_risk_amount + estimated_round_trip_fees
+    if price_risk_amount <= 0 or actual_risk_amount <= 0 or not isfinite(actual_risk_amount):
         return _reject("Position risk is invalid")
     if actual_risk_amount > target_risk_amount * 1.001:
-        return _reject("Minimum quantity exceeds configured fixed USDT risk")
+        return _reject("Minimum quantity exceeds configured fixed USDT risk after fees")
 
     existing_margin = _current_margin(active_trades, positions, leverage_cap)
     max_allowed_margin = equity * exposure_cap
@@ -154,6 +168,12 @@ def calculate_position_size(
         "sl_distance": sl_distance,
         "risk_percent": actual_risk_amount / equity,
         "risk_amount": actual_risk_amount,
+        "price_risk_amount": price_risk_amount,
+        "estimated_open_fee": estimated_open_fee,
+        "estimated_stop_fee": estimated_stop_fee,
+        "estimated_round_trip_fees": estimated_round_trip_fees,
+        "fee_bps_per_side": fee_bps_per_side,
+        "risk_per_unit_with_fees": risk_per_unit_with_fees,
         "target_risk_amount": target_risk_amount,
         "risk_mode": "fixed_usdt" if fixed_risk_mode else "legacy_percent",
         "notional": notional,
@@ -331,6 +351,16 @@ def _positive_float(value: Any) -> float | None:
     except (TypeError, ValueError):
         return None
     if not isfinite(numeric) or numeric <= 0:
+        return None
+    return numeric
+
+
+def _non_negative_float(value: Any) -> float | None:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not isfinite(numeric) or numeric < 0:
         return None
     return numeric
 
