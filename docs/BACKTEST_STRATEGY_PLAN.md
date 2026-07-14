@@ -4,7 +4,7 @@
 
 Backtest and strategy validity are the highest product-value priority. Settings consolidation and other UI refinements follow after the strategy/backtest engine is proven trustworthy.
 
-Runtime safety remains separate: Demo auto execution stays paused until the authoritative daily-loss circuit and required execution safety are verified.
+Runtime safety findings remain separate. This plan does not authorize any change to the bot's start, stop, pause or resume state; those actions require explicit Product Owner approval.
 
 ## Active task
 
