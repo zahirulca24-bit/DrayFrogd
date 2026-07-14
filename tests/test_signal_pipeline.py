@@ -33,7 +33,7 @@ class SignalPipelineTests(unittest.TestCase):
                     trend=self._trend("UPTREND"),
                     market_ranking={"score": 90.0, "components": {}},
                     scanner_logic={"status": "eligible", "direction": "long"},
-                    timeframes={"trend": "5m", "setup": "5m", "trigger": "1m"},
+                    timeframes={"trend": "15m", "setup": "5m", "trigger": "1m"},
                 )
                 self.assertEqual(result["signal_state"], expected)
 
@@ -54,11 +54,11 @@ class SignalPipelineTests(unittest.TestCase):
         self.assertEqual(len(result["primary_signals"]), 1)
         primary = result["signals"][0]
         self.assertEqual(primary["symbol"], "BTCUSDT")
-        self.assertEqual(primary["strategy_name"], "breakout")
-        self.assertEqual(primary["trade_type"], "scalping")
+        self.assertEqual(primary["strategy_name"], "ema_pullback")
+        self.assertEqual(primary["trade_type"], "intraday")
         self.assertTrue(primary["primary_signal"])
         self.assertEqual(primary["confirmation_count"], 1)
-        self.assertEqual(primary["confirmations"][0]["strategy_name"], "ema_pullback")
+        self.assertEqual(primary["confirmations"][0]["strategy_name"], "breakout")
 
     def test_active_beats_near_setup_even_when_near_has_higher_confidence(self) -> None:
         context = self._context("BTCUSDT", "scalping", 1)
@@ -192,7 +192,7 @@ class SignalPipelineTests(unittest.TestCase):
     @staticmethod
     def _context(symbol: str, trade_type: str, market_rank: int) -> dict:
         timeframes = (
-            {"trend": "5m", "setup": "5m", "trigger": "1m"}
+            {"trend": "15m", "setup": "5m", "trigger": "1m"}
             if trade_type == "scalping"
             else {"trend": "1h", "setup": "15m", "trigger": "5m"}
         )

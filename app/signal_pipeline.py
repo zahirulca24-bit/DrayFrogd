@@ -49,6 +49,7 @@ _INVALID_REASONS = {
     "trend_insufficient_data",
     "trend_stale_data",
     "trend_not_aligned",
+    "profile_direction_conflict",
 }
 
 
@@ -90,6 +91,7 @@ def evaluate_signal_contexts(contexts: list[dict[str, Any]]) -> dict[str, Any]:
                 )
             )
 
+    _invalidate_cross_profile_direction_conflicts(results)
     primary_signals = _select_primary_signals(results)
     active_signals = [item for item in primary_signals if item.get("signal_state") == SIGNAL_ACTIVE]
     monitoring_signals = [item for item in primary_signals if item.get("signal_state") == SIGNAL_NEAR_SETUP]
@@ -197,6 +199,29 @@ def normalize_strategy_result(
     return normalized
 
 
+def _invalidate_cross_profile_direction_conflicts(results: list[dict[str, Any]]) -> None:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for result in results:
+        if result.get("signal_state") != SIGNAL_ACTIVE:
+            continue
+        trade_type = _normalize_trade_type(result.get("trade_type"))
+        direction = _normalize_direction(result.get("direction"))
+        if trade_type is None or direction is None:
+            continue
+        grouped.setdefault(str(result.get("symbol") or ""), []).append(result)
+
+    for symbol_results in grouped.values():
+        trade_types = {str(item.get("trade_type") or "") for item in symbol_results}
+        directions = {str(item.get("direction") or "") for item in symbol_results}
+        if not {"scalping", "intraday"}.issubset(trade_types) or len(directions) <= 1:
+            continue
+        for item in symbol_results:
+            _set_signal_state(item, SIGNAL_INVALID, "profile_direction_conflict")
+            item["is_executable"] = False
+            item["monitor_only"] = False
+            item["signal_score"] = _signal_score(item)
+
+
 def _select_primary_signals(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
     grouped: dict[str, list[dict[str, Any]]] = {}
     for result in results:
@@ -208,7 +233,7 @@ def _select_primary_signals(results: list[dict[str, Any]]) -> list[dict[str, Any
 
     primary_signals: list[dict[str, Any]] = []
     for symbol in sorted(grouped):
-        candidates = sorted(grouped[symbol], key=_primary_sort_key)
+        candidates = sorted(grouped[symbol], key=_primary_candidate_sort_key)
         primary = candidates[0]
         primary["primary_signal"] = True
 
@@ -422,6 +447,20 @@ def _trend_block_reason(trend_state: str, direction: str) -> str:
     if trend_state == TREND_DOWN and direction.lower() != "short":
         return "trend_conflict_downtrend_short_only"
     return "trend_not_aligned"
+
+
+def _primary_candidate_sort_key(item: dict[str, Any]) -> tuple[int, int, float, int, float, str, str]:
+    state_priority = {SIGNAL_ACTIVE: 0, SIGNAL_NEAR_SETUP: 1}
+    trade_type_priority = {"intraday": 0, "scalping": 1}
+    return (
+        state_priority.get(str(item.get("signal_state") or ""), 9),
+        trade_type_priority.get(str(item.get("trade_type") or ""), 9),
+        -float(item.get("signal_score") or 0.0),
+        int(item.get("market_rank") or 9999),
+        -_timestamp_value(item.get("detected_at")),
+        str(item.get("strategy_name") or ""),
+        str(item.get("signal_key") or ""),
+    )
 
 
 def _primary_sort_key(item: dict[str, Any]) -> tuple[int, float, int, float, str, str, str]:

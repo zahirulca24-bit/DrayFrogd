@@ -98,6 +98,7 @@ class ScannerIntegrationTests(unittest.TestCase):
 
         self.assertTrue(result["ok"])
         self.assertEqual([call[1] for call in client.calls], ["60", "15", "5", "1"])
+        self.assertEqual(result["timeframes"]["scalping"]["trend"], "15m")
         self.assertEqual(result["timeframes"]["scalping"]["setup"], "5m")
         self.assertEqual(result["timeframes"]["scalping"]["trigger"], "1m")
         self.assertEqual(result["timeframes"]["intraday"]["trend"], "1h")
