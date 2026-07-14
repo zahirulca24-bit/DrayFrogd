@@ -35,12 +35,18 @@ Every project claim must use an evidence level. New evidence supersedes older ev
 | EVD-015 | Exact PnL matching branch tests passed | TEST CONFIRMED | PR #48 | Not runtime-verified and not merged |
 | EVD-016 | State classification branch tests passed | TEST CONFIRMED | PR #49 | Not runtime-verified and not merged |
 | EVD-017 | Authentication hardening branch tests/build passed | TEST CONFIRMED | PR #50 | Not runtime-verified and not merged |
+| EVD-018 | A Strategy Backtest Engine UI is deployed with symbol, strategy, candle-count, risk, fee and RR controls | RUNTIME SCREENSHOT CONFIRMED | Settings screenshot, 14 Jul 2026 | Proves UI/endpoint availability only |
+| EVD-019 | Backtest/live strategy equivalence, no-look-ahead correctness and deterministic simulation | NOT TESTED | Issue #59 opened | Strategy validity cannot currently be claimed |
+| EVD-020 | Product Owner made backtest and strategy validity the highest product-value priority | OWNER DECISION CONFIRMED | DEC-016, 14 Jul 2026 | Settings consolidation is deferred until after backtest audit |
 
 ## Prohibited conclusions
 
 The current evidence does **not** prove:
 
-- that the trading strategy itself caused every loss;
+- that the trading strategy itself caused every live loss;
+- that the deployed backtest is correct because its page renders;
+- that backtest results use the exact live strategy implementation;
+- that a short profitable backtest proves strategy robustness;
 - that a missing Journal order ID means Bybit rejected the trade;
 - that a connected badge proves full lifecycle correctness;
 - that a passing CI suite proves Render runtime correctness;
