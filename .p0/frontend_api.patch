@@ -2,7 +2,7 @@ diff --git a/frontend/src/api.ts b/frontend/src/api.ts
 index b056b0b..a19a0de 100644
 --- a/frontend/src/api.ts
 +++ b/frontend/src/api.ts
-@@ -309,11 +309,14 @@ function toTradeHistoryEntry(trade: FinancialTrade): TradeHistoryEntry {
+@@ -309,10 +309,13 @@ function toTradeHistoryEntry(trade: FinancialTrade): TradeHistoryEntry {
  
  export const api = {
    login: (username: string, password: string) =>
