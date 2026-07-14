@@ -1,0 +1,12 @@
+diff --git a/app/schemas.py b/app/schemas.py
+index c0c790f..d4aa6d5 100644
+--- a/app/schemas.py
++++ b/app/schemas.py
+@@ -9,6 +9,7 @@ class LoginRequest(BaseModel):
+ class TokenResponse(BaseModel):
+     access_token: str
+     token_type: str = "bearer"
++    expires_in: int
+ 
+ 
+ class SessionVerifyResponse(BaseModel):
