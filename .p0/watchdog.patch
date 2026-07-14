@@ -1,0 +1,22 @@
+diff --git a/app/watchdog.py b/app/watchdog.py
+index faa33a7..e311c58 100644
+--- a/app/watchdog.py
++++ b/app/watchdog.py
+@@ -7,7 +7,7 @@ from sqlalchemy import text
+ from app.auth import is_auth_configured
+ from app.bot_controls import can_execute, get_execution_mode
+ from app.database import SessionLocal
+-from app.execution import get_active_trades
++from app.execution import get_operator_active_trades
+ from app.exchange import get_exchange_client
+ from app.journal import get_bot_events, get_trade_history
+ from app.readiness import get_readiness_status
+@@ -23,7 +23,7 @@ def get_watchdog_snapshot(worker_running: bool) -> dict[str, Any]:
+     execution_allowed, execution_reason = can_execute()
+     scanner_results = get_latest_signals()
+     active_signals = get_active_signals()
+-    active_trades = get_active_trades()
++    active_trades = get_operator_active_trades()
+     trade_history = get_trade_history()
+     bot_events = get_bot_events(100)
+     database_ok = _database_ok()
