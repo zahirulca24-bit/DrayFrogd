@@ -6,6 +6,7 @@ import {
   CanonicalSignalState,
   fetchSignalTruth,
   runSignalTruthScan,
+  TruthModeAudit,
   SignalTruthPayload,
   TruthSignal,
 } from "../signalTruth";
@@ -254,6 +255,12 @@ export default function SignalEngine(props: SignalEngineProps) {
             Pre-strategy Sideways and stale rejection totals are shown as N/A until Run Scan returns the full scanner summary.
           </p>
         )}
+
+        <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
+          <ModeAuditCard label="Scalping Mode" audit={summary?.modeAudit.scalping} />
+          <ModeAuditCard label="Intraday Mode" audit={summary?.modeAudit.intraday} />
+          <ModeAuditCard label="Unknown Mode" audit={summary?.modeAudit.unknown} />
+        </div>
       </section>
 
       {(truthError || marketError) && (
@@ -352,6 +359,38 @@ function SummaryBadge({
     <div className={`rounded-xl border px-3 py-3 ${toneClass}`}>
       <div className="text-[9px] font-mono uppercase tracking-wider">{label}</div>
       <div className="mt-2 text-lg font-semibold">{value}</div>
+    </div>
+  );
+}
+
+function ModeAuditCard({ label, audit }: { label: string; audit?: TruthModeAudit }) {
+  const topReason = audit?.topRejectionReason || (audit?.checks ? "No rejection reason" : "No checks");
+  return (
+    <div className="rounded-xl border border-slate-800 bg-[#0A0B0E] p-3">
+      <div className="flex items-center justify-between gap-3">
+        <div className="text-[10px] font-mono uppercase tracking-wider text-slate-500">{label}</div>
+        <div className="rounded-lg border border-slate-800 px-2 py-1 text-[10px] font-mono text-slate-400">
+          {audit?.checks ?? 0} checks
+        </div>
+      </div>
+      <div className="mt-3 grid grid-cols-4 gap-2 text-center text-[10px] font-mono">
+        <ModeCount label="Active" value={audit?.active ?? 0} tone="text-emerald-300" />
+        <ModeCount label="Near" value={audit?.nearSetup ?? 0} tone="text-amber-300" />
+        <ModeCount label="Invalid" value={audit?.invalid ?? 0} tone="text-rose-300" />
+        <ModeCount label="No setup" value={audit?.noSetup ?? 0} tone="text-slate-300" />
+      </div>
+      <div className="mt-3 truncate rounded-lg border border-slate-900 bg-slate-950/60 px-3 py-2 text-[10px] text-slate-500" title={topReason}>
+        Top reason: <span className="text-slate-300">{topReason}</span>
+      </div>
+    </div>
+  );
+}
+
+function ModeCount({ label, value, tone }: { label: string; value: number; tone: string }) {
+  return (
+    <div className="rounded-lg border border-slate-900 bg-slate-950/60 px-2 py-2">
+      <div className={`text-sm font-semibold ${tone}`}>{value}</div>
+      <div className="mt-1 text-[8px] uppercase tracking-wider text-slate-600">{label}</div>
     </div>
   );
 }

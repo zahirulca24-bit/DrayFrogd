@@ -51,6 +51,16 @@ export interface TruthSummary {
   downtrendProfiles: number;
   sidewaysRejectedProfiles: number | null;
   insufficientOrStaleProfiles: number | null;
+  modeAudit: Record<"scalping" | "intraday" | "unknown", TruthModeAudit>;
+}
+
+export interface TruthModeAudit {
+  checks: number;
+  active: number;
+  nearSetup: number;
+  invalid: number;
+  noSetup: number;
+  topRejectionReason: string | null;
 }
 
 export interface SignalTruthPayload {
@@ -239,6 +249,52 @@ function summarize(
     downtrendProfiles,
     sidewaysRejectedProfiles,
     insufficientOrStaleProfiles,
+    modeAudit: summarizeModeAudit(results),
+  };
+}
+
+function summarizeModeAudit(results: TruthSignal[]): TruthSummary["modeAudit"] {
+  const audit: TruthSummary["modeAudit"] = {
+    scalping: emptyModeAudit(),
+    intraday: emptyModeAudit(),
+    unknown: emptyModeAudit(),
+  };
+  const rejectionCounts: Record<keyof TruthSummary["modeAudit"], Map<string, number>> = {
+    scalping: new Map(),
+    intraday: new Map(),
+    unknown: new Map(),
+  };
+
+  results.forEach((signal) => {
+    const key = signal.tradeType || "unknown";
+    const item = audit[key];
+    item.checks += 1;
+    if (signal.signalState === "ACTIVE") item.active += 1;
+    if (signal.signalState === "NEAR_SETUP") item.nearSetup += 1;
+    if (signal.signalState === "INVALID") item.invalid += 1;
+    if (signal.signalState === "NO_SETUP") item.noSetup += 1;
+    if (signal.rejectionReason) {
+      const counts = rejectionCounts[key];
+      counts.set(signal.rejectionReason, (counts.get(signal.rejectionReason) || 0) + 1);
+    }
+  });
+
+  (Object.keys(audit) as Array<keyof TruthSummary["modeAudit"]>).forEach((key) => {
+    const top = [...rejectionCounts[key].entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0];
+    audit[key].topRejectionReason = top?.[0] || null;
+  });
+
+  return audit;
+}
+
+function emptyModeAudit(): TruthModeAudit {
+  return {
+    checks: 0,
+    active: 0,
+    nearSetup: 0,
+    invalid: 0,
+    noSetup: 0,
+    topRejectionReason: null,
   };
 }
 

@@ -47,6 +47,8 @@ def build_profile_management_state(
     observed_entry_fee: float = 0.0,
 ) -> dict[str, Any]:
     normalized_type = normalize_trade_type(trade_type)
+    if normalized_type is None:
+        raise ValueError("trade_type must be scalping or intraday")
     profile = TRADE_MANAGEMENT_PROFILES[normalized_type]
     risk = abs(float(entry) - float(stop_loss))
     qty = max(float(quantity), 0.0)
@@ -105,12 +107,12 @@ def extract_observed_entry_fee(trade: dict[str, Any]) -> float:
     return 0.0
 
 
-def normalize_trade_type(value: Any) -> str:
+def normalize_trade_type(value: Any) -> str | None:
     normalized = str(value or "").lower().strip()
-    return normalized if normalized in TRADE_MANAGEMENT_PROFILES else "scalping"
+    return normalized if normalized in TRADE_MANAGEMENT_PROFILES else None
 
 
-def trade_type_from_trade(trade: dict[str, Any], management: dict[str, Any] | None = None) -> str:
+def trade_type_from_trade(trade: dict[str, Any], management: dict[str, Any] | None = None) -> str | None:
     state = management or _management_state(trade)
     explicit = state.get("trade_type")
     if explicit in TRADE_MANAGEMENT_PROFILES:

@@ -7,7 +7,9 @@ from app.trade_management_profiles import (
     build_profile_management_state,
     is_scalping_management,
     max_hold_seconds,
+    normalize_trade_type,
     post_tp2_stop,
+    trade_type_from_trade,
     trailing_enabled,
 )
 
@@ -80,6 +82,19 @@ class TradeManagementProfileTests(unittest.TestCase):
 
         self.assertEqual(management["break_even_price"], 100.0)
         self.assertEqual(management["fee_buffer_source"], "entry_fee_unavailable")
+
+    def test_missing_trade_type_does_not_default_to_scalping(self) -> None:
+        self.assertIsNone(normalize_trade_type(None))
+        self.assertIsNone(trade_type_from_trade({"strategy": "ema_pullback"}))
+        with self.assertRaises(ValueError):
+            build_profile_management_state(
+                entry=100.0,
+                stop_loss=98.0,
+                take_profit=103.0,
+                quantity=10.0,
+                direction="long",
+                trade_type=None,
+            )
 
 
 if __name__ == "__main__":

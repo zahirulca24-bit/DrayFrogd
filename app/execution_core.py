@@ -701,7 +701,7 @@ def _build_management_state(
         take_profit=float(take_profit),
         quantity=qty_value,
         direction=str(direction),
-        trade_type=str(trade_type or "scalping"),
+        trade_type=trade_type,
     )
     return {
         **management,

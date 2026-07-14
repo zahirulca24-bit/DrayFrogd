@@ -318,7 +318,7 @@ def execute_signal(client: BybitClient, signal: dict[str, Any], auto_triggered: 
         take_profit=float(execution_signal["take_profit"]),
         quantity=actual_quantity,
         direction=execution_signal["direction"],
-        trade_type=str(validation.get("trade_type") or "scalping"),
+        trade_type=validation.get("trade_type"),
         observed_entry_fee=extract_observed_entry_fee(provisional_trade_for_fee),
     )
     management["last_state_change"] = _utc_now_iso()

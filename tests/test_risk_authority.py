@@ -99,10 +99,11 @@ class RiskAuthorityTests(unittest.TestCase):
         self.assertEqual(loss["effective_risk_pool"], 30.0)
         self.assertEqual(loss["available_risk"], 20.0)
 
-    def test_current_registry_defaults_to_scalping_and_intraday_is_explicit(self) -> None:
-        self.assertEqual(resolve_trade_type({"strategy_name": "ema_pullback"}), "scalping")
-        self.assertEqual(resolve_trade_type({"strategy_name": "breakout"}), "scalping")
+    def test_trade_type_must_be_explicit_and_valid(self) -> None:
+        self.assertIsNone(resolve_trade_type({"strategy_name": "ema_pullback"}))
+        self.assertIsNone(resolve_trade_type({"strategy_name": "breakout"}))
         self.assertEqual(resolve_trade_type({"trade_type": "intraday", "strategy_name": "future"}), "intraday")
+        self.assertEqual(resolve_trade_type({"trade_type": "scalping", "strategy_name": "ema_pullback"}), "scalping")
         self.assertIsNone(resolve_trade_type({"strategy_name": "unknown_strategy"}))
 
     def test_validate_trade_returns_locked_profile_and_recomputed_rr(self) -> None:
@@ -126,6 +127,7 @@ class RiskAuthorityTests(unittest.TestCase):
             "stop_loss": 98.0,
             "take_profit": 103.0,
             "risk_reward": 1.5,
+            "trade_type": "scalping",
             "status": "active",
         }
         with patch("app.risk.refresh_risk_state", return_value=state):
@@ -146,6 +148,7 @@ class RiskAuthorityTests(unittest.TestCase):
             "stop_loss": 98.0,
             "take_profit": 103.0,
             "risk_reward": 9.0,
+            "trade_type": "scalping",
             "status": "active",
         }
         result = validate_trade(signal, account_equity=1000.0)

@@ -39,17 +39,6 @@ RISK_PROFILES: dict[str, dict[str, float]] = {
     },
 }
 
-# All strategies currently registered in this repository use a 5m setup and 1m
-# trigger, so they are classified as scalping until an explicit trade_type is
-# emitted by a future strategy.
-KNOWN_SCALPING_STRATEGIES = {
-    "ema_pullback",
-    "breakout",
-    "pure_smc",
-    "hybrid",
-    "hybrid_liquidity_fvg",
-}
-
 _risk_lock = Lock()
 
 
@@ -452,12 +441,6 @@ def resolve_trade_type(signal: dict[str, Any]) -> str | None:
     explicit = str(signal.get("trade_type") or "").lower().strip()
     if explicit in RISK_PROFILES:
         return explicit
-    if explicit:
-        return None
-
-    strategy = str(signal.get("strategy_name") or signal.get("strategy") or "").lower().strip()
-    if strategy in KNOWN_SCALPING_STRATEGIES:
-        return "scalping"
     return None
 
 
