@@ -1,0 +1,166 @@
+diff --git a/app/close_fill_sync.py b/app/close_fill_sync.py
+index 3ac1544..fd3255b 100644
+--- a/app/close_fill_sync.py
++++ b/app/close_fill_sync.py
+@@ -452,6 +490,161 @@ def aggregate_transaction_log_records(
+     }, None
+ 
+ 
++def _trade_exchange_identity(trade: dict[str, Any]) -> dict[str, set[str]]:
++    identity: dict[str, set[str]] = {
++        "entry_order_ids": set(),
++        "entry_order_link_ids": set(),
++        "entry_exec_ids": set(),
++        "close_order_ids": set(),
++        "close_order_link_ids": set(),
++        "close_exec_ids": set(),
++        "position_idxs": set(),
++    }
++    metadata = trade.get("exchange_metadata") if isinstance(trade.get("exchange_metadata"), dict) else {}
++    management = trade.get("management") if isinstance(trade.get("management"), dict) else {}
++    metadata_management = metadata.get("management") if isinstance(metadata.get("management"), dict) else {}
++    merged_management = {**metadata_management, **management}
++
++    _add_identity(identity["entry_order_ids"], trade.get("order_id"), metadata.get("order_id"))
++    _add_identity(identity["entry_order_link_ids"], metadata.get("order_link_id"))
++
++    for source in (metadata.get("order_response"), metadata.get("fill_confirmation")):
++        _collect_identity_mapping(source, identity, role="entry")
++    fill_confirmation = metadata.get("fill_confirmation")
++    if isinstance(fill_confirmation, dict):
++        _collect_identity_mapping(fill_confirmation.get("raw"), identity, role="entry")
++
++    for prefix in ("tp1", "tp2"):
++        _add_identity(
++            identity["close_order_ids"],
++            merged_management.get(f"{prefix}_order_id"),
++        )
++        _add_identity(
++            identity["close_order_link_ids"],
++            merged_management.get(f"{prefix}_order_link_id"),
++        )
++
++    native_orders = metadata.get("native_profit_orders")
++    if isinstance(native_orders, dict):
++        for source in native_orders.values():
++            _collect_identity_mapping(source, identity, role="close")
++
++    manual_close = metadata.get("manual_close")
++    if isinstance(manual_close, dict):
++        _add_identity(identity["close_order_link_ids"], manual_close.get("request_id"))
++        for key in ("order_response", "recovered_order"):
++            _collect_identity_mapping(manual_close.get(key), identity, role="close")
++
++    close_sync = metadata.get("close_sync")
++    if isinstance(close_sync, dict):
++        _add_identity(identity["close_order_ids"], *(close_sync.get("close_order_ids") or []))
++        for source in close_sync.get("records") or []:
++            _collect_identity_mapping(source, identity, role="close")
++
++    exchange_identity = metadata.get("exchange_identity")
++    if isinstance(exchange_identity, dict):
++        _add_identity(identity["position_idxs"], exchange_identity.get("position_idx"))
++    position_snapshot = metadata.get("position_snapshot")
++    if isinstance(position_snapshot, dict):
++        _add_identity(identity["position_idxs"], position_snapshot.get("positionIdx"))
++    _add_identity(identity["position_idxs"], trade.get("position_idx"))
++
++    return identity
++
++
++def _collect_identity_mapping(
++    source: Any,
++    identity: dict[str, set[str]],
++    *,
++    role: str,
++) -> None:
++    if not isinstance(source, dict):
++        return
++    prefix = "entry" if role == "entry" else "close"
++    _add_identity(
++        identity[f"{prefix}_order_ids"],
++        source.get("orderId"),
++        source.get("order_id"),
++    )
++    _add_identity(
++        identity[f"{prefix}_order_link_ids"],
++        source.get("orderLinkId"),
++        source.get("order_link_id"),
++        source.get("request_id"),
++    )
++    _add_identity(
++        identity[f"{prefix}_exec_ids"],
++        source.get("execId"),
++        source.get("exec_id"),
++    )
++    _add_identity(
++        identity["position_idxs"],
++        source.get("positionIdx"),
++        source.get("position_idx"),
++    )
++
++
++def _add_identity(target: set[str], *values: Any) -> None:
++    for value in values:
++        if isinstance(value, (list, tuple, set)):
++            _add_identity(target, *value)
++            continue
++        if value is None:
++            continue
++        normalized = str(value).strip()
++        if normalized:
++            target.add(normalized)
++
++
++def _has_entry_identity(identity: dict[str, set[str]]) -> bool:
++    return bool(
++        identity["entry_order_ids"]
++        or identity["entry_order_link_ids"]
++        or identity["entry_exec_ids"]
++    )
++
++
++def _has_close_identity(identity: dict[str, set[str]]) -> bool:
++    return bool(
++        identity["close_order_ids"]
++        or identity["close_order_link_ids"]
++        or identity["close_exec_ids"]
++    )
++
++
++def _record_matches_role_identity(
++    record: dict[str, Any],
++    identity: dict[str, set[str]],
++    *,
++    role: str,
++) -> bool:
++    prefix = "entry" if role == "entry" else "close"
++    record_order_id = str(record.get("orderId") or record.get("order_id") or "").strip()
++    record_order_link_id = str(
++        record.get("orderLinkId") or record.get("order_link_id") or ""
++    ).strip()
++    record_exec_id = str(record.get("execId") or record.get("exec_id") or "").strip()
++    position_idx_value = record.get("positionIdx")
++    if position_idx_value is None:
++        position_idx_value = record.get("position_idx")
++    record_position_idx = (
++        "" if position_idx_value is None else str(position_idx_value).strip()
++    )
++
++    if identity["position_idxs"] and record_position_idx:
++        if record_position_idx not in identity["position_idxs"]:
++            return False
++
++    return bool(
++        (record_order_id and record_order_id in identity[f"{prefix}_order_ids"])
++        or (
++            record_order_link_id
++            and record_order_link_id in identity[f"{prefix}_order_link_ids"]
++        )
++        or (record_exec_id and record_exec_id in identity[f"{prefix}_exec_ids"])
++    )
++
++
+ def _initial_quantity(trade: dict[str, Any]) -> float | None:
+     management = trade.get("management") if isinstance(trade.get("management"), dict) else {}
+     metadata = trade.get("exchange_metadata") if isinstance(trade.get("exchange_metadata"), dict) else {}
