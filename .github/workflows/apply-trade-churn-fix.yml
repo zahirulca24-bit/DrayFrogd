@@ -32,6 +32,10 @@ jobs:
               "    '    daily_limit = int(max_daily_trades or 0)\\n'\n    '    cooldown_minutes = int(reentry_cooldown_minutes or 0)\\n'",
               "    '    daily_limit = int(max_daily_trades if max_daily_trades is not None else 8)\\n'\n    '    cooldown_minutes = int(reentry_cooldown_minutes if reentry_cooldown_minutes is not None else 30)\\n'",
           )
+          text = text.replace(
+              "    '            max_daily_trades=int(validation[\"max_daily_trades\"]),\\n'\n    '            reentry_cooldown_minutes=int(validation[\"reentry_cooldown_minutes\"]),\\n'",
+              "    '            max_daily_trades=int(validation.get(\"max_daily_trades\") or 8),\\n'\n    '            reentry_cooldown_minutes=int(validation.get(\"reentry_cooldown_minutes\") or 30),\\n'",
+          )
           path.write_text(text, encoding='utf-8')
           PY
 
