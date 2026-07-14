@@ -1,0 +1,132 @@
+diff --git a/app/signal_pipeline.py b/app/signal_pipeline.py
+index df6abdd..0000000 100644
+--- a/app/signal_pipeline.py
++++ b/app/signal_pipeline.py
+@@ -14,6 +14,7 @@ from app.scanner_trend import (
+     direction_allowed,
+ )
+ from app.strategy import evaluate_registered_strategies
++from app.trade_management_profiles import TRADE_MANAGEMENT_PROFILES, price_at_r
+@@ -146,8 +147,11 @@ def normalize_strategy_result(
+         "entry": result.get("entry"),
+         "stop_loss": result.get("stop_loss"),
+         "take_profit": result.get("take_profit"),
++        "strategy_take_profit": result.get("take_profit"),
+         "risk_reward": result.get("risk_reward"),
++        "strategy_risk_reward": result.get("risk_reward"),
++        "target_authority": "strategy_output",
+         "detected_at": result.get("detected_at"),
+@@ -185,6 +189,8 @@ def normalize_strategy_result(
+     ):
+         _apply_structure_gate(normalized, scanner_logic)
+ 
++    _apply_profile_target(normalized)
++
+     geometry_valid = _valid_trade_geometry(normalized)
+@@ -346,6 +352,49 @@ def _normalize_direction(value: Any) -> str | None:
+     return normalized if normalized in {"long", "short"} else None
+ 
+ 
++def _apply_profile_target(item: dict[str, Any]) -> None:
++    """Use the approved trade-management profile as canonical TP authority.
++
++    Strategies identify the setup, direction, entry and structural stop. The
++    selected Scalping/Intraday profile owns the executable reward target. Raw
++    strategy TP/RR values remain persisted separately for audit evidence.
++    """
++
++    if item.get("signal_state") not in USEFUL_SIGNAL_STATES:
++        return
++
++    trade_type = _normalize_trade_type(item.get("trade_type"))
++    direction = _normalize_direction(item.get("direction"))
++    entry = _number(item.get("entry"))
++    stop_loss = _number(item.get("stop_loss"))
++    if trade_type is None or direction is None or entry is None or stop_loss is None:
++        return
++    if direction == "long" and not stop_loss < entry:
++        return
++    if direction == "short" and not entry < stop_loss:
++        return
++
++    profile = TRADE_MANAGEMENT_PROFILES.get(trade_type) or {}
++    target_r = _number(profile.get("tp1_r"))
++    if target_r is None or target_r <= 0:
++        return
++
++    item["take_profit"] = price_at_r(entry, stop_loss, direction, target_r)
++    item["risk_reward"] = target_r
++    item["profile_target_r"] = target_r
++    item["target_authority"] = "trade_management_profile"
++
++
+ def _valid_trade_geometry(item: dict[str, Any]) -> bool:
+     direction = _normalize_direction(item.get("direction"))
+     entry = _number(item.get("entry"))
+diff --git a/tests/test_signal_pipeline.py b/tests/test_signal_pipeline.py
+index a4a9d9b..0000000 100644
+--- a/tests/test_signal_pipeline.py
++++ b/tests/test_signal_pipeline.py
+@@ -138,22 +138,67 @@ class SignalPipelineTests(unittest.TestCase):
+         self.assertEqual(result["signal_state"], SIGNAL_INVALID)
+         self.assertFalse(result["is_executable"])
+ 
+-    def test_intraday_requires_two_r_minimum(self) -> None:
++    def test_intraday_profile_retargets_current_strategy_to_two_r(self) -> None:
+         raw = self._raw_signal(status="active")
++        raw["take_profit"] = 101.5
+         raw["risk_reward"] = 1.5
+         result = normalize_strategy_result(
+             symbol="BTCUSDT",
+@@ -149,11 +194,52 @@ class SignalPipelineTests(unittest.TestCase):
+             scanner_logic={"status": "active", "direction": "long"},
+         )
+ 
+-        self.assertEqual(result["signal_state"], SIGNAL_INVALID)
+-        self.assertEqual(result["rejection_reason"], "risk_reward_below_trade_type_minimum")
+-        self.assertFalse(result["is_executable"])
++        self.assertEqual(result["signal_state"], SIGNAL_ACTIVE)
++        self.assertTrue(result["is_executable"])
++        self.assertEqual(result["take_profit"], 102.0)
++        self.assertEqual(result["risk_reward"], 2.0)
++        self.assertEqual(result["strategy_take_profit"], 101.5)
++        self.assertEqual(result["strategy_risk_reward"], 1.5)
++        self.assertEqual(result["target_authority"], "trade_management_profile")
++
++    def test_scalping_profile_remains_one_point_five_r(self) -> None:
++        result = normalize_strategy_result(
++            symbol="BTCUSDT",
++            result=self._raw_signal(status="active"),
++            trade_type="scalping",
++            market_rank=1,
++            trend=self._trend("UPTREND"),
++            market_ranking={"score": 90.0, "components": {}},
++            scanner_logic={"status": "eligible", "direction": "long"},
++        )
++
++        self.assertEqual(result["signal_state"], SIGNAL_ACTIVE)
++        self.assertEqual(result["take_profit"], 101.5)
++        self.assertEqual(result["risk_reward"], 1.5)
++        self.assertEqual(result["strategy_take_profit"], 102.0)
++        self.assertEqual(result["strategy_risk_reward"], 2.0)
++
++    def test_intraday_short_profile_retargets_to_two_r(self) -> None:
++        raw = self._raw_signal(direction="short", status="active")
++        raw["take_profit"] = 98.5
++        raw["risk_reward"] = 1.5
++        result = normalize_strategy_result(
++            symbol="BTCUSDT",
++            result=raw,
++            trade_type="intraday",
++            market_rank=1,
++            trend=self._trend("DOWNTREND"),
++            market_ranking={"score": 90.0, "components": {}},
++            scanner_logic={"status": "active", "direction": "short"},
++        )
++
++        self.assertEqual(result["signal_state"], SIGNAL_ACTIVE)
++        self.assertTrue(result["is_executable"])
++        self.assertEqual(result["take_profit"], 98.0)
++        self.assertEqual(result["risk_reward"], 2.0)
+ 
+     def test_expired_and_no_setup_results_are_not_kept_as_useful_signals(self) -> None:
