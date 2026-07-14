@@ -14,6 +14,7 @@ from app.exchange import ExchangeError
 SIGNAL = {
     "symbol": "BTCUSDT",
     "strategy_name": "breakout",
+    "trade_type": "scalping",
     "direction": "long",
     "entry": 100.0,
     "stop_loss": 98.0,
@@ -25,6 +26,7 @@ SIGNAL = {
 
 VALIDATION = {
     "allowed": True,
+    "trade_type": "scalping",
     "risk_per_trade": 0.01,
     "leverage_cap": 5.0,
     "exposure_cap": 0.30,

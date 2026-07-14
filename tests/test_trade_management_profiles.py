@@ -31,7 +31,7 @@ class TradeManagementProfileTests(unittest.TestCase):
         self.assertEqual(management["tp2"], 104.0)
         self.assertEqual(management["runner_target"], 105.0)
         self.assertFalse(management["trailing_enabled"])
-        self.assertEqual(max_hold_seconds(management), 59 * 60)
+        self.assertEqual(max_hold_seconds(management), 30 * 60)
         self.assertTrue(is_scalping_management(management))
         self.assertAlmostEqual(management["break_even_price"], 100.1)
         self.assertEqual(post_tp2_stop({"entry": 100.0, "stop_loss": 98.0, "direction": "long"}, management, 104.0), 103.0)

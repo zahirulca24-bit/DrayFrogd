@@ -404,10 +404,15 @@ def release_active_trade(symbol: str) -> None:
     refresh_risk_state()
 
 
-def start_loss_cooldown(symbol: str | None = None, now: datetime | None = None) -> None:
+def start_loss_cooldown(
+    symbol: str | None = None,
+    now: datetime | None = None,
+    duration_minutes: int = LOSS_COOLDOWN_MINUTES,
+) -> None:
     normalized_symbol = str(symbol or "*").upper().strip() or "*"
     current = _as_utc(now)
-    expiry = current + timedelta(minutes=LOSS_COOLDOWN_MINUTES)
+    duration = max(int(duration_minutes), 1)
+    expiry = current + timedelta(minutes=duration)
     _ensure_risk_runtime_columns()
 
     with _risk_lock:
@@ -419,7 +424,9 @@ def start_loss_cooldown(symbol: str | None = None, now: datetime | None = None) 
                 db.add(row)
                 db.flush()
             cooldowns = _decode_cooldowns(row.symbol_cooldowns)
-            cooldowns[normalized_symbol] = expiry
+            existing_expiry = cooldowns.get(normalized_symbol)
+            if existing_expiry is None or expiry > existing_expiry:
+                cooldowns[normalized_symbol] = expiry
             row.symbol_cooldowns = _encode_cooldowns(cooldowns)
             row.cooldown_until = max(cooldowns.values())
             db.commit()

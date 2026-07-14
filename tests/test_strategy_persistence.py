@@ -60,6 +60,7 @@ class StrategyPersistenceTests(unittest.TestCase):
         signal = {
             "symbol": "BTCUSDT",
             "strategy_name": "ema_pullback",
+            "trade_type": "scalping",
             "direction": "long",
             "entry": 100.0,
             "stop_loss": 95.0,
@@ -70,7 +71,7 @@ class StrategyPersistenceTests(unittest.TestCase):
 
         with (
             patch("app.execution_core.can_execute", return_value=(True, None)),
-            patch("app.execution_core.validate_trade", return_value={"allowed": True, "risk_per_trade": 0.01, "leverage_cap": 5, "exposure_cap": 0.3}),
+            patch("app.execution_core.validate_trade", return_value={"allowed": True, "trade_type": "scalping", "risk_per_trade": 0.01, "leverage_cap": 5, "exposure_cap": 0.3}),
             patch("app.execution_core.calculate_position_size", return_value={"allowed": True, "quantity": "1", "notional": 100.0}),
             patch("app.execution_core.get_execution_mode", return_value="demo"),
             patch("app.execution_core._attach_protection_with_retry", return_value=None),

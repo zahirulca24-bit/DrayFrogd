@@ -16,6 +16,7 @@ from app.scanner_trend import (
     closed_candles,
     score_market_candidate,
 )
+from app.scalping_cooldown import sync_scalping_reentry_cooldowns
 from app.signal_pipeline import evaluate_signal_contexts, normalize_strategy_result
 
 
@@ -228,8 +229,16 @@ def run_scan(client: BybitDemoClient, now: datetime | None = None) -> dict[str, 
             )
 
     pipeline = evaluate_signal_contexts(strategy_contexts)
-    signals = list(pipeline.get("signals") or [])
-    scan_results = list(pipeline.get("results") or [])
+    raw_signals = list(pipeline.get("signals") or [])
+    raw_scan_results = list(pipeline.get("results") or [])
+    suppression = sync_scalping_reentry_cooldowns(now=reference)
+    suppressed_symbols = set(suppression.get("active_symbols") or [])
+    signals, scan_results, suppressed_rows = _apply_scalping_suppression(
+        raw_signals,
+        raw_scan_results,
+        suppressed_symbols=suppressed_symbols,
+        fail_closed=not bool(suppression.get("ok", False)),
+    )
 
     with _signals_lock:
         _latest_signals.clear()
@@ -245,9 +254,15 @@ def run_scan(client: BybitDemoClient, now: datetime | None = None) -> dict[str, 
         "universe": universe,
         "ranked_symbols": len(ranked_markets),
         "signals_found": len(signals),
-        "strategy_checks": int(pipeline.get("strategy_checks") or 0),
+        "strategy_checks": len(scan_results),
         "signals": signals,
         "results": scan_results,
+        "scalping_signal_suppression": {
+            "ok": bool(suppression.get("ok", False)),
+            "active_symbols": sorted(suppressed_symbols),
+            "suppressed_rows": len(suppressed_rows),
+            "error": suppression.get("error"),
+        },
         "ranked_markets": ranked_markets,
         "rejected_markets": rejected_markets,
         "skipped": skipped,
@@ -258,6 +273,28 @@ def run_scan(client: BybitDemoClient, now: datetime | None = None) -> dict[str, 
             "open_candle_confirmation": False,
         },
     }
+
+
+def _apply_scalping_suppression(
+    signals: list[dict[str, Any]],
+    scan_results: list[dict[str, Any]],
+    *,
+    suppressed_symbols: set[str],
+    fail_closed: bool = False,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    normalized_symbols = {str(symbol or "").upper().strip() for symbol in suppressed_symbols if str(symbol or "").strip()}
+
+    def is_suppressed(item: dict[str, Any]) -> bool:
+        if str(item.get("trade_type") or "").lower().strip() != "scalping":
+            return False
+        if fail_closed:
+            return True
+        return str(item.get("symbol") or "").upper().strip() in normalized_symbols
+
+    suppressed_rows = [item for item in scan_results if is_suppressed(item)]
+    visible_signals = [item for item in signals if not is_suppressed(item)]
+    visible_results = [item for item in scan_results if not is_suppressed(item)]
+    return visible_signals, visible_results, suppressed_rows
 
 
 def get_latest_signals() -> list[dict[str, Any]]:

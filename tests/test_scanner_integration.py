@@ -78,6 +78,12 @@ class ScannerIntegrationTests(unittest.TestCase):
             scanner._latest_ranked_markets.clear()
             scanner._latest_signals.clear()
             scanner._latest_scan_results.clear()
+        suppression_patcher = patch(
+            "app.scanner.sync_scalping_reentry_cooldowns",
+            return_value={"ok": True, "active_symbols": [], "error": None},
+        )
+        suppression_patcher.start()
+        self.addCleanup(suppression_patcher.stop)
 
     def test_scanner_fetches_separate_scalping_and_intraday_timeframes(self) -> None:
         client = FakeScannerClient()

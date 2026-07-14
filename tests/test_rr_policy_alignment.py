@@ -42,7 +42,7 @@ class RiskRewardPolicyAlignmentTests(unittest.TestCase):
         self.assertEqual(signal.risk_reward, 1.5)
 
         with patch("app.risk.refresh_risk_state", return_value=SAFE_STATE):
-            validation = validate_trade(signal.to_dict(), account_equity=1000.0)
+            validation = validate_trade({**signal.to_dict(), "trade_type": "scalping"}, account_equity=1000.0)
 
         self.assertTrue(validation["allowed"])
         self.assertEqual(validation["reason"], "")
@@ -53,6 +53,7 @@ class RiskRewardPolicyAlignmentTests(unittest.TestCase):
         signal = {
             "symbol": "ETHUSDT",
             "strategy_name": "breakout",
+            "trade_type": "scalping",
             "direction": "long",
             "entry": 100.0,
             "stop_loss": 98.0,

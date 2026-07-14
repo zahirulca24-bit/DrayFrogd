@@ -6,6 +6,7 @@ from typing import Any
 from app.database import SessionLocal
 from app.models import TradeJournal
 from app.risk import LOSS_COOLDOWN_MINUTES, start_loss_cooldown
+from app.scalping_cooldown import sync_scalping_reentry_cooldowns
 
 
 def sync_loss_cooldowns(now: datetime | None = None) -> dict[str, Any]:
@@ -46,7 +47,13 @@ def sync_loss_cooldowns(now: datetime | None = None) -> dict[str, Any]:
     finally:
         db.close()
 
-    return {"ok": True, "applied": applied, "applied_count": len(applied)}
+    scalping_reentry = sync_scalping_reentry_cooldowns(now=current)
+    return {
+        "ok": bool(scalping_reentry.get("ok", False)),
+        "applied": applied,
+        "applied_count": len(applied),
+        "scalping_reentry": scalping_reentry,
+    }
 
 
 def _parse_time(value: Any) -> datetime | None:

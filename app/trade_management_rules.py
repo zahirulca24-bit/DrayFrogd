@@ -21,7 +21,7 @@ def evaluate_management_action(trade: dict[str, Any], mark_price: float, now: da
     entry = _to_float(trade.get("entry"), 0.0)
     stop_loss = _to_float(trade.get("stop_loss"), 0.0)
     management = _management_state(trade)
-    opened_at = _parse_time(trade.get("opened_at")) or now
+    opened_at = _parse_time(trade.get("opened_at") or trade.get("detected_at")) or now
     age_seconds = (now - opened_at).total_seconds()
 
     if age_seconds >= max_hold_seconds(management):

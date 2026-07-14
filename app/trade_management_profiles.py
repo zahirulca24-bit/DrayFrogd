@@ -18,7 +18,7 @@ TRADE_MANAGEMENT_PROFILES: dict[str, dict[str, Any]] = {
         "break_even_trigger_r": 1.0,
         "post_tp2_stop_r": 1.5,
         "trailing_enabled": False,
-        "max_hold_seconds": 59 * 60,
+        "max_hold_seconds": 30 * 60,
     },
     "intraday": {
         "profile_name": "intraday_v1",
