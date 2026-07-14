@@ -14,10 +14,12 @@ from app.bot_controls import stop_bot
 from app.database import SessionLocal, engine
 from app.journal import log_bot_event
 from app.models import RiskRuntimeState, TradeJournal
+from app.trade_state import CAPACITY_BLOCKING_STATUSES
 
 
 BDT = ZoneInfo("Asia/Dhaka")
 ACTIVE_TRADE_LIMIT = 5
+DAILY_EXECUTED_TRADE_LIMIT = 8
 BASE_RISK_POOL_RATIO = 0.05
 DAILY_NET_LOSS_LIMIT_RATIO = 0.05
 CAPITAL_EXPOSURE_CAP = 0.50
@@ -99,6 +101,9 @@ def validate_trade(signal: dict[str, Any], account_equity: float | None = None) 
         return _reject("Symbol already has an active trade")
     if state["active_trade_count"] >= ACTIVE_TRADE_LIMIT:
         return _reject("Active trade limit reached")
+    daily_limit = int(state.get("max_trades_per_day") or DAILY_EXECUTED_TRADE_LIMIT)
+    if int(state.get("trades_today") or 0) >= daily_limit:
+        return _reject("DAILY_TRADE_LIMIT_REACHED")
 
     new_trade_risk = profile["risk_amount"]
     if new_trade_risk > state["available_risk"] + 1e-9:
@@ -123,6 +128,9 @@ def validate_trade(signal: dict[str, Any], account_equity: float | None = None) 
         "available_risk": state["available_risk"],
         "active_trade_count": state["active_trade_count"],
         "max_active_trades": ACTIVE_TRADE_LIMIT,
+        "trades_today": int(state.get("trades_today") or 0),
+        "max_daily_trades": daily_limit,
+        "reentry_cooldown_minutes": LOSS_COOLDOWN_MINUTES,
     }
 
 
@@ -258,7 +266,7 @@ def refresh_risk_state(
             trades_today = sum(
                 1
                 for item in journal_rows
-                if _timestamp_is_on_bdt_day(item.opened_at or item.detected_at, current_day)
+                if _journal_row_consumes_daily_slot(item, current_day)
             )
             realized_pnl_today = sum(
                 _realized_pnl_for_day(item, current_day)
@@ -331,8 +339,8 @@ def refresh_risk_state(
                 "exposure_cap": CAPITAL_EXPOSURE_CAP,
                 "max_open_trades": ACTIVE_TRADE_LIMIT,
                 "max_active_trades": ACTIVE_TRADE_LIMIT,
-                "max_trades_per_day": 0,
-                "daily_trade_limit_enabled": False,
+                "max_trades_per_day": DAILY_EXECUTED_TRADE_LIMIT,
+                "daily_trade_limit_enabled": True,
                 "min_risk_reward": RISK_PROFILES["scalping"]["min_risk_reward"],
                 "active_symbols": active_symbols,
                 "active_trade_count": active_trade_count,
@@ -492,6 +500,19 @@ def _journal_row_live_risk(row: TradeJournal) -> float:
         entry=entry,
         current_stop_loss=current_stop,
         remaining_quantity=quantity,
+    )
+
+
+def _journal_row_consumes_daily_slot(row: TradeJournal, expected_day: str) -> bool:
+    status = str(row.status or "").lower()
+    result = str(row.result or "").lower()
+    if status == "closed" and result == "execution_failed":
+        return False
+    if row.opened_at and _timestamp_is_on_bdt_day(row.opened_at, expected_day):
+        return True
+    return bool(
+        status in CAPACITY_BLOCKING_STATUSES
+        and _timestamp_is_on_bdt_day(row.detected_at, expected_day)
     )
 
 

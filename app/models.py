@@ -27,7 +27,7 @@ class BotRuntimeConfig(Base):
     leverage_cap: Mapped[float] = mapped_column(Float, default=20.0, nullable=False)
     exposure_cap: Mapped[float] = mapped_column(Float, default=0.50, nullable=False)
     max_open_trades: Mapped[int] = mapped_column(Integer, default=5, nullable=False)
-    max_daily_trades: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    max_daily_trades: Mapped[int] = mapped_column(Integer, default=8, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
 

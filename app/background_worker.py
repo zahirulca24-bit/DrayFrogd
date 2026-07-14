@@ -23,6 +23,14 @@ from app.trade_management import manage_open_trades
 
 logger = logging.getLogger(__name__)
 NATIVE_TP_MONITOR_SECONDS = 2
+EXPECTED_EXECUTION_BLOCKS = {
+    "DUPLICATE_EXECUTION",
+    "SYMBOL_ALREADY_ACTIVE",
+    "ACTIVE_TRADE_LIMIT_REACHED",
+    "DYNAMIC_RISK_CAPACITY_EXCEEDED",
+    "DAILY_TRADE_LIMIT_REACHED",
+    "SYMBOL_REENTRY_COOLDOWN",
+}
 
 
 def _safe_log_bot_event(event_type: str, message: str, *, level: str = "info", metadata: dict | None = None) -> None:
@@ -30,6 +38,10 @@ def _safe_log_bot_event(event_type: str, message: str, *, level: str = "info", m
         log_bot_event(event_type, message, level=level, metadata=metadata)
     except Exception:
         logger.exception("Failed to persist bot event: %s", event_type)
+
+
+def _is_expected_execution_block(value: object) -> bool:
+    return str(value or "").strip() in EXPECTED_EXECUTION_BLOCKS
 
 
 async def native_profit_monitor_loop() -> None:
@@ -178,20 +190,35 @@ async def auto_trading_loop() -> None:
                         )
                     else:
                         error_message = outcome.get("error", "Unknown execution failure")
-                        logger.warning("Auto execution failed for %s: %s", signal.get("symbol"), error_message)
-                        _safe_log_bot_event(
-                            "auto_execution_failed",
-                            f"Auto execution failed for {signal.get('symbol')}",
-                            level="warning",
-                            metadata={
-                                "endpoint": "background:auto_execution",
-                                "affected_module": "execution",
-                                "error_code": "AUTO_EXECUTION_FAILED",
-                                "signal": signal,
-                                "outcome": outcome,
-                                "error": error_message,
-                            },
-                        )
+                        if _is_expected_execution_block(error_message):
+                            logger.debug("Auto execution blocked for %s: %s", signal.get("symbol"), error_message)
+                            _safe_log_bot_event(
+                                "trade_execution_blocked",
+                                f"Execution guard blocked {signal.get('symbol')}",
+                                level="info",
+                                metadata={
+                                    "endpoint": "background:auto_execution",
+                                    "affected_module": "execution",
+                                    "error_code": str(error_message),
+                                    "signal": signal,
+                                    "outcome": outcome,
+                                },
+                            )
+                        else:
+                            logger.warning("Auto execution failed for %s: %s", signal.get("symbol"), error_message)
+                            _safe_log_bot_event(
+                                "auto_execution_failed",
+                                f"Auto execution failed for {signal.get('symbol')}",
+                                level="warning",
+                                metadata={
+                                    "endpoint": "background:auto_execution",
+                                    "affected_module": "execution",
+                                    "error_code": "AUTO_EXECUTION_FAILED",
+                                    "signal": signal,
+                                    "outcome": outcome,
+                                    "error": error_message,
+                                },
+                            )
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # pragma: no cover - defensive background task guard

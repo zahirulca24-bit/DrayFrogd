@@ -166,6 +166,8 @@ def execute_signal(client: BybitClient, signal: dict[str, Any], auto_triggered: 
             execution_key,
             required_risk=float(validation["risk_amount"]),
             max_active_trades=int(validation["max_active_trades"]),
+            max_daily_trades=int(validation.get("max_daily_trades") or 8),
+            reentry_cooldown_minutes=int(validation.get("reentry_cooldown_minutes") or 30),
         )
     except Exception as exc:
         _safe_log_bot_event(

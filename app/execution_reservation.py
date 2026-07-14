@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import or_
@@ -23,6 +24,9 @@ def reserve_execution_capacity(
     *,
     required_risk: float | None = None,
     max_active_trades: int | None = None,
+    max_daily_trades: int | None = None,
+    reentry_cooldown_minutes: int | None = None,
+    now: datetime | None = None,
 ) -> dict[str, Any]:
     """Atomically reserve both the execution key and portfolio risk capacity.
 
@@ -39,6 +43,9 @@ def reserve_execution_capacity(
     symbol = str(trade.get("symbol") or "").upper().strip()
     risk_amount = float(required_risk)
     active_limit = int(max_active_trades)
+    daily_limit = int(max_daily_trades if max_daily_trades is not None else 8)
+    cooldown_minutes = int(reentry_cooldown_minutes if reentry_cooldown_minutes is not None else 30)
+    current = now.astimezone(UTC) if now and now.tzinfo else (now.replace(tzinfo=UTC) if now else datetime.now(UTC))
     if not normalized_key:
         raise ValueError("execution_key is required")
     if not symbol:
@@ -47,6 +54,10 @@ def reserve_execution_capacity(
         raise ValueError("required_risk must be positive")
     if active_limit <= 0:
         raise ValueError("max_active_trades must be positive")
+    if daily_limit <= 0:
+        raise ValueError("max_daily_trades must be positive")
+    if cooldown_minutes < 0:
+        raise ValueError("reentry_cooldown_minutes cannot be negative")
 
     _ensure_trade_journal_columns()
     journal_id = str(trade.get("journal_id") or f"exec-{normalized_key[:48]}")
@@ -85,6 +96,35 @@ def reserve_execution_capacity(
                 "reason": state.circuit_breaker_reason or "DAILY_NET_LOSS_CIRCUIT_BREAKER",
                 "trade": None,
             }
+        trades_today = int(state.trades_today or 0)
+        if trades_today >= daily_limit:
+            return {
+                "reserved": False,
+                "reason": "DAILY_TRADE_LIMIT_REACHED",
+                "trades_today": trades_today,
+                "max_daily_trades": daily_limit,
+                "trade": None,
+            }
+        recent_close = (
+            db.query(TradeJournal)
+            .filter(
+                TradeJournal.symbol == symbol,
+                TradeJournal.status == "closed",
+                TradeJournal.opened_at.isnot(None),
+                TradeJournal.closed_at.isnot(None),
+                or_(TradeJournal.result.is_(None), TradeJournal.result != "execution_failed"),
+            )
+            .order_by(TradeJournal.id.desc())
+            .first()
+        )
+        cooldown_until = _cooldown_until(recent_close, cooldown_minutes)
+        if cooldown_until is not None and current < cooldown_until:
+            return {
+                "reserved": False,
+                "reason": "SYMBOL_REENTRY_COOLDOWN",
+                "cooldown_until": cooldown_until.isoformat(),
+                "trade": None,
+            }
 
         open_rows = db.query(TradeJournal).filter(TradeJournal.status.in_(sorted(CAPACITY_BLOCKING_STATUSES))).all()
         if any(str(row.symbol or "").upper() == symbol for row in open_rows):
@@ -109,6 +149,10 @@ def reserve_execution_capacity(
             "available_risk_after": max(available_risk - risk_amount, 0.0),
             "active_trades_before": len(open_rows),
             "active_trades_after": len(open_rows) + 1,
+            "trades_today_before": trades_today,
+            "trades_today_after": trades_today + 1,
+            "max_daily_trades": daily_limit,
+            "reentry_cooldown_minutes": cooldown_minutes,
         }
         pending_trade["exchange_metadata"] = metadata
         payload = _build_trade_payload(pending_trade, journal_id=journal_id, default_opened_at=False)
@@ -118,6 +162,7 @@ def reserve_execution_capacity(
             active_symbols.append(symbol)
         state.active_symbols = json.dumps(sorted(active_symbols), separators=(",", ":"))
         state.active_trade_count = len(open_rows) + 1
+        state.trades_today = trades_today + 1
         state.live_risk = float(state.live_risk or 0.0) + risk_amount
         state.available_risk = max(available_risk - risk_amount, 0.0)
 
@@ -140,6 +185,25 @@ def reserve_execution_capacity(
         return {"reserved": True, "reason": "", "trade": serialize_trade_entry(row)}
     finally:
         db.close()
+
+
+def _cooldown_until(row: TradeJournal | None, cooldown_minutes: int) -> datetime | None:
+    if row is None or cooldown_minutes <= 0:
+        return None
+    parsed = _parse_timestamp(row.closed_at)
+    return parsed + timedelta(minutes=cooldown_minutes) if parsed is not None else None
+
+
+def _parse_timestamp(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
 
 
 def _decode_symbols(value: str | None) -> list[str]:

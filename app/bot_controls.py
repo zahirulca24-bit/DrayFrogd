@@ -15,9 +15,9 @@ DEFAULT_RISK_SETTINGS = {
     "leverage_cap": 20.0,
     "exposure_cap": 0.50,
     "max_open_trades": 5,
-    # Zero means unlimited. Signal quality, dynamic risk and active-trade gates
-    # are the authorities instead of a daily trade-count cap.
-    "max_daily_trades": 0,
+    # Locked turnover guard. Eight exchange attempts per BDT day prevents
+    # fee churn while preserving enough capacity for both trade profiles.
+    "max_daily_trades": 8,
 }
 
 
@@ -101,8 +101,8 @@ def update_bot_config(
         raise ValueError("Total margin exposure cap is locked at 50%")
     if max_open_trades is not None and int(max_open_trades) != 5:
         raise ValueError("Active trade limit is locked at 5")
-    if max_daily_trades is not None and int(max_daily_trades) != 0:
-        raise ValueError("Daily executable trade count is unlimited; use 0")
+    if max_daily_trades is not None and int(max_daily_trades) not in {0, 8}:
+        raise ValueError("Daily executable trade count is locked at 8")
 
     payload.update(
         leverage_cap=DEFAULT_RISK_SETTINGS["leverage_cap"],
@@ -198,7 +198,7 @@ def _serialize_runtime(row: BotRuntimeConfig) -> dict[str, Any]:
         "max_open_trades": row.max_open_trades,
         "max_active_trades": row.max_open_trades,
         "max_daily_trades": row.max_daily_trades,
-        "daily_trade_limit_enabled": False,
+        "daily_trade_limit_enabled": True,
     }
 
 
@@ -233,7 +233,7 @@ def _ensure_runtime_columns() -> None:
         "leverage_cap": "FLOAT NOT NULL DEFAULT 20.0",
         "exposure_cap": "FLOAT NOT NULL DEFAULT 0.50",
         "max_open_trades": "INTEGER NOT NULL DEFAULT 5",
-        "max_daily_trades": "INTEGER NOT NULL DEFAULT 0",
+        "max_daily_trades": "INTEGER NOT NULL DEFAULT 8",
     }
     with engine.begin() as connection:
         for name, definition in column_defs.items():
