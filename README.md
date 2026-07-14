@@ -4,6 +4,19 @@
 
 Bybit-first automated trading terminal built with FastAPI, React, PostgreSQL and Bybit V5 REST/WebSocket APIs.
 
+## Start here — mandatory for every new session
+
+Before reviewing, coding or giving a new opinion, read these files in order:
+
+1. [`PROJECT_CONTROL.md`](PROJECT_CONTROL.md) — current project truth and operating rules
+2. [`docs/DECISION_LOG.md`](docs/DECISION_LOG.md) — Product Owner decisions that cannot be silently changed
+3. [`docs/TASK_REGISTER.md`](docs/TASK_REGISTER.md) — current single active task and queue
+4. [`docs/EVIDENCE_REGISTER.md`](docs/EVIDENCE_REGISTER.md) — confirmed, suspected and contradicted claims
+5. [`docs/HANDOFF.md`](docs/HANDOFF.md) — short current-session handoff
+6. [`docs/SESSION_START_PROMPT.md`](docs/SESSION_START_PROMPT.md) — exact prompt for a new ChatGPT/Codex session
+
+**Chat memory is not project truth. The repository control files are project truth.**
+
 ## Current project status
 
 | Field | Status |
