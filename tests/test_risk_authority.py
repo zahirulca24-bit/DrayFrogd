@@ -159,6 +159,7 @@ class RiskAuthorityTests(unittest.TestCase):
         result = calculate_position_size(
             signal={
                 "symbol": "BTCUSDT",
+                "direction": "long",
                 "entry": 100.0,
                 "stop_loss": 99.0,
                 "take_profit": 101.5,

@@ -120,6 +120,20 @@ def execute_signal(client: BybitClient, signal: dict[str, Any], auto_triggered: 
 
     quantity = str(sizing["quantity"])
     stop_loss = client.normalize_price(execution_signal["stop_loss"], symbol_info["tickSize"])
+    rounded_stop_geometry = calculate_authoritative_risk_reward(
+        direction=execution_signal["direction"],
+        entry=float(execution_signal["entry"]),
+        stop_loss=float(stop_loss),
+        take_profit=float(execution_signal["take_profit"]),
+    )
+    if rounded_stop_geometry is None:
+        return {
+            "ok": False,
+            "error": "Rounded stop-loss invalidated trade geometry",
+            "sizing": sizing,
+            "pre_order_quote": quote,
+            "protection": {"stop_loss": stop_loss, "take_profit": execution_signal["take_profit"]},
+        }
     execution_mode = get_execution_mode()
     execution_key = _build_execution_key(original_signal, execution_mode)
     order_link_id = _build_order_link_id(execution_key)
@@ -323,6 +337,36 @@ def execute_signal(client: BybitClient, signal: dict[str, Any], auto_triggered: 
     )
     management["last_state_change"] = _utc_now_iso()
     protected_take_profit = client.normalize_price(management["runner_target"], symbol_info["tickSize"])
+    protected_geometry = calculate_authoritative_risk_reward(
+        direction=execution_signal["direction"],
+        entry=actual_entry,
+        stop_loss=float(stop_loss),
+        take_profit=float(protected_take_profit),
+    )
+    if protected_geometry is None:
+        trade = {
+            **pending_trade,
+            "entry": actual_entry,
+            "quantity": actual_quantity,
+            "remaining_quantity": actual_quantity,
+            "order_id": order_id or fill.get("order_id"),
+            "status": "order_filled",
+            "opened_at": fill.get("filled_at") or _utc_now_iso(),
+            "management": management,
+            "exchange_metadata": {
+                **pending_trade["exchange_metadata"],
+                "fill_confirmation": fill,
+                "management": management,
+                "protection": {"stop_loss": stop_loss, "take_profit": protected_take_profit},
+            },
+        }
+        return _emergency_close_pending_sync(
+            client=client,
+            trade=trade,
+            error="PROTECTION_GEOMETRY_INVALID",
+            detail="Rounded protected take-profit invalidated entry/SL/TP geometry",
+            sizing=sizing,
+        )
     opened_at = fill.get("filled_at") or _utc_now_iso()
     trade = {
         **pending_trade,

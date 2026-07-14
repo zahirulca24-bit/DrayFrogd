@@ -15,6 +15,7 @@ class PositionSizingTests(unittest.TestCase):
     def setUp(self) -> None:
         self.signal = {
             "symbol": "BTCUSDT",
+            "direction": "long",
             "entry": 100.0,
             "stop_loss": 95.0,
             "take_profit": 110.0,
@@ -147,6 +148,7 @@ class PositionSizingTests(unittest.TestCase):
         result = calculate_position_size(
             signal={
                 "symbol": "SOLUSDT",
+                "direction": "short",
                 "entry": 76.50,
                 "stop_loss": 76.91,
                 "take_profit": 75.27,
@@ -182,6 +184,7 @@ class PositionSizingTests(unittest.TestCase):
         result = calculate_position_size(
             signal={
                 "symbol": "SOLUSDT",
+                "direction": "short",
                 "entry": 76.50,
                 "stop_loss": 76.91,
                 "take_profit": 75.27,
@@ -206,6 +209,51 @@ class PositionSizingTests(unittest.TestCase):
 
         self.assertFalse(result["allowed"])
         self.assertIn("profile cap", result["reason"])
+
+    def test_rejects_long_when_stop_is_not_below_entry(self) -> None:
+        result = calculate_position_size(
+            signal={**self.signal, "stop_loss": 101.0, "take_profit": 110.0},
+            wallet=self.wallet,
+            symbol_info=self.symbol_info,
+            active_trades=[],
+            positions=[],
+            settings=self.settings,
+            client=FakeClient(),
+        )
+
+        self.assertFalse(result["allowed"])
+        self.assertEqual(result["reason"], "Invalid SL/TP geometry for direction")
+
+    def test_rejects_short_when_take_profit_is_not_below_entry(self) -> None:
+        result = calculate_position_size(
+            signal={**self.signal, "direction": "short", "stop_loss": 105.0, "take_profit": 102.0},
+            wallet=self.wallet,
+            symbol_info=self.symbol_info,
+            active_trades=[],
+            positions=[],
+            settings=self.settings,
+            client=FakeClient(),
+        )
+
+        self.assertFalse(result["allowed"])
+        self.assertEqual(result["reason"], "Invalid SL/TP geometry for direction")
+
+    def test_valid_short_keeps_strategy_levels_and_only_sizes_quantity(self) -> None:
+        result = calculate_position_size(
+            signal={**self.signal, "direction": "short", "stop_loss": 105.0, "take_profit": 90.0},
+            wallet=self.wallet,
+            symbol_info=self.symbol_info,
+            active_trades=[],
+            positions=[],
+            settings=self.settings,
+            client=FakeClient(),
+        )
+
+        self.assertTrue(result["allowed"])
+        self.assertEqual(result["direction"], "short")
+        self.assertEqual(result["stop_loss"], 105.0)
+        self.assertEqual(result["take_profit"], 90.0)
+        self.assertEqual(result["quantity"], "2")
 
 
 if __name__ == "__main__":

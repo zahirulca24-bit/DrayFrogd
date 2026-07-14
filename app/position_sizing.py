@@ -24,6 +24,8 @@ def calculate_position_size(
     normalized = _normalize_signal(signal)
     if normalized is None:
         return _reject("Invalid signal values")
+    if not _valid_signal_geometry(normalized):
+        return _reject("Invalid SL/TP geometry for direction")
 
     stale_reason = _stale_reason(normalized.get("detected_at"))
     if stale_reason:
@@ -147,6 +149,8 @@ def calculate_position_size(
         "quantity_value": quantity,
         "entry": entry,
         "stop_loss": stop_loss,
+        "take_profit": normalized["take_profit"],
+        "direction": normalized["direction"],
         "sl_distance": sl_distance,
         "risk_percent": actual_risk_amount / equity,
         "risk_amount": actual_risk_amount,
@@ -177,12 +181,15 @@ def calculate_position_size(
 
 def _normalize_signal(signal: dict[str, Any]) -> dict[str, Any] | None:
     try:
+        direction = str(signal.get("direction", "")).lower().strip()
         entry = float(signal.get("entry"))
         stop_loss = float(signal.get("stop_loss"))
         take_profit = float(signal.get("take_profit"))
     except (TypeError, ValueError):
         return None
 
+    if direction not in {"long", "short"}:
+        return None
     if not all(isfinite(value) and value > 0 for value in [entry, stop_loss, take_profit]):
         return None
     if entry == stop_loss:
@@ -190,11 +197,24 @@ def _normalize_signal(signal: dict[str, Any]) -> dict[str, Any] | None:
 
     return {
         "symbol": str(signal.get("symbol", "")).upper().strip(),
+        "direction": direction,
         "entry": entry,
         "stop_loss": stop_loss,
         "take_profit": take_profit,
         "detected_at": signal.get("detected_at"),
     }
+
+
+def _valid_signal_geometry(signal: dict[str, Any]) -> bool:
+    direction = str(signal.get("direction", "")).lower().strip()
+    entry = float(signal["entry"])
+    stop_loss = float(signal["stop_loss"])
+    take_profit = float(signal["take_profit"])
+    if direction == "long":
+        return stop_loss < entry < take_profit
+    if direction == "short":
+        return take_profit < entry < stop_loss
+    return False
 
 
 def _stale_reason(value: Any) -> str:

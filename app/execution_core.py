@@ -16,7 +16,7 @@ from app.journal import (
     update_trade_entry,
 )
 from app.position_sizing import calculate_position_size
-from app.risk import register_active_trade, start_loss_cooldown, validate_trade
+from app.risk import calculate_authoritative_risk_reward, register_active_trade, start_loss_cooldown, validate_trade
 from app.trade_management_profiles import build_profile_management_state
 
 
@@ -88,6 +88,19 @@ def execute_signal(client: BybitClient, signal: dict[str, Any], auto_triggered: 
         trade_type=validation.get("trade_type"),
     )
     protected_take_profit = client.normalize_price(management["runner_target"], symbol_info["tickSize"])
+    rounded_geometry = calculate_authoritative_risk_reward(
+        direction=normalized_signal["direction"],
+        entry=float(normalized_signal["entry"]),
+        stop_loss=float(stop_loss),
+        take_profit=float(protected_take_profit),
+    )
+    if rounded_geometry is None:
+        return {
+            "ok": False,
+            "error": "Rounded SL/TP invalidated trade geometry",
+            "sizing": sizing,
+            "protection": {"stop_loss": stop_loss, "take_profit": protected_take_profit},
+        }
     execution_key = _build_execution_key(normalized_signal, execution_mode)
     order_link_id = _build_order_link_id(execution_key)
 
