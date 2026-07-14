@@ -61,6 +61,143 @@ class StrategyAuditTests(unittest.TestCase):
         self.assertAlmostEqual(strategy["net_pnl"], 11.3925)
         self.assertEqual(audit["trades"][0]["pnl_source"], "bybit_ledger")
 
+
+    def test_overlapping_same_symbol_trades_use_exact_exchange_ids(self) -> None:
+        journal_trades = [
+            {
+                "journal_id": "jrnl-a",
+                "symbol": "BTCUSDT",
+                "strategy_name": "strategy_a",
+                "direction": "long",
+                "entry": 100.0,
+                "quantity": 1.0,
+                "order_id": "open-a",
+                "status": "closed",
+                "opened_at": "2026-07-14T12:00:00+00:00",
+                "closed_at": "2026-07-14T12:30:00+00:00",
+                "exchange_metadata": {
+                    "management": {
+                        "initial_quantity": 1.0,
+                        "tp1_order_id": "close-a",
+                    }
+                },
+            },
+            {
+                "journal_id": "jrnl-b",
+                "symbol": "BTCUSDT",
+                "strategy_name": "strategy_b",
+                "direction": "long",
+                "entry": 100.0,
+                "quantity": 1.0,
+                "order_id": "open-b",
+                "status": "closed",
+                "opened_at": "2026-07-14T12:05:00+00:00",
+                "closed_at": "2026-07-14T12:20:00+00:00",
+                "exchange_metadata": {
+                    "management": {
+                        "initial_quantity": 1.0,
+                        "tp1_order_id": "close-b",
+                    }
+                },
+            },
+        ]
+        ledger_records = [
+            {
+                "symbol": "BTCUSDT",
+                "type": "Trade",
+                "direction": "Open Buy",
+                "qty": "1",
+                "filledPrice": "100",
+                "fee": "1",
+                "change": "-1",
+                "transactionTime": "1784030401000",
+                "orderId": "open-a",
+            },
+            {
+                "symbol": "BTCUSDT",
+                "type": "Trade",
+                "direction": "Open Buy",
+                "qty": "1",
+                "filledPrice": "100",
+                "fee": "2",
+                "change": "-2",
+                "transactionTime": "1784030701000",
+                "orderId": "open-b",
+            },
+            {
+                "symbol": "BTCUSDT",
+                "type": "Trade",
+                "direction": "Close Sell",
+                "qty": "1",
+                "filledPrice": "90",
+                "fee": "1",
+                "cashFlow": "-10",
+                "change": "-11",
+                "transactionTime": "1784031601000",
+                "orderId": "close-b",
+            },
+            {
+                "symbol": "BTCUSDT",
+                "type": "Trade",
+                "direction": "Close Sell",
+                "qty": "1",
+                "filledPrice": "110",
+                "fee": "1",
+                "cashFlow": "10",
+                "change": "9",
+                "transactionTime": "1784032201000",
+                "orderId": "close-a",
+            },
+        ]
+
+        audit = build_strategy_audit(
+            journal_trades=journal_trades,
+            ledger_records=ledger_records,
+            bdt_date="2026-07-14",
+        )
+
+        by_strategy = {row["strategy"]: row for row in audit["strategies"]}
+        self.assertAlmostEqual(by_strategy["strategy_a"]["net_pnl"], 8.0)
+        self.assertAlmostEqual(by_strategy["strategy_b"]["net_pnl"], -13.0)
+        self.assertEqual(audit["summary"]["wins"], 1)
+        self.assertEqual(audit["summary"]["losses"], 1)
+        self.assertEqual(audit["summary"]["ledger_matched_trades"], 2)
+
+    def test_overlapping_trade_without_exact_ids_is_not_journal_fallback(self) -> None:
+        journal_trades = [
+            {
+                "journal_id": "jrnl-a",
+                "symbol": "BTCUSDT",
+                "strategy_name": "strategy_a",
+                "direction": "long",
+                "entry": 100.0,
+                "quantity": 1.0,
+                "status": "closed",
+                "opened_at": "2026-07-14T12:00:00+00:00",
+                "closed_at": "2026-07-14T12:30:00+00:00",
+                "realized_pnl": 100.0,
+            },
+            {
+                "journal_id": "jrnl-b",
+                "symbol": "BTCUSDT",
+                "strategy_name": "strategy_b",
+                "direction": "long",
+                "entry": 100.0,
+                "quantity": 1.0,
+                "status": "closed",
+                "opened_at": "2026-07-14T12:05:00+00:00",
+                "closed_at": "2026-07-14T12:20:00+00:00",
+                "realized_pnl": -100.0,
+            },
+        ]
+
+        audit = build_strategy_audit(
+            journal_trades=journal_trades, ledger_records=[], bdt_date="2026-07-14"
+        )
+
+        self.assertEqual(audit["summary"]["known_pnl_trades"], 0)
+        self.assertEqual(audit["summary"]["unmatched_trades"], 2)
+
     def test_strategy_audit_does_not_fabricate_zero_when_pnl_unknown(self) -> None:
         journal_trades = [
             {
