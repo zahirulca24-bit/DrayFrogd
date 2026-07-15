@@ -16,6 +16,8 @@ CAPACITY_BLOCKING_STATUSES = {
     "close_uncertain",
     "execution_uncertain",
     "emergency_close_failed",
+    "reconciliation_pending",
+    "close_pending_sync",
 }
 
 # Only these states may be counted as an operator-visible active position.
@@ -25,6 +27,8 @@ EXCHANGE_ACTIVE_STATUSES = {
     "close_requested",
     "close_uncertain",
 }
+
+RECONCILABLE_STATUSES = set(CAPACITY_BLOCKING_STATUSES)
 
 NON_ACTIVE_RECONCILIATION_STATUSES = {
     "journal_stale",
@@ -44,6 +48,10 @@ def is_capacity_blocking_status(value: Any) -> bool:
 
 def is_exchange_active_status(value: Any) -> bool:
     return normalize_status(value) in EXCHANGE_ACTIVE_STATUSES
+
+
+def is_reconcilable_status(value: Any) -> bool:
+    return normalize_status(value) in RECONCILABLE_STATUSES
 
 
 def exchange_confirmed(trade: dict[str, Any]) -> bool:
