@@ -37,7 +37,7 @@ export default function SettingsBacktest({ authToken }: SettingsBacktestProps) {
   const [riskAmount, setRiskAmount] = useState("20");
   const [feeBps, setFeeBps] = useState("5.5");
   const [minRr, setMinRr] = useState("1.5");
-  const [maxHoldCandles, setMaxHoldCandles] = useState("240");
+  const [maxHoldCandles, setMaxHoldCandles] = useState("30");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<BacktestResponse | null>(null);
@@ -87,7 +87,7 @@ export default function SettingsBacktest({ authToken }: SettingsBacktestProps) {
               <div>
                 <h1 className="text-xl font-bold text-white">Strategy Backtest Engine</h1>
                 <p className="mt-1 max-w-3xl text-xs leading-5 text-slate-500">
-                  Replays current strategy logic on Bybit candles. Scalping uses 5m/1m; Intraday uses 15m/5m. This is research-only: no order is submitted.
+                  Replays current strategy logic on Bybit candles. Scalping uses 15m trend / 5m setup / 1m trigger; Intraday uses 1h trend / 15m setup / 5m trigger. This is research-only: no order is submitted.
                 </p>
               </div>
             </div>
@@ -117,12 +117,12 @@ export default function SettingsBacktest({ authToken }: SettingsBacktestProps) {
                 setTradeType(next);
                 setRiskAmount(next === "intraday" ? "50" : "20");
                 setMinRr(next === "intraday" ? "2.0" : "1.5");
-                setMaxHoldCandles(next === "intraday" ? "72" : "240");
+                setMaxHoldCandles(next === "intraday" ? "72" : "30");
               }}
               className="dashboard-input"
             >
-              <option value="scalping">Scalping: 5m setup / 1m trigger</option>
-              <option value="intraday">Intraday: 15m setup / 5m trigger</option>
+              <option value="scalping">Scalping: 15m / 5m / 1m</option>
+              <option value="intraday">Intraday: 1h / 15m / 5m</option>
             </select>
           </label>
           <label className="space-y-2">
