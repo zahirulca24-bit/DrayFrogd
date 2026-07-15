@@ -1,0 +1,231 @@
+name: Apply PR74 Strategy Fix Temp
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout head branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip && pip install -r requirements.txt
+
+      - name: Apply strategy multi-timeframe fix
+        shell: bash
+        run: |
+          git apply <<'PATCH'
+          --- a/app/strategy.py
+          +++ b/app/strategy.py
+          @@ -369,15 +369,20 @@
+               candles_1m: list[dict[str, Any] | Candle],
+               now: datetime | None = None,
+           ) -> dict[str, Any]:
+          -    completed_candles_1m = _normalize_candles(_exclude_incomplete_candles(candles_1m))
+          -    minimum_candles = max(EMA_BIAS_PERIOD, RSI_PERIOD + 1, BREAKOUT_LEVEL_LOOKBACK + 1, BREAKOUT_VOLUME_LOOKBACK + 1)
+          -    if len(completed_candles_1m) < minimum_candles:
+          +    completed_setup = _normalize_candles(_exclude_incomplete_candles(candles_5m))
+          +    completed_trigger = _normalize_candles(_exclude_incomplete_candles(candles_1m))
+          +    setup_candles = completed_setup or completed_trigger
+          +    separated_timeframes = bool(completed_setup)
+          +
+          +    minimum_setup_candles = max(EMA_BIAS_PERIOD, BREAKOUT_LEVEL_LOOKBACK)
+          +    minimum_trigger_candles = max(RSI_PERIOD + 1, BREAKOUT_VOLUME_LOOKBACK + 1)
+          +    if len(setup_candles) < minimum_setup_candles or len(completed_trigger) < minimum_trigger_candles:
+                   return _rejected_signal(symbol, "rejected", "missing_data", strategy_name=STRATEGY_BREAKOUT)
+           
+          -    latest = completed_candles_1m[-1]
+          -    prior_candles = completed_candles_1m[:-1]
+          -    level_window = prior_candles[-BREAKOUT_LEVEL_LOOKBACK:]
+          -    volume_window = prior_candles[-BREAKOUT_VOLUME_LOOKBACK:]
+          +    latest = completed_trigger[-1]
+          +    level_source = setup_candles if separated_timeframes else setup_candles[:-1]
+          +    level_window = level_source[-BREAKOUT_LEVEL_LOOKBACK:]
+          +    volume_window = completed_trigger[:-1][-BREAKOUT_VOLUME_LOOKBACK:]
+               if len(level_window) < BREAKOUT_LEVEL_LOOKBACK or len(volume_window) < BREAKOUT_VOLUME_LOOKBACK:
+                   return _rejected_signal(symbol, "rejected", "missing_data", strategy_name=STRATEGY_BREAKOUT)
+           
+          @@ -388,9 +393,10 @@
+               if not long_breakout and not short_breakout:
+                   return _rejected_signal(symbol, "rejected", "breakout_not_detected", strategy_name=STRATEGY_BREAKOUT)
+           
+          -    closes = [candle.close for candle in completed_candles_1m]
+          -    ema200 = _ema(closes, EMA_BIAS_PERIOD)
+          -    rsi_values = _rsi(closes, RSI_PERIOD)
+          +    setup_closes = [candle.close for candle in setup_candles]
+          +    trigger_closes = [candle.close for candle in completed_trigger]
+          +    ema200 = _ema(setup_closes, EMA_BIAS_PERIOD)
+          +    rsi_values = _rsi(trigger_closes, RSI_PERIOD)
+               if ema200 is None or rsi_values is None:
+                   return _rejected_signal(symbol, "rejected", "missing_data", strategy_name=STRATEGY_BREAKOUT)
+           
+          @@ -405,28 +411,32 @@
+                       return _rejected_signal(symbol, "rejected", "rsi_overbought", strategy_name=STRATEGY_BREAKOUT)
+                   if average_volume <= 0 or latest.volume <= average_volume * BREAKOUT_VOLUME_MULTIPLE:
+                       return _rejected_signal(symbol, "rejected", "volume_not_confirmed", strategy_name=STRATEGY_BREAKOUT)
+          -        return _build_breakout_signal(
+          +        signal = _build_breakout_signal(
+                       symbol=symbol,
+                       direction="long",
+                       latest=latest,
+                       level=resistance,
+                       reference_window=level_window,
+                   )
+          +    else:
+          +        if latest.close >= last_ema:
+          +            return _rejected_signal(symbol, "rejected", "trend_not_confirmed", strategy_name=STRATEGY_BREAKOUT)
+          +        if last_rsi < 30:
+          +            return _rejected_signal(symbol, "rejected", "rsi_oversold", strategy_name=STRATEGY_BREAKOUT)
+          +        if average_volume <= 0 or latest.volume <= average_volume * BREAKOUT_VOLUME_MULTIPLE:
+          +            return _rejected_signal(symbol, "rejected", "volume_not_confirmed", strategy_name=STRATEGY_BREAKOUT)
+          +        signal = _build_breakout_signal(
+          +            symbol=symbol,
+          +            direction="short",
+          +            latest=latest,
+          +            level=support,
+          +            reference_window=level_window,
+          +        )
+           
+          -    if latest.close >= last_ema:
+          -        return _rejected_signal(symbol, "rejected", "trend_not_confirmed", strategy_name=STRATEGY_BREAKOUT)
+          -    if last_rsi < 30:
+          -        return _rejected_signal(symbol, "rejected", "rsi_oversold", strategy_name=STRATEGY_BREAKOUT)
+          -    if average_volume <= 0 or latest.volume <= average_volume * BREAKOUT_VOLUME_MULTIPLE:
+          -        return _rejected_signal(symbol, "rejected", "volume_not_confirmed", strategy_name=STRATEGY_BREAKOUT)
+          -    return _build_breakout_signal(
+          -        symbol=symbol,
+          -        direction="short",
+          -        latest=latest,
+          -        level=support,
+          -        reference_window=level_window,
+          -    )
+          -
+          +    signal["setup_timeframe_used"] = separated_timeframes
+          +    signal["setup_candle_count"] = len(setup_candles)
+          +    signal["trigger_candle_count"] = len(completed_trigger)
+          +    return signal
+           
+           def evaluate_pure_smc_strategy(
+               symbol: str,
+          @@ -434,29 +444,33 @@
+               candles_1m: list[dict[str, Any] | Candle],
+               now: datetime | None = None,
+           ) -> dict[str, Any]:
+          -    completed_candles = _normalize_candles(_exclude_incomplete_candles(candles_1m))
+          -    timeframe_now = _normalize_now(now, completed_candles)
+          -    if len(completed_candles) < max(12, (SWING_CONFIRMATION_CANDLES * 2) + 5):
+          +    completed_setup = _normalize_candles(_exclude_incomplete_candles(candles_5m))
+          +    completed_trigger = _normalize_candles(_exclude_incomplete_candles(candles_1m))
+          +    setup_candles = completed_setup or completed_trigger
+          +    separated_timeframes = bool(completed_setup)
+          +    timeframe_now = _normalize_now(now, completed_trigger or setup_candles)
+          +
+          +    if len(setup_candles) < max(12, (SWING_CONFIRMATION_CANDLES * 2) + 5) or not completed_trigger:
+                   return _rejected_signal(symbol, "rejected", "missing_data", strategy_name=STRATEGY_PURE_SMC)
+           
+          -    setup = _find_pure_smc_setup(completed_candles)
+          +    setup = _find_pure_smc_setup(setup_candles)
+               if setup is None:
+                   return _rejected_signal(
+                       symbol,
+                       "rejected",
+          -            _last_pure_smc_reason(completed_candles),
+          +            _last_pure_smc_reason(setup_candles),
+                       strategy_name=STRATEGY_PURE_SMC,
+                   )
+           
+               direction = str(setup["direction"])
+               break_index = int(setup["break_index"])
+          -    break_candle = completed_candles[break_index]
+          -    latest_candle = completed_candles[-1]
+          -    order_block = _find_pure_smc_order_block(completed_candles, break_index, direction)
+          +    break_candle = setup_candles[break_index]
+          +    latest_candle = completed_trigger[-1]
+          +    order_block = _find_pure_smc_order_block(setup_candles, break_index, direction)
+               if order_block is None:
+                   return _rejected_signal(symbol, "rejected", "invalid_trade_levels", strategy_name=STRATEGY_PURE_SMC)
+           
+          -    fvg_zone = _find_pure_smc_fvg(completed_candles, break_index, direction)
+          +    fvg_zone = _find_pure_smc_fvg(setup_candles, break_index, direction)
+               if fvg_zone is None:
+                   return _rejected_signal(symbol, "rejected", "fvg_not_detected", strategy_name=STRATEGY_PURE_SMC)
+           
+          @@ -465,12 +479,21 @@
+                   return _rejected_signal(symbol, "rejected", "aoi_not_confirmed", strategy_name=STRATEGY_PURE_SMC)
+           
+               invalidation_level = float(order_block["invalidation"])
+          -    invalidated = _setup_invalidated(completed_candles[break_index + 1 :], invalidation_level, direction)
+          +    if separated_timeframes:
+          +        post_break_trigger = [candle for candle in completed_trigger if candle.timestamp >= break_candle.timestamp]
+          +    else:
+          +        post_break_trigger = completed_trigger[break_index + 1 :]
+          +    if not post_break_trigger:
+          +        post_break_trigger = [latest_candle]
+          +
+          +    invalidated = _setup_invalidated(post_break_trigger, invalidation_level, direction)
+               if invalidated:
+                   return _rejected_signal(symbol, "rejected", "setup_invalidated", strategy_name=STRATEGY_PURE_SMC)
+           
+          -    candles_since_break = len(completed_candles) - break_index - 1
+          -    if candles_since_break >= PURE_SMC_EXPIRY_CANDLES and not _candle_inside_zone(latest_candle, mitigation_zone[0], mitigation_zone[1]):
+          +    candles_since_break = len(post_break_trigger)
+          +    if candles_since_break >= PURE_SMC_EXPIRY_CANDLES and not _candle_inside_zone(
+          +        latest_candle, mitigation_zone[0], mitigation_zone[1]
+          +    ):
+                   return _rejected_signal(
+                       symbol,
+                       "expired",
+          @@ -496,7 +519,7 @@
+               mitigated = _candle_inside_zone(latest_candle, mitigation_zone[0], mitigation_zone[1])
+               status = "active" if mitigated else "near_setup"
+               detected_at = latest_candle.timestamp.isoformat() if mitigated else break_candle.timestamp.isoformat()
+          -    return StrategySignal(
+          +    payload = StrategySignal(
+                   symbol=symbol,
+                   strategy_name=STRATEGY_PURE_SMC,
+                   direction=direction,
+          @@ -509,7 +532,11 @@
+                   confidence_score=_pure_smc_confidence(mitigated=mitigated, rr_valid=True),
+                   rejection_reason="waiting_for_mitigation" if not mitigated else None,
+               ).to_dict()
+          -
+          +    payload["setup_timeframe_used"] = separated_timeframes
+          +    payload["setup_candle_count"] = len(setup_candles)
+          +    payload["trigger_candle_count"] = len(completed_trigger)
+          +    payload["setup_detected_at"] = break_candle.timestamp.isoformat()
+          +    return payload
+           
+           def _find_pure_smc_setup(candles: list[Candle]) -> dict[str, Any] | None:
+               swings = _find_confirmed_swings(candles)
+          PATCH
+
+      - name: Verify backend
+        run: |
+          python -m compileall -q app tests
+          python -m unittest discover -s tests -p "test_*.py" -v
+
+      - name: Commit verified changes and remove temporary workflow
+        shell: bash
+        run: |
+          rm .github/workflows/apply-pr74-temp.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/strategy.py .github/workflows/apply-pr74-temp.yml
+          git diff --cached --quiet || git commit -m "fix: use setup and trigger timeframes in strategies"
+          git push origin HEAD:${{ github.head_ref }}
