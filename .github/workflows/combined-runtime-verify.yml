@@ -1,0 +1,256 @@
+name: Combined Runtime Verification
+
+on:
+  push:
+    branches:
+      - verify/combined-runtime-2026-07-15
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      APP_ENV: test
+      DATABASE_URL: sqlite:///./runtime-verify.db
+      BOT_SCAN_INTERVAL_SECONDS: "3600"
+    steps:
+      - name: Checkout combined branch
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip && pip install -r requirements.txt
+
+      - name: Bootstrap database
+        run: python -m app.database_bootstrap
+
+      - name: Run actual Bybit Demo runtime verification
+        shell: bash
+        run: |
+          python - <<'PY'
+          from __future__ import annotations
+
+          import json
+          from datetime import UTC, datetime
+          from pathlib import Path
+
+          import app.scanner as scanner
+          from app.backtest import run_strategy_backtest
+          from app.engines import evaluate_engine_strategies
+          from app.engines.profiles import INTRADAY_PROFILE, SCALPING_PROFILE
+          from app.exchange import get_exchange_client
+          from app.main import health
+          from app.scanner import run_scan
+
+          verified_at = datetime.now(UTC).isoformat()
+          evidence: dict = {
+              "verified_at": verified_at,
+              "branch": "verify/combined-runtime-2026-07-15",
+              "source_head": "7e4ac19f14b19a7fa51f99fd13f2ec58264c0b57",
+              "market_data_mode": "actual_bybit_demo_public_api",
+          }
+
+          assert health() == {"status": "ok"}
+          evidence["backend_health_function"] = {"status": "ok"}
+
+          client = get_exchange_client("demo")
+          reachable, ping_error = client.safe_ping()
+          assert reachable, ping_error
+          evidence["demo_exchange"] = {
+              "base_url": client.base_url,
+              "reachable": reachable,
+              "credentials_present": client.has_credentials(),
+              "public_market_verification_only": True,
+          }
+
+          tickers_ok, tickers, tickers_error = client.safe_fetch_market_tickers()
+          assert tickers_ok and tickers, tickers_error or "No Bybit Demo tickers returned"
+          evidence["demo_market_tickers"] = {
+              "ok": tickers_ok,
+              "count": len(tickers),
+          }
+
+          scanner.UNIVERSE_LIMIT = 3
+          scan = run_scan(client)
+          assert scan.get("ok"), scan
+          assert int(scan.get("symbols_scanned") or 0) > 0, scan
+          assert scan["timeframes"]["scalping"] == SCALPING_PROFILE.timeframes()
+          assert scan["timeframes"]["intraday"] == INTRADAY_PROFILE.timeframes()
+
+          ranked_contracts = []
+          for market in scan.get("ranked_markets") or []:
+              profiles = market.get("profiles") or {}
+              for trade_type, expected in (
+                  ("scalping", SCALPING_PROFILE),
+                  ("intraday", INTRADAY_PROFILE),
+              ):
+                  profile = profiles.get(trade_type) or {}
+                  assert profile.get("timeframes") == expected.timeframes(), (trade_type, profile)
+                  assert profile.get("risk_contract") == expected.risk_contract(), (trade_type, profile)
+              ranked_contracts.append({
+                  "symbol": market.get("symbol"),
+                  "eligible_profiles": market.get("eligible_profiles"),
+                  "market_score": market.get("market_score"),
+              })
+
+          result_contracts = []
+          for row in scan.get("results") or []:
+              trade_type = str(row.get("trade_type") or "")
+              if trade_type in {"scalping", "intraday"}:
+                  assert row.get("engine_profile") == trade_type, row
+              result_contracts.append({
+                  "symbol": row.get("symbol"),
+                  "trade_type": trade_type,
+                  "engine_profile": row.get("engine_profile"),
+                  "signal_state": row.get("signal_state"),
+                  "risk_reward": row.get("risk_reward"),
+                  "profile_adjusted_target": row.get("profile_adjusted_target"),
+                  "rejection_reason": row.get("rejection_reason"),
+              })
+
+          evidence["actual_scanner"] = {
+              "ok": scan.get("ok"),
+              "symbols_scanned": scan.get("symbols_scanned"),
+              "universe": scan.get("universe"),
+              "ranked_symbols": scan.get("ranked_symbols"),
+              "signals_found": scan.get("signals_found"),
+              "strategy_checks": scan.get("strategy_checks"),
+              "timeframes": scan.get("timeframes"),
+              "ranked_contracts": ranked_contracts,
+              "result_contracts": result_contracts,
+              "skipped": scan.get("skipped"),
+          }
+
+          backtests = {}
+          expected_profiles = {
+              "scalping": {
+                  "risk_amount": 20.0,
+                  "min_risk_reward": 1.5,
+                  "max_hold_candles": 30,
+                  "timeframes": SCALPING_PROFILE.timeframes(),
+              },
+              "intraday": {
+                  "risk_amount": 50.0,
+                  "min_risk_reward": 2.0,
+                  "max_hold_candles": 72,
+                  "timeframes": INTRADAY_PROFILE.timeframes(),
+              },
+          }
+          for trade_type in ("scalping", "intraday"):
+              result = run_strategy_backtest(
+                  client,
+                  symbol="BTCUSDT",
+                  strategy="ema_pullback",
+                  trade_type=trade_type,
+                  candle_limit=300,
+              )
+              assert result.get("ok"), result
+              expected = expected_profiles[trade_type]
+              assert result.get("risk_amount") == expected["risk_amount"], result
+              assert result.get("min_risk_reward") == expected["min_risk_reward"], result
+              assert result.get("max_hold_candles") == expected["max_hold_candles"], result
+              assert result.get("profile", {}).get("timeframes") == expected["timeframes"], result
+              parity = result.get("live_pipeline_parity") or {}
+              assert parity.get("profile_engine") is True
+              assert parity.get("trend_gate") is True
+              assert parity.get("canonical_signal_gate") is True
+              assert parity.get("profile_rr_gate") is True
+              backtests[trade_type] = {
+                  "ok": result.get("ok"),
+                  "profile": result.get("profile"),
+                  "risk_amount": result.get("risk_amount"),
+                  "min_risk_reward": result.get("min_risk_reward"),
+                  "max_hold_candles": result.get("max_hold_candles"),
+                  "max_hold_minutes": result.get("max_hold_minutes"),
+                  "live_pipeline_parity": parity,
+                  "candles_trigger": result.get("candles_trigger"),
+                  "candles_setup": result.get("candles_setup"),
+                  "candles_trend": result.get("candles_trend"),
+                  "summary": result.get("summary"),
+              }
+          evidence["actual_btcusdt_backtests"] = backtests
+
+          candles_ok, live_candles, candles_error = client.safe_fetch_recent_candles(
+              symbol="BTCUSDT",
+              interval=INTRADAY_PROFILE.trigger_interval,
+              limit=3,
+          )
+          assert candles_ok and live_candles, candles_error or "No live BTCUSDT candles"
+          reference_candle = live_candles[-2] if len(live_candles) > 1 else live_candles[-1]
+          entry = float(reference_candle["close"])
+          risk_distance = entry * 0.001
+          stop = entry - risk_distance
+          raw_target = entry + (risk_distance * 1.5)
+
+          def live_price_contract_evaluator(symbol, setup_candles, trigger_candles, now=None):
+              return [{
+                  "symbol": symbol,
+                  "strategy_name": "runtime_contract_probe",
+                  "strategy": "runtime_contract_probe",
+                  "direction": "long",
+                  "entry": entry,
+                  "stop_loss": stop,
+                  "take_profit": raw_target,
+                  "risk_reward": 1.5,
+                  "detected_at": reference_candle["timestamp"],
+                  "status": "active",
+                  "confidence_score": 90,
+                  "rejection_reason": None,
+              }]
+
+          scalping_probe = evaluate_engine_strategies(
+              "scalping",
+              symbol="BTCUSDT",
+              setup_candles=live_candles,
+              trigger_candles=live_candles,
+              evaluator=live_price_contract_evaluator,
+          )[0]
+          intraday_probe = evaluate_engine_strategies(
+              "intraday",
+              symbol="BTCUSDT",
+              setup_candles=live_candles,
+              trigger_candles=live_candles,
+              evaluator=live_price_contract_evaluator,
+          )[0]
+          assert scalping_probe["risk_reward"] == 1.5
+          assert scalping_probe["profile_adjusted_target"] is False
+          assert intraday_probe["risk_reward"] == 2.0
+          assert intraday_probe["profile_adjusted_target"] is True
+          assert intraday_probe["raw_risk_reward"] == 1.5
+
+          evidence["live_price_profile_contract_probe"] = {
+              "source": "actual BTCUSDT Bybit Demo 5m close",
+              "reference_timestamp": reference_candle["timestamp"],
+              "reference_entry": entry,
+              "scalping": {
+                  "risk_reward": scalping_probe["risk_reward"],
+                  "take_profit": scalping_probe["take_profit"],
+                  "profile_adjusted_target": scalping_probe["profile_adjusted_target"],
+              },
+              "intraday": {
+                  "raw_risk_reward": intraday_probe["raw_risk_reward"],
+                  "risk_reward": intraday_probe["risk_reward"],
+                  "raw_take_profit": intraday_probe["raw_take_profit"],
+                  "take_profit": intraday_probe["take_profit"],
+                  "profile_adjusted_target": intraday_probe["profile_adjusted_target"],
+              },
+          }
+
+          Path("runtime-evidence.json").write_text(
+              json.dumps(evidence, indent=2, sort_keys=True),
+              encoding="utf-8",
+          )
+          print(json.dumps(evidence, indent=2, sort_keys=True))
+          PY
+
+      - name: Upload runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: combined-runtime-evidence
+          path: runtime-evidence.json
+          if-no-files-found: warn
