@@ -18,6 +18,7 @@ from app.journal import (
 from app.position_sizing import calculate_position_size
 from app.risk import calculate_authoritative_risk_reward, register_active_trade, start_loss_cooldown, validate_trade
 from app.trade_management_profiles import build_profile_management_state
+from app.trade_state import is_exchange_active_status
 
 
 SL_REASON_UNKNOWN = "unknown"
@@ -320,8 +321,19 @@ def execute_signal(client: BybitClient, signal: dict[str, Any], auto_triggered: 
 
 
 def get_active_trades() -> list[dict[str, Any]]:
+    """Return all in-memory execution reservations, including uncertain states."""
     with _execution_lock:
         return [dict(trade) for trade in _active_trades]
+
+
+def get_operator_active_trades() -> list[dict[str, Any]]:
+    """Return only exchange-active positions safe to display as active."""
+    with _execution_lock:
+        return [
+            dict(trade)
+            for trade in _active_trades
+            if is_exchange_active_status(trade.get("status"))
+        ]
 
 
 def get_closed_trades() -> list[dict[str, Any]]:
@@ -330,11 +342,20 @@ def get_closed_trades() -> list[dict[str, Any]]:
 
 
 def replace_active_trades(trades: list[dict[str, Any]]) -> None:
+    active_trades = [
+        dict(trade)
+        for trade in trades
+        if is_exchange_active_status(trade.get("status"))
+    ]
     with _execution_lock:
         _active_trades.clear()
-        _active_trades.extend(dict(trade) for trade in trades)
+        _active_trades.extend(active_trades)
         _active_order_ids.clear()
-        _active_order_ids.extend(str(trade.get("order_id")) for trade in trades if trade.get("order_id"))
+        _active_order_ids.extend(
+            str(trade.get("order_id"))
+            for trade in active_trades
+            if trade.get("order_id")
+        )
 
 
 def update_active_trade(journal_id: str, updates: dict[str, Any]) -> dict[str, Any] | None:
