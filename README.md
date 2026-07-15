@@ -6,18 +6,20 @@ Bybit-first automated trading terminal built with **FastAPI, React, PostgreSQL a
 
 The project is in **Demo Beta / Engineering Verification**. Live-capital trading is not approved.
 
-> **Last documentation update:** 13 July 2026, 3:22 AM BDT (`Asia/Dhaka`)  
-> **Latest `main` commit:** `718aa343d9531770bc3a5f05c18b62715bcf189c` — PR #41 merged  
+> **Last documentation update:** 15 July 2026, 12:35 AM BDT (`Asia/Dhaka`)  
+> **Latest `main` commit:** `bead839` - fee-aware position sizing merged  
 > **Current engineering phase:** deployed runtime verification for `WS-RUNTIME-001`  
 > **Automated verification:** GitHub Actions run #309 **PASS**; backend **203/203 PASS**; frontend TypeScript/build **PASS**  
 > **Runtime status:** independent private/public supervisor hotfix is merged; fresh Render and Bybit Demo verification is **PENDING**  
 > **Runtime tracker:** Issue #37  
 > **Live trading:** blocked by default
 
-> **Current audit update:** 13 July 2026, 11:59 PM BDT (`Asia/Dhaka`)
-> **Latest observed `main` commit:** `e6099e8` - execution, journal and RR fixes merged
+> **Current audit update:** 15 July 2026, 12:35 AM BDT (`Asia/Dhaka`)
+> **Latest observed `main` commit:** `bead839` - fee-aware risk sizing merged
 > **Current engineering phase:** `JOURNAL-LEDGER-SYNC-002` code repair implemented; runtime verification pending
 > **New repair status:** Bybit transaction-log reconciliation, pending-close status, metrics and UI accounting fixes are implemented; fresh Bybit Demo/Render verification is **PENDING**
+
+> **Risk sizing update:** `FEE-RISK-001` is merged in `bead839`. Position sizing now keeps strategy SL/TP fixed and reduces quantity using Stop Loss distance plus estimated open/close fees, so a normal SL hit is sized against net loss instead of price movement only.
 
 ---
 
@@ -34,7 +36,7 @@ DrayFrogd must:
 5. Evaluate approved strategies only in the trend-approved direction.
 6. Produce canonical useful signals.
 7. Recompute risk geometry server-side.
-8. Size positions using fixed USDT risk and Stop Loss distance.
+8. Size positions using fixed USDT risk, Stop Loss distance and estimated open/close fees.
 9. Reserve risk and execution state before exchange submission.
 10. Confirm actual fills and verify exchange protection.
 11. Apply the authoritative Scalping or Intraday management profile.
