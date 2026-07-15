@@ -1,0 +1,81 @@
+name: Rebuild PR 50 on latest main
+
+on:
+  push:
+    branches:
+      - fix/p0-auth-security
+    paths:
+      - .github/workflows/rebuild-pr50.yml
+
+permissions:
+  contents: write
+
+jobs:
+  rebuild:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with:
+          ref: fix/p0-auth-security
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Capture scoped patch
+        run: |
+          git fetch origin main
+          base="$(git merge-base origin/main HEAD)"
+          git diff "$base"..HEAD -- \
+            app/auth.py \
+            app/config.py \
+            app/main.py \
+            app/schemas.py \
+            frontend/src/App.tsx \
+            frontend/src/api.ts \
+            tests/test_auth_security.py \
+            > /tmp/pr50.patch
+          test -s /tmp/pr50.patch
+
+      - name: Reset to latest main and apply patch
+        run: |
+          git reset --hard origin/main
+          git apply --3way /tmp/pr50.patch
+          rm -f .github/workflows/rebuild-pr50.yml
+
+      - name: Verify intended scope
+        run: |
+          changed="$(git diff --name-only origin/main | sort)"
+          printf '%s\n' "$changed"
+          expected=$(printf '%s\n' \
+            app/auth.py \
+            app/config.py \
+            app/main.py \
+            app/schemas.py \
+            frontend/src/App.tsx \
+            frontend/src/api.ts \
+            tests/test_auth_security.py | sort)
+          test "$changed" = "$expected"
+
+      - name: Focused auth tests
+        run: |
+          python -m unittest tests.test_auth_security
+
+      - name: Backend compile and tests
+        run: |
+          python -m compileall -q app tests
+          python -m unittest discover -s tests -p 'test_*.py'
+
+      - name: Frontend checks
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run typecheck
+          npm run build
+
+      - name: Commit rebuilt branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/auth.py app/config.py app/main.py app/schemas.py frontend/src/App.tsx frontend/src/api.ts tests/test_auth_security.py
+          git commit -m "Rebuild auth security on latest main"
+          git push --force-with-lease origin HEAD:fix/p0-auth-security
