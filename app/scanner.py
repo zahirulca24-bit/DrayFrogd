@@ -4,10 +4,12 @@ from datetime import UTC, datetime, timedelta
 from threading import Lock
 from typing import Any
 
+from app.config import settings
 from app.exchange import BybitDemoClient
 from app.market_quality import MAX_SPREAD_BPS, validate_spread
-from app.scanner_logic import evaluate_multitimeframe_logic
+from app.scanner_logic import MIN_SETUP_CANDLES, MIN_TRIGGER_CANDLES, STRUCTURE_SCAN_WINDOW, evaluate_multitimeframe_logic
 from app.scanner_trend import (
+    MIN_TREND_CANDLES,
     TREND_DOWN,
     TREND_INSUFFICIENT,
     TREND_SIDEWAYS,
@@ -21,12 +23,12 @@ from app.signal_pipeline import evaluate_signal_contexts, normalize_strategy_res
 
 
 SCANNER_SYMBOLS: list[str] = []
-UNIVERSE_LIMIT = 30
+UNIVERSE_LIMIT = max(1, settings.scanner_universe_limit)
 
-INTRADAY_TREND_CANDLE_LIMIT = 250
-INTRADAY_SETUP_CANDLE_LIMIT = 250
-SCALPING_SETUP_CANDLE_LIMIT = 250
-SCALPING_TRIGGER_CANDLE_LIMIT = 250
+INTRADAY_TREND_CANDLE_LIMIT = max(MIN_TREND_CANDLES, settings.intraday_trend_candle_limit)
+INTRADAY_SETUP_CANDLE_LIMIT = max(STRUCTURE_SCAN_WINDOW, settings.intraday_setup_candle_limit)
+SCALPING_SETUP_CANDLE_LIMIT = max(STRUCTURE_SCAN_WINDOW, settings.scalping_setup_candle_limit)
+SCALPING_TRIGGER_CANDLE_LIMIT = max(MIN_TRIGGER_CANDLES, settings.scalping_trigger_candle_limit)
 
 INTRADAY_TREND_INTERVAL = "60"
 INTRADAY_SETUP_INTERVAL = "15"
@@ -455,10 +457,10 @@ def _data_completeness(
     candles_1m: list[dict[str, Any]],
 ) -> float:
     ratios = (
-        min(len(candles_1h) / 55.0, 1.0),
-        min(len(candles_15m) / 214.0, 1.0),
-        min(len(candles_5m) / 214.0, 1.0),
-        min(len(candles_1m) / 40.0, 1.0),
+        min(len(candles_1h) / float(min(INTRADAY_TREND_CANDLE_LIMIT, max(MIN_TREND_CANDLES, 55))), 1.0),
+        min(len(candles_15m) / float(min(INTRADAY_SETUP_CANDLE_LIMIT, max(STRUCTURE_SCAN_WINDOW, MIN_SETUP_CANDLES))), 1.0),
+        min(len(candles_5m) / float(min(SCALPING_SETUP_CANDLE_LIMIT, max(STRUCTURE_SCAN_WINDOW, MIN_SETUP_CANDLES))), 1.0),
+        min(len(candles_1m) / float(min(SCALPING_TRIGGER_CANDLE_LIMIT, max(MIN_TRIGGER_CANDLES, 40))), 1.0),
     )
     return sum(ratios) / len(ratios)
 

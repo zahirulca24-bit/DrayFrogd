@@ -38,6 +38,36 @@ class Settings:
     supabase_url: str = os.getenv("SUPABASE_URL", "")
     supabase_service_role_key: str = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
     bot_scan_interval_seconds: int = int(os.getenv("BOT_SCAN_INTERVAL_SECONDS", "30"))
+    scanner_universe_limit: int = int(
+        os.getenv(
+            "SCANNER_UNIVERSE_LIMIT",
+            "12" if os.getenv("APP_ENV", "development").strip().lower() == "production" else "30",
+        )
+    )
+    intraday_trend_candle_limit: int = int(
+        os.getenv(
+            "INTRADAY_TREND_CANDLE_LIMIT",
+            "80" if os.getenv("APP_ENV", "development").strip().lower() == "production" else "250",
+        )
+    )
+    intraday_setup_candle_limit: int = int(
+        os.getenv(
+            "INTRADAY_SETUP_CANDLE_LIMIT",
+            "90" if os.getenv("APP_ENV", "development").strip().lower() == "production" else "250",
+        )
+    )
+    scalping_setup_candle_limit: int = int(
+        os.getenv(
+            "SCALPING_SETUP_CANDLE_LIMIT",
+            "90" if os.getenv("APP_ENV", "development").strip().lower() == "production" else "250",
+        )
+    )
+    scalping_trigger_candle_limit: int = int(
+        os.getenv(
+            "SCALPING_TRIGGER_CANDLE_LIMIT",
+            "60" if os.getenv("APP_ENV", "development").strip().lower() == "production" else "250",
+        )
+    )
 
 
 settings = Settings()
