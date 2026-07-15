@@ -120,12 +120,21 @@ class ScannerIntegrationTests(unittest.TestCase):
         self.assertEqual({item["trade_type"] for item in result["results"]}, {"scalping", "intraday"})
         self.assertEqual(result["signals_found"], 1)
         self.assertEqual(len(result["signals"]), 1)
-        self.assertEqual(result["signals"][0]["symbol"], "BTCUSDT")
-        self.assertTrue(result["signals"][0]["primary_signal"])
-        self.assertEqual(result["signals"][0]["confirmation_count"], 0)
+        primary = result["signals"][0]
+        self.assertEqual(primary["symbol"], "BTCUSDT")
+        self.assertEqual(primary["trade_type"], "intraday")
+        self.assertTrue(primary["primary_signal"])
+        self.assertEqual(primary["confirmation_count"], 1)
+        self.assertEqual(primary["confirmations"][0]["trade_type"], "scalping")
+        self.assertAlmostEqual(primary["risk_reward"], 2.0)
+        self.assertTrue(primary["profile_adjusted_target"])
+
         intraday_result = next(item for item in result["results"] if item["trade_type"] == "intraday")
-        self.assertEqual(intraday_result["signal_state"], "INVALID")
-        self.assertEqual(intraday_result["rejection_reason"], "risk_reward_below_trade_type_minimum")
+        scalping_result = next(item for item in result["results"] if item["trade_type"] == "scalping")
+        self.assertEqual(intraday_result["signal_state"], "ACTIVE")
+        self.assertAlmostEqual(intraday_result["risk_reward"], 2.0)
+        self.assertEqual(scalping_result["signal_state"], "ACTIVE")
+        self.assertAlmostEqual(scalping_result["risk_reward"], 1.5)
 
     def test_sideways_market_never_reaches_strategy_evaluation(self) -> None:
         client = FakeScannerClient()

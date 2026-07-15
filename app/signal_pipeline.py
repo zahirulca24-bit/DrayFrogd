@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from math import isfinite
 from typing import Any
 
+from app.engines import ENGINE_PROFILES, evaluate_engine_strategies
 from app.scanner_trend import (
     TREND_DOWN,
     TREND_INSUFFICIENT,
@@ -14,11 +15,11 @@ from app.scanner_trend import (
 from app.strategy import evaluate_registered_strategies
 
 
-VALID_TRADE_TYPES = {"scalping", "intraday"}
+VALID_TRADE_TYPES = set(ENGINE_PROFILES)
 STRUCTURE_STRATEGIES = {"pure_smc", "hybrid"}
 MIN_RISK_REWARD_BY_TRADE_TYPE = {
-    "scalping": 1.5,
-    "intraday": 2.0,
+    trade_type: profile.min_risk_reward
+    for trade_type, profile in ENGINE_PROFILES.items()
 }
 
 SIGNAL_NO_SETUP = "NO_SETUP"
@@ -54,7 +55,7 @@ _INVALID_REASONS = {
 
 
 def evaluate_signal_contexts(contexts: list[dict[str, Any]]) -> dict[str, Any]:
-    """Evaluate ranked Scanner contexts and return one primary useful signal per symbol."""
+    """Evaluate each ranked Scanner context through its explicit profile engine."""
 
     results: list[dict[str, Any]] = []
     ordered_contexts = sorted(
@@ -72,10 +73,12 @@ def evaluate_signal_contexts(contexts: list[dict[str, Any]]) -> dict[str, Any]:
             results.append(_invalid_context_result(context, "trade_type_missing_or_invalid"))
             continue
 
-        strategy_results = evaluate_registered_strategies(
+        strategy_results = evaluate_engine_strategies(
+            trade_type,
             symbol=str(context.get("symbol") or ""),
-            candles_5m=list(context.get("setup_candles") or []),
-            candles_1m=list(context.get("trigger_candles") or []),
+            setup_candles=list(context.get("setup_candles") or []),
+            trigger_candles=list(context.get("trigger_candles") or []),
+            evaluator=evaluate_registered_strategies,
         )
         for result in strategy_results:
             results.append(
@@ -129,7 +132,7 @@ def normalize_strategy_result(
     market_rank: int | None = None,
     timeframes: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Normalize raw strategy output into the shared five-state signal contract."""
+    """Normalize one profile-engine result into the shared five-state contract."""
 
     original_status = str(result.get("status") or "")
     direction = _normalize_direction(result.get("direction"))
@@ -142,6 +145,13 @@ def normalize_strategy_result(
         "strategy_name": strategy_name,
         "strategy": result.get("strategy") or result.get("strategy_name"),
         "trade_type": selected_trade_type,
+        "engine_profile": result.get("engine_profile") or selected_trade_type,
+        "engine_profile_name": result.get("engine_profile_name"),
+        "engine_min_risk_reward": result.get("engine_min_risk_reward"),
+        "engine_target_r_multiple": result.get("engine_target_r_multiple"),
+        "profile_adjusted_target": bool(result.get("profile_adjusted_target")),
+        "raw_take_profit": result.get("raw_take_profit"),
+        "raw_risk_reward": result.get("raw_risk_reward"),
         "direction": direction,
         "entry": result.get("entry"),
         "stop_loss": result.get("stop_loss"),
@@ -301,6 +311,7 @@ def _invalid_context_result(context: dict[str, Any], reason: str) -> dict[str, A
         "strategy_name": None,
         "strategy": None,
         "trade_type": None,
+        "engine_profile": context.get("engine_profile"),
         "direction": None,
         "entry": None,
         "stop_loss": None,
@@ -426,6 +437,7 @@ def _match_summary(item: dict[str, Any]) -> dict[str, Any]:
         "signal_key": item.get("signal_key"),
         "strategy_name": item.get("strategy_name"),
         "trade_type": item.get("trade_type"),
+        "engine_profile": item.get("engine_profile"),
         "direction": item.get("direction"),
         "signal_state": item.get("signal_state"),
         "confidence_score": item.get("confidence_score"),
