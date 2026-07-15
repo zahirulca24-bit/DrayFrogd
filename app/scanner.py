@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 from threading import Lock
 from typing import Any
 
+from app.engines import INTRADAY_PROFILE, SCALPING_PROFILE, build_engine_context
 from app.exchange import BybitDemoClient
 from app.market_quality import MAX_SPREAD_BPS, validate_spread
 from app.scanner_logic import evaluate_multitimeframe_logic
@@ -28,10 +29,10 @@ INTRADAY_SETUP_CANDLE_LIMIT = 250
 SCALPING_SETUP_CANDLE_LIMIT = 250
 SCALPING_TRIGGER_CANDLE_LIMIT = 250
 
-INTRADAY_TREND_INTERVAL = "60"
-INTRADAY_SETUP_INTERVAL = "15"
-SHARED_5M_INTERVAL = "5"
-SCALPING_TRIGGER_INTERVAL = "1"
+INTRADAY_TREND_INTERVAL = INTRADAY_PROFILE.trend_interval
+INTRADAY_SETUP_INTERVAL = INTRADAY_PROFILE.setup_interval
+SHARED_5M_INTERVAL = SCALPING_PROFILE.setup_interval
+SCALPING_TRIGGER_INTERVAL = SCALPING_PROFILE.trigger_interval
 
 # Backward-compatible names for callers that inspect Scanner constants.
 TREND_CANDLE_LIMIT = INTRADAY_TREND_CANDLE_LIMIT
@@ -73,28 +74,48 @@ def run_scan(client: BybitDemoClient, now: datetime | None = None) -> dict[str, 
 
     for symbol in universe:
         fetched = _fetch_profile_candles(client, symbol, skipped)
-        closed_1h = closed_candles(fetched.get("1h", []), interval_minutes=60, now=reference)
-        closed_15m = closed_candles(fetched.get("15m", []), interval_minutes=15, now=reference)
-        closed_5m = closed_candles(fetched.get("5m", []), interval_minutes=5, now=reference)
-        closed_1m = closed_candles(fetched.get("1m", []), interval_minutes=1, now=reference)
+        closed_1h = closed_candles(
+            fetched.get(INTRADAY_PROFILE.trend_label, []),
+            interval_minutes=INTRADAY_PROFILE.trend_minutes,
+            now=reference,
+        )
+        closed_15m = closed_candles(
+            fetched.get(INTRADAY_PROFILE.setup_label, []),
+            interval_minutes=INTRADAY_PROFILE.setup_minutes,
+            now=reference,
+        )
+        closed_5m = closed_candles(
+            fetched.get(SCALPING_PROFILE.setup_label, []),
+            interval_minutes=SCALPING_PROFILE.setup_minutes,
+            now=reference,
+        )
+        closed_1m = closed_candles(
+            fetched.get(SCALPING_PROFILE.trigger_label, []),
+            interval_minutes=SCALPING_PROFILE.trigger_minutes,
+            now=reference,
+        )
 
-        scalping_trend = _profile_trend(closed_15m, interval_minutes=15, now=reference)
-        intraday_trend = _profile_trend(closed_1h, interval_minutes=60, now=reference)
+        scalping_trend = _profile_trend(
+            closed_15m, interval_minutes=SCALPING_PROFILE.trend_minutes, now=reference
+        )
+        intraday_trend = _profile_trend(
+            closed_1h, interval_minutes=INTRADAY_PROFILE.trend_minutes, now=reference
+        )
 
         scalping_reason = _profile_rejection_reason(
             scalping_trend,
             setup_candles=closed_5m,
-            setup_interval_minutes=5,
+            setup_interval_minutes=SCALPING_PROFILE.setup_minutes,
             trigger_candles=closed_1m,
-            trigger_interval_minutes=1,
+            trigger_interval_minutes=SCALPING_PROFILE.trigger_minutes,
             now=reference,
         )
         intraday_reason = _profile_rejection_reason(
             intraday_trend,
             setup_candles=closed_15m,
-            setup_interval_minutes=15,
+            setup_interval_minutes=INTRADAY_PROFILE.setup_minutes,
             trigger_candles=closed_5m,
-            trigger_interval_minutes=5,
+            trigger_interval_minutes=INTRADAY_PROFILE.trigger_minutes,
             now=reference,
         )
 
@@ -126,6 +147,7 @@ def run_scan(client: BybitDemoClient, now: datetime | None = None) -> dict[str, 
                 "rejection_reason": scalping_reason,
                 "trend": scalping_trend,
                 "timeframes": _scalping_timeframes(),
+                "risk_contract": SCALPING_PROFILE.risk_contract(),
             },
             "intraday": {
                 "eligible": intraday_eligible,
@@ -134,6 +156,7 @@ def run_scan(client: BybitDemoClient, now: datetime | None = None) -> dict[str, 
                 "trend": intraday_trend,
                 "scanner_logic": intraday_logic,
                 "timeframes": _intraday_timeframes(),
+                "risk_contract": INTRADAY_PROFILE.risk_contract(),
             },
         }
 
@@ -178,32 +201,30 @@ def run_scan(client: BybitDemoClient, now: datetime | None = None) -> dict[str, 
         contexts: list[dict[str, Any]] = []
         if scalping_eligible:
             contexts.append(
-                {
-                    "symbol": symbol,
-                    "trade_type": "scalping",
-                    "trend": scalping_trend,
-                    "scanner_logic": {
+                build_engine_context(
+                    "scalping",
+                    symbol=symbol,
+                    trend=scalping_trend,
+                    scanner_logic={
                         "status": "eligible",
                         "direction": _approved_direction(scalping_trend),
-                        "reason": "scalping_15m_trend_eligible",
+                        "reason": f"scalping_{SCALPING_PROFILE.trend_label}_trend_eligible",
                         "confidence_score": scalping_trend.get("strength"),
                     },
-                    "setup_candles": closed_5m,
-                    "trigger_candles": closed_1m,
-                    "timeframes": _scalping_timeframes(),
-                }
+                    setup_candles=closed_5m,
+                    trigger_candles=closed_1m,
+                )
             )
         if intraday_eligible:
             contexts.append(
-                {
-                    "symbol": symbol,
-                    "trade_type": "intraday",
-                    "trend": intraday_trend,
-                    "scanner_logic": intraday_logic,
-                    "setup_candles": closed_15m,
-                    "trigger_candles": closed_5m,
-                    "timeframes": _intraday_timeframes(),
-                }
+                build_engine_context(
+                    "intraday",
+                    symbol=symbol,
+                    trend=intraday_trend,
+                    scanner_logic=intraday_logic,
+                    setup_candles=closed_15m,
+                    trigger_candles=closed_5m,
+                )
             )
         pending_contexts[symbol] = contexts
 
@@ -318,10 +339,10 @@ def _fetch_profile_candles(
     skipped: list[dict[str, str]],
 ) -> dict[str, list[dict[str, Any]]]:
     specs = (
-        ("1h", INTRADAY_TREND_INTERVAL, INTRADAY_TREND_CANDLE_LIMIT),
-        ("15m", INTRADAY_SETUP_INTERVAL, INTRADAY_SETUP_CANDLE_LIMIT),
-        ("5m", SHARED_5M_INTERVAL, SCALPING_SETUP_CANDLE_LIMIT),
-        ("1m", SCALPING_TRIGGER_INTERVAL, SCALPING_TRIGGER_CANDLE_LIMIT),
+        (INTRADAY_PROFILE.trend_label, INTRADAY_TREND_INTERVAL, INTRADAY_TREND_CANDLE_LIMIT),
+        (INTRADAY_PROFILE.setup_label, INTRADAY_SETUP_INTERVAL, INTRADAY_SETUP_CANDLE_LIMIT),
+        (SCALPING_PROFILE.setup_label, SHARED_5M_INTERVAL, SCALPING_SETUP_CANDLE_LIMIT),
+        (SCALPING_PROFILE.trigger_label, SCALPING_TRIGGER_INTERVAL, SCALPING_TRIGGER_CANDLE_LIMIT),
     )
     fetched: dict[str, list[dict[str, Any]]] = {}
     for label, interval, limit in specs:
@@ -464,21 +485,11 @@ def _data_completeness(
 
 
 def _scalping_timeframes() -> dict[str, Any]:
-    return {
-        "trend": "15m",
-        "setup": "5m",
-        "trigger": "1m",
-        "open_candle_confirmation": False,
-    }
+    return SCALPING_PROFILE.timeframes()
 
 
 def _intraday_timeframes() -> dict[str, Any]:
-    return {
-        "trend": "1h",
-        "setup": "15m",
-        "trigger": "5m",
-        "open_candle_confirmation": False,
-    }
+    return INTRADAY_PROFILE.timeframes()
 
 
 def _parse_timestamp(value: Any) -> datetime | None:
