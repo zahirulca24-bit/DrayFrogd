@@ -6,20 +6,21 @@ Bybit-first automated trading terminal built with **FastAPI, React, PostgreSQL a
 
 The project is in **Demo Beta / Engineering Verification**. Live-capital trading is not approved.
 
-> **Last documentation update:** 15 July 2026, 12:35 AM BDT (`Asia/Dhaka`)  
-> **Latest `main` commit:** `bead839` - fee-aware position sizing merged  
-> **Current engineering phase:** deployed runtime verification for `WS-RUNTIME-001`  
-> **Automated verification:** GitHub Actions run #309 **PASS**; backend **203/203 PASS**; frontend TypeScript/build **PASS**  
-> **Runtime status:** independent private/public supervisor hotfix is merged; fresh Render and Bybit Demo verification is **PENDING**  
+> **Last documentation update:** 16 July 2026 (`Asia/Dhaka`)  
+> **Latest `main` commit:** `1d28a6ea` — canonical Backtest/live-pipeline parity merged  
+> **Current engineering phase:** canonical Scalping/Intraday engine separation and Backtest parity are merged  
+> **Automated verification:** GitHub Actions run #572 **PASS**; backend compile/tests **PASS**; frontend TypeScript/build **PASS**  
+> **Runtime status:** **CODE PASS / RUNTIME PENDING** — fresh Render and Bybit Demo verification is still required  
 > **Runtime tracker:** Issue #37  
 > **Live trading:** blocked by default
 
-> **Current audit update:** 15 July 2026, 12:35 AM BDT (`Asia/Dhaka`)
-> **Latest observed `main` commit:** `bead839` - fee-aware risk sizing merged
-> **Current engineering phase:** `JOURNAL-LEDGER-SYNC-002` code repair implemented; runtime verification pending
-> **New repair status:** Bybit transaction-log reconciliation, pending-close status, metrics and UI accounting fixes are implemented; fresh Bybit Demo/Render verification is **PENDING**
+> **Current audit update:** 16 July 2026 (`Asia/Dhaka`)  
+> **Latest observed `main` commit:** `1d28a6ea` — PR #75 merged  
+> **Engine status:** Scalping and Intraday are separate canonical profiles/engines that share approved strategy, signal-normalization and execution infrastructure  
+> **Merge chain:** PR #71, #72, #73, #74 and #75 are merged after fresh CI verification  
+> **Runtime proof:** Scanner/Backtest profile metadata and private Demo execution lifecycle remain **PENDING**
 
-> **Risk sizing update:** `FEE-RISK-001` is merged in `bead839`. Position sizing now keeps strategy SL/TP fixed and reduces quantity using Stop Loss distance plus estimated open/close fees, so a normal SL hit is sized against net loss instead of price movement only.
+> **Risk sizing update:** `FEE-RISK-001` is merged in `bead839`. Position sizing keeps strategy SL/TP fixed and reduces quantity using Stop Loss distance plus estimated open/close fees, so a normal SL hit is sized against net loss instead of price movement only.
 
 ---
 
@@ -53,12 +54,15 @@ React + TypeScript Frontend
 FastAPI Backend
         |
         +-- Scanner
-        +-- Strategy Engine
-        +-- Signal Engine
+        +-- Canonical Scalping Engine Profile
+        +-- Canonical Intraday Engine Profile
+        +-- Shared Approved Strategy Layer
+        +-- Canonical Signal Engine / Signal Gate
         +-- Risk Engine
         +-- Position Sizing
         +-- Execution Service
-        +-- Trade Management
+        +-- Trade-Type-Specific Management
+        +-- Backtest Engine using canonical profile/signal gates
         +-- Journal and Authoritative Reconciliation
         +-- Bybit Private/Public WebSocket Service
         +-- Browser WebSocket Status Polling
@@ -87,11 +91,12 @@ Bybit V5 Demo / Live APIs
 Bybit USDT Perpetual Market
 → Liquidity / Turnover / Movement / Spread Filter
 → Closed-Candle Profile-Specific Analysis
+→ Scalping Engine or Intraday Engine Context
 → Trend Classification
 → Reject Sideways / Stale / Insufficient Markets
 → Rank Eligible Markets
-→ Strategy Engine
-→ Canonical Signal State
+→ Shared Approved Strategy Layer
+→ Canonical Signal State and Signal Gate
 → Signal Engine Deduplication and Ranking
 → ACTIVE Signal
 → Risk Gate
@@ -106,9 +111,10 @@ Bybit USDT Perpetual Market
 
 ## 4. Scanner and Signal rules
 
-- Ranked universe is capped at **Top 30**.
-- **Scalping:** 5-minute setup/trend + 1-minute trigger.
+- Ranked universe uses the memory-safe configured limit; current production default is **Top 12**.
+- **Scalping:** 15-minute trend + 5-minute setup + 1-minute trigger.
 - **Intraday:** 1-hour trend + 15-minute setup + 5-minute trigger.
+- Scalping and Intraday use separate canonical engine profiles and risk contracts.
 - Open/current candles are excluded from confirmed analysis.
 - `SIDEWAYS`, `INSUFFICIENT_DATA` and stale data are blocked.
 - Manual `/scanner/run` is scan-only.
@@ -124,12 +130,15 @@ Bybit USDT Perpetual Market
 2. **Breakout**
 3. **Pure SMC**
 
+Breakout and Pure SMC consume setup and trigger timeframes separately. Setup timeframe supplies structural context; trigger timeframe supplies confirmation/invalidation evidence.
+
 ## 6. Locked Risk and Trade profiles
 
 Scalping and Intraday must never share one generic management profile.
 
 | Rule | Scalping | Intraday |
 |---|---:|---:|
+| Timeframes | 15m trend / 5m setup / 1m trigger | 1h trend / 15m setup / 5m trigger |
 | Fixed risk per trade | 20 USDT | 50 USDT |
 | Maximum leverage | 20x | 10x |
 | Minimum Risk:Reward | 1:1.5 | 1:2.0 |
@@ -139,11 +148,12 @@ Scalping and Intraday must never share one generic management profile.
 | Early protection | At 1R move SL to break-even plus observed fee buffer | At TP1 move SL to break-even |
 | After TP2 | Move remaining SL to TP1 price | Activate trailing protection |
 | Trailing stop | Disabled | Enabled only after TP2 |
-| Maximum duration | 59 minutes | 6 hours |
+| Backtest maximum hold | 30 trigger candles | 72 trigger candles |
+| Maximum live duration | 59 minutes | 6 hours |
 
-Every managed trade must persist authoritative `trade_type`, `strategy_name`, `management_profile`, leverage, TP ladder, allocation, protection rule and lifecycle timestamps.
+Every managed trade must persist authoritative `trade_type`, `strategy_name`, `engine_profile`, `management_profile`, leverage, TP ladder, allocation, protection rule and lifecycle timestamps.
 
-An unknown or conflicting profile must not silently inherit Scalping or Intraday management.
+An unknown or conflicting profile must fail closed and must not silently inherit Scalping or Intraday management.
 
 ### Portfolio controls
 
@@ -180,7 +190,7 @@ An unknown or conflicting profile must not silently inherit Scalping or Intraday
 | 2A | Intraday TP1 break-even and TP2 trailing retry | **Merged in PR #36 — runtime pending** |
 | 2B | Partial-fill Journal, fees and realized PnL | **Merged in PR #36 — realized PnL runtime PASS** |
 | 2C | Dashboard/Active Trades open-partial realized PnL | **Runtime PASS** |
-| 3 | Recover authoritative strategy/profile metadata | Pending |
+| 3 | Recover authoritative strategy/profile metadata | Canonical `trade_type`/`engine_profile` architecture merged; deployed verification pending |
 | 4 | Correct TP labels and Risk/daily-trade UI values | Pending |
 | 5 | Blank-page stability | Signal page browser verification **PASS** |
 | 6 | Complete Scalping Demo re-verification | Pending |
@@ -190,7 +200,8 @@ An unknown or conflicting profile must not silently inherit Scalping or Intraday
 | 8B.1 | `WS-RUNTIME-001` independent channel supervision and exact errors | **Merged in PR #41 — runtime pending** |
 | 8C | Restart, close cleanup and orphan-order verification | Pending deployed verification |
 | 9 | ACTIVE-signal execution decision visibility | Audit complete; implementation pending after state-sync runtime check |
-| 10 | Historical data/backtesting after runtime closure | Pending |
+| 10 | Historical data/backtesting parity | **Merged in PR #75 — code/CI PASS, runtime pending** |
+| 11 | Canonical dual-engine architecture | **PR #71–#74 merged — code/CI PASS, runtime pending** |
 
 Only one bounded repair package may be active at a time. Runtime PASS requires exchange evidence, not CI alone.
 
@@ -281,7 +292,7 @@ Only one bounded repair package may be active at a time. Runtime PASS requires e
 
 ### Accounting verdict
 
-The deployed PR #36 build now proves that the realized-PnL accounting path is functioning after the LABUSDT trade closed:
+The deployed PR #36 build proves that the realized-PnL accounting path functions after the LABUSDT trade closed:
 
 - Dashboard realized PnL updated from `$0.00` to `$27.64`.
 - Active Trades realized PnL displayed `$27.6431`.
@@ -289,7 +300,7 @@ The deployed PR #36 build now proves that the realized-PnL accounting path is fu
 
 **Result:** Realized-PnL synchronization is **RUNTIME PASS**.
 
-This does not yet prove the TP1 break-even or TP2 trailing protection transitions. Those remain open in Issue #37.
+This does not prove the TP1 break-even or TP2 trailing protection transitions. Those remain open in Issue #37.
 
 ### Newly identified execution-capacity issue
 
@@ -316,13 +327,15 @@ This is not yet classified as a confirmed code defect because execution-event/re
 | Dashboard/Active Trades realized repair | **100%** | Runtime PASS |
 | Intraday BE/trailing repair | **75%** | Code/tests PASS; live protection transitions pending |
 | Complete Intraday deployed lifecycle | **60%** | Entry, close and accounting verified; BE/trailing/restart/cleanup pending |
-| Metadata recovery | **0%** | Not started |
+| Canonical Scalping/Intraday engine separation | **100% code** | PR #71–#73 merged; runtime profile-selection proof pending |
+| Breakout/Pure SMC multi-timeframe correctness | **100% code** | PR #74 merged; runtime strategy evidence pending |
+| Backtest/live signal-generation parity | **100% code** | PR #75 merged; real market-data runtime pending |
 | ACTIVE-signal execution-capacity audit | **0%** | New bounded audit item |
 | Restart/cleanup/orphan-order verification | **0%** | Not started |
 
 ### `STATE-SYNC-001 + WS-001` bounded implementation
 
-The refresh mismatch was traced to conflicting active-trade authorities: exchange positions, Journal rows, process memory and read endpoints could independently rebuild or mutate state. The implementation now establishes one exchange-authoritative operator snapshot and adds real-time Bybit event ingestion without treating WebSocket delivery as a substitute for REST reconciliation.
+The refresh mismatch was traced to conflicting active-trade authorities: exchange positions, Journal rows, process memory and read endpoints could independently rebuild or mutate state. The implementation establishes one exchange-authoritative operator snapshot and adds real-time Bybit event ingestion without treating WebSocket delivery as a substitute for REST reconciliation.
 
 #### Implemented behavior
 
@@ -386,51 +399,29 @@ The approved hotfix establishes these rules:
 
 ### Current verdict
 
-PR #41 is merged into `main`. `WS-RUNTIME-001` code and CI are **PASS**, but the corrected build has not yet been verified on Render or against live Bybit Demo WebSocket endpoints. No WebSocket runtime PASS is claimed yet. `STATE-SYNC-001` remains under deployed verification, and REST reconciliation remains the active accounting/state authority.
+PR #41 is merged into `main`. `WS-RUNTIME-001` code and CI are **PASS**, but the corrected build has not yet been verified on Render or against live Bybit Demo WebSocket endpoints. No WebSocket runtime PASS is claimed. `STATE-SYNC-001` remains under deployed verification, and REST reconciliation remains the active accounting/state authority.
 
 ### `JOURNAL-LEDGER-SYNC-002` repo audit after Bybit transaction-log screenshots
 
 The latest deployed screenshots showed that Bybit Demo transaction history already contains exact trade ledger evidence: direction, quantity, filled price, fee paid, cash flow, change and wallet balance. The application still displayed incomplete Journal rows, zero Performance PnL, incomplete SL-hit analysis and low-price Dashboard cards rounded to `$0.00`.
 
-This audit was performed against repository `main` at commit `e6099e8`. The first code repair is now implemented in the working tree, but no fresh Bybit Demo/Render runtime PASS is claimed yet.
+This audit was performed against repository `main` at commit `e6099e8`. The code repair has since been merged, but no fresh Bybit Demo/Render runtime PASS is claimed.
 
 #### Confirmed repo root causes
 
 | Area | Repository evidence | Runtime symptom |
 |---|---|---|
-| Missing Bybit ledger ingestion | `app/exchange.py` has wallet, positions and orders fetchers, but no `/v5/account/transaction-log` fetcher | Bybit Transaction Log has exact rows, but Journal/Performance cannot consume them |
-| Close sync depends on closed-PnL only | `app/close_fill_sync.py` uses `/v5/position/closed-pnl` and rejects partial/over-quantity aggregates | Closed rows can remain without exact exit, fee or realized PnL |
-| Pending close is persisted as closed | `app/reconciliation_persistence.py::_persist_pending_close_sync` writes `status="closed"` even when exact close data is unavailable | Journal shows `CLOSED` with `N/A` financial values and many rows need attention |
-| Win/loss classification mismatch | `app/metrics.py` counts only `result == tp/sl`, while close sync writes `profit/loss/flat/reconciliation_stale` | Win rate, PnL-R and SL-hit metrics can stay wrong or insufficient |
-| Performance fabricates zero PnL for unknown closes | `frontend/src/components/PerformanceStrategy.tsx` maps closed rows with null `realized_pnl` to `pnl: 0` | Performance cards and tables show `$0.00` even when the financial outcome is unknown |
-| Tiny-price formatting is too coarse | `frontend/src/components/DashboardView.tsx` formats all money with exactly 2 decimals | Valid low-price instruments like `TUSDT` display as `$0.00` |
-| Protection no-op logged as error | `app/trade_management.py` logs all `set_trading_stop` exchange exceptions as `PROTECTION_UPDATE_FAILED` | Incident Center can show noisy `not modified` protection errors |
-
-#### Required repair plan
-
-1. Add a Bybit transaction-log client method and safe wrapper for `/v5/account/transaction-log`.
-2. Add ledger reconciliation that pairs `Open Buy/Sell` and `Close Buy/Sell` rows by symbol, side, quantity, time window and wallet change.
-3. Persist exact close evidence from transaction-log rows: exit price, realized PnL/change, cash flow, fees, quantity, close timestamp and source metadata.
-4. Stop marking missing exact close evidence as fully `closed`; keep it in `close_pending_sync` or explicit `sync_incomplete` until terminal evidence exists.
-5. Normalize metrics results from exact `realized_pnl` first, then `profit/loss/tp/sl`, and keep unknown rows out of win/loss calculations.
-6. Update Performance so unknown financial outcomes remain `N/A`, not `$0.00`, while known realized PnL is counted.
-7. Add a shared price formatter so sub-dollar prices keep enough decimals on Dashboard, Active Trades, Journal and Performance.
-8. Treat Bybit `not modified` protection responses as harmless no-op when current SL/TP already match the desired protection.
-
-#### Expected result after implementation
-
-| Surface | Expected behavior |
-|---|---|
-| Journal | Closed trades show exact exit, fee, realized PnL and close source when Bybit ledger evidence exists |
-| Performance | Net PnL, strategy PnL, symbol PnL, win rate and SL-hit analysis use known financial outcomes only |
-| Dashboard | Low-price instruments no longer collapse to `$0.00`; active cards match Active Trades |
-| Active Trades | Realized/unrealized values remain exchange-authoritative and align with Dashboard totals |
-| Incident Center | Harmless protection no-ops stop appearing as high-severity operational errors |
-| Audit trail | Unknown values remain visibly `N/A` or `SYNC PENDING`; the app does not invent zero PnL |
+| Missing Bybit ledger ingestion | `app/exchange.py` lacked a `/v5/account/transaction-log` fetcher | Bybit Transaction Log had exact rows, but Journal/Performance could not consume them |
+| Close sync depended on closed-PnL only | `app/close_fill_sync.py` relied on `/v5/position/closed-pnl` | Closed rows could remain without exact exit, fee or realized PnL |
+| Pending close was persisted as closed | Missing exact close evidence could still produce a terminal-looking row | Journal showed `CLOSED` with `N/A` financial values |
+| Win/loss classification mismatch | Metrics accepted a narrower result vocabulary than reconciliation emitted | Win rate, PnL-R and SL-hit metrics could stay wrong |
+| Performance fabricated zero PnL for unknown closes | Null realized PnL was mapped to zero | Performance showed `$0.00` when the result was unknown |
+| Tiny-price formatting was too coarse | Fixed two-decimal money formatting | Low-price instruments displayed as `$0.00` |
+| Protection no-op logged as error | All protection exceptions were treated as failures | Incident Center could show noisy `not modified` errors |
 
 #### Verification gate
 
-`JOURNAL-LEDGER-SYNC-002` must not be called fixed until a fresh Bybit Demo lifecycle proves:
+`JOURNAL-LEDGER-SYNC-002` must not be called runtime-fixed until a fresh Bybit Demo lifecycle proves:
 
 - a new open trade creates a Journal record;
 - partial and final close rows are repaired from Bybit transaction-log evidence;
@@ -439,10 +430,59 @@ This audit was performed against repository `main` at commit `e6099e8`. The firs
 - unknown rows remain `N/A` or `SYNC PENDING`, never fake `$0.00`;
 - backend tests, frontend TypeScript and frontend production build pass.
 
+---
+
+## 16 July 2026 — Thursday
+
+### Canonical dual-engine and Backtest parity merge chain
+
+| PR | Scope | Fresh CI | Merge result |
+|---:|---|---|---|
+| #71 | Canonical Scalping and Intraday engine profiles/adapters | Previous CI evidence verified | **Merged — `740ffa4e`** |
+| #72 | Canonical Risk and Trade Management profile authority | Conflict repaired and verified | **Merged — `af657dec`** |
+| #73 | Scanner canonical profile wiring with memory-safe limits preserved | Run #566 **PASS** | **Merged — `c173ad5d`** |
+| #74 | Breakout and Pure SMC setup/trigger timeframe correctness | Run #569 **PASS** | **Merged — `b8732d25`** |
+| #75 | Backtest defaults and canonical live signal-gate parity | Run #572 **PASS** | **Merged — `1d28a6ea`** |
+
+### Architecture verdict
+
+Scalping and Intraday are **separate canonical engines/profiles**, not one generic mode with shared numerical rules.
+
+```text
+Scanner
+  ├─ Scalping Engine: 15m trend → 5m setup → 1m trigger
+  └─ Intraday Engine: 1h trend → 15m setup → 5m trigger
+            ↓
+Shared approved strategy layer
+            ↓
+Canonical signal normalization and validation
+            ↓
+Risk / Execution / Trade-Type-Specific Management / Backtest
+```
+
+Shared infrastructure is intentional. It avoids duplicate strategy, normalization and execution code while keeping timeframe, risk, minimum R:R, leverage and management contracts independent.
+
+### Current verification status
+
+| Gate | Status |
+|---|---|
+| Canonical profile source of truth | **CODE PASS** |
+| Scanner memory-safe limits preserved | **CI PASS** |
+| Scalping minimum 1.5R | **CODE/TEST PASS** |
+| Intraday minimum 2.0R and raw 1.5R adjustment | **CODE/TEST PASS** |
+| Breakout/Pure SMC multi-timeframe behavior | **CODE/TEST PASS** |
+| Backtest canonical defaults and signal gates | **CODE/TEST PASS** |
+| Render deployment of latest `main` | **PENDING** |
+| Live Scanner `trade_type`/`engine_profile` evidence | **PENDING** |
+| Real Bybit market Backtest execution | **PENDING** |
+| Private Bybit Demo order/protection lifecycle | **PENDING** |
+
+**Overall verdict:** `CODE PASS / RUNTIME PENDING`. Live-capital approval remains blocked.
+
 ### Next tasks
 
-1. Confirm Render deployed merge commit `718aa343d9531770bc3a5f05c18b62715bcf189c`.
-2. Verify private Demo authentication and public linear connectivity independently.
-3. Confirm one channel can fail without changing or closing the other channel.
-4. Run repeated refresh, disconnect/reconnect and restart checks while REST reconciliation remains active.
-5. Continue partial-fill, TP protection, Journal fee/exit and cleanup verification in Issue #37.
+1. Confirm Render deploys merge commit `1d28a6ea2622935d3beba67bceebd7315fd7a4bb`.
+2. Verify separate Scalping and Intraday rows expose matching `trade_type`, `engine_profile`, timeframes and risk contract.
+3. Confirm Intraday ACTIVE signals cannot remain below `2.0R`.
+4. Run canonical Scalping and Intraday Backtests against reachable Bybit market data.
+5. Verify private Demo execution/protection lifecycle separately before any production-release decision.
