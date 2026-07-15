@@ -3,37 +3,17 @@ from __future__ import annotations
 from math import isfinite
 from typing import Any
 
+from app.engines import ENGINE_PROFILES, SCALPING_PROFILE
+
 
 LEGACY_MAX_HOLD_SECONDS = 4 * 60 * 60
 
+# Backward-compatible public view derived from the canonical engine profiles.
 TRADE_MANAGEMENT_PROFILES: dict[str, dict[str, Any]] = {
-    "scalping": {
-        "profile_name": "scalping_v2",
-        "tp1_r": 1.5,
-        "tp2_r": 2.0,
-        "runner_r": 2.5,
-        "tp1_fraction": 0.50,
-        "tp2_fraction": 0.25,
-        "runner_fraction": 0.25,
-        "break_even_trigger_r": 1.0,
-        "post_tp2_stop_r": 1.5,
-        "trailing_enabled": False,
-        "max_hold_seconds": 30 * 60,
-    },
-    "intraday": {
-        "profile_name": "intraday_v1",
-        "tp1_r": 2.0,
-        "tp2_r": 2.5,
-        "runner_r": 3.0,
-        "tp1_fraction": 0.50,
-        "tp2_fraction": 0.25,
-        "runner_fraction": 0.25,
-        "break_even_trigger_r": 2.0,
-        "post_tp2_stop_r": None,
-        "trailing_enabled": True,
-        "max_hold_seconds": 6 * 60 * 60,
-    },
+    trade_type: profile.management_contract()
+    for trade_type, profile in ENGINE_PROFILES.items()
 }
+PROFILE_NAMES = frozenset(profile.profile_name for profile in ENGINE_PROFILES.values())
 
 
 def build_profile_management_state(
@@ -125,14 +105,11 @@ def trade_type_from_trade(trade: dict[str, Any], management: dict[str, Any] | No
 
 
 def is_profiled_management(management: dict[str, Any]) -> bool:
-    return str(management.get("profile_name") or "") in {
-        "scalping_v2",
-        "intraday_v1",
-    }
+    return str(management.get("profile_name") or "") in PROFILE_NAMES
 
 
 def is_scalping_management(management: dict[str, Any]) -> bool:
-    return str(management.get("profile_name") or "") == "scalping_v2"
+    return str(management.get("profile_name") or "") == SCALPING_PROFILE.profile_name
 
 
 def trailing_enabled(management: dict[str, Any]) -> bool:

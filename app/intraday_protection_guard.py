@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.engines import INTRADAY_PROFILE as INTRADAY_ENGINE_PROFILE
 from app.execution_core import get_active_trades
 from app.native_profit_orders import (
     FILLED_STATUSES,
@@ -15,7 +16,7 @@ from app.native_profit_orders import (
 from app.trade_management_profiles import break_even_stop, post_tp2_stop
 
 
-INTRADAY_PROFILE = "intraday_v1"
+INTRADAY_PROFILE = INTRADAY_ENGINE_PROFILE.profile_name
 
 
 def enforce_intraday_protection(client: Any) -> dict[str, Any]:

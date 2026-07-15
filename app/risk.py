@@ -11,6 +11,7 @@ from sqlalchemy import inspect, text
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.bot_controls import stop_bot
+from app.engines import ENGINE_PROFILES
 from app.database import SessionLocal, engine
 from app.journal import log_bot_event
 from app.models import RiskRuntimeState, TradeJournal
@@ -26,17 +27,10 @@ CAPITAL_EXPOSURE_CAP = 0.50
 LOSS_COOLDOWN_MINUTES = 30
 RR_MISMATCH_TOLERANCE = 0.02
 
+# Backward-compatible public view derived from the canonical engine profiles.
 RISK_PROFILES: dict[str, dict[str, float]] = {
-    "scalping": {
-        "risk_amount": 20.0,
-        "leverage_cap": 20.0,
-        "min_risk_reward": 1.5,
-    },
-    "intraday": {
-        "risk_amount": 50.0,
-        "leverage_cap": 10.0,
-        "min_risk_reward": 2.0,
-    },
+    trade_type: profile.risk_contract()
+    for trade_type, profile in ENGINE_PROFILES.items()
 }
 
 _risk_lock = Lock()
