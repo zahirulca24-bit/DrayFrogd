@@ -17,6 +17,7 @@ from app.risk_cooldown_sync import sync_loss_cooldowns
 from app.risk_execution import execute_signal
 from app.risk_sync import sync_partial_realized_pnl
 from app.runtime_integration import install_runtime_integration
+from app.scalping_profit_lock_guard import enforce_scalping_tp2_profit_locks
 from app.scanner import get_active_signals, run_scan
 from app.trade_management import manage_open_trades
 
@@ -53,6 +54,10 @@ async def native_profit_monitor_loop() -> None:
             result = await asyncio.to_thread(reconcile_native_profit_orders, client)
             if not result.get("ok") and result.get("errors"):
                 logger.debug("Native TP reconciliation pending: %s", result.get("errors"))
+
+            scalping_result = await asyncio.to_thread(enforce_scalping_tp2_profit_locks, client)
+            if not scalping_result.get("ok") and scalping_result.get("errors"):
+                logger.debug("Scalping TP2 profit-lock verification pending: %s", scalping_result.get("errors"))
 
             protection_result = await asyncio.to_thread(enforce_intraday_protection, client)
             if not protection_result.get("ok") and protection_result.get("errors"):
