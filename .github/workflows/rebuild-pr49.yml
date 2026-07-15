@@ -1,0 +1,91 @@
+name: Rebuild PR 49 on latest main
+
+on:
+  push:
+    branches:
+      - fix/p0-trade-status-separation
+    paths:
+      - .github/workflows/rebuild-pr49.yml
+
+permissions:
+  contents: write
+
+jobs:
+  rebuild:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with:
+          ref: fix/p0-trade-status-separation
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Capture scoped patch
+        run: |
+          git fetch origin main
+          base="$(git merge-base origin/main HEAD)"
+          git diff "$base"..HEAD -- \
+            app/execution.py \
+            app/execution_core.py \
+            app/journal.py \
+            app/main.py \
+            app/metrics.py \
+            app/trade_state.py \
+            app/watchdog.py \
+            tests/test_trade_status_separation.py \
+            > /tmp/pr49.patch
+          test -s /tmp/pr49.patch
+
+      - name: Reset to latest main and apply patch
+        run: |
+          git reset --hard origin/main
+          git apply --3way /tmp/pr49.patch
+          rm -f .github/workflows/rebuild-pr49.yml
+
+      - name: Verify intended scope
+        run: |
+          changed="$(git diff --name-only origin/main | sort)"
+          printf '%s\n' "$changed"
+          expected=$(printf '%s\n' \
+            app/execution.py \
+            app/execution_core.py \
+            app/journal.py \
+            app/main.py \
+            app/metrics.py \
+            app/trade_state.py \
+            app/watchdog.py \
+            tests/test_trade_status_separation.py | sort)
+          test "$changed" = "$expected"
+
+      - name: Verify status-separation contract
+        run: |
+          python - <<'PY'
+          from app.trade_state import (
+              is_capacity_blocking_status,
+              is_exchange_active_status,
+          )
+          for status in ("close_pending_sync", "reconciliation_pending"):
+              assert is_capacity_blocking_status(status)
+              assert not is_exchange_active_status(status)
+          PY
+
+      - name: Backend compile and tests
+        run: |
+          python -m compileall -q app tests
+          python -m unittest discover -s tests -p 'test_*.py'
+
+      - name: Frontend checks
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run typecheck
+          npm run build
+
+      - name: Commit rebuilt branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/execution.py app/execution_core.py app/journal.py app/main.py app/metrics.py app/trade_state.py app/watchdog.py tests/test_trade_status_separation.py
+          git commit -m "Rebuild trade status separation on latest main"
+          git push --force-with-lease origin HEAD:fix/p0-trade-status-separation
