@@ -58,6 +58,13 @@ def build_strategy_audit(
         for trade in journal_trades
         if _belongs_to_bdt_day(trade.get("closed_at") or trade.get("opened_at") or trade.get("detected_at"), bdt_date)
     ]
+    identity_group_counts: dict[tuple[str, str], int] = {}
+    for trade in eligible_trades:
+        key = (
+            str(trade.get("symbol") or "").upper(),
+            str(trade.get("direction") or "").lower(),
+        )
+        identity_group_counts[key] = identity_group_counts.get(key, 0) + 1
 
     for trade in sorted(eligible_trades, key=lambda item: _timestamp_ms(item.get("opened_at") or item.get("detected_at")) or 0):
         candidate_records = [
@@ -66,7 +73,16 @@ def build_strategy_audit(
             if _record_key(record) not in used_record_keys
             and str(record.get("symbol") or record.get("contract") or "").upper() == str(trade.get("symbol") or "").upper()
         ]
-        ledger_result, ledger_error = aggregate_transaction_log_records(trade, candidate_records)
+        identity_key = (
+            str(trade.get("symbol") or "").upper(),
+            str(trade.get("direction") or "").lower(),
+        )
+        require_exact_identity = identity_group_counts.get(identity_key, 0) > 1
+        ledger_result, ledger_error = aggregate_transaction_log_records(
+            trade,
+            candidate_records,
+            require_exact_identity=require_exact_identity,
+        )
         row = _row_from_trade(trade)
 
         if ledger_result is not None:
@@ -89,7 +105,16 @@ def build_strategy_audit(
             )
         else:
             journal_pnl = _number(trade.get("realized_pnl"))
-            if journal_pnl is not None:
+            if require_exact_identity:
+                row.update(
+                    {
+                        "pnl_source": "unmatched",
+                        "pnl_known": False,
+                        "audit_note": ledger_error
+                        or "Exact exchange identity is required for overlapping same-symbol trades.",
+                    }
+                )
+            elif journal_pnl is not None:
                 row.update(
                     {
                         "result": _classify_result(journal_pnl),

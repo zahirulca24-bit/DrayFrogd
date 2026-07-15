@@ -144,9 +144,16 @@ def aggregate_closed_pnl_records(
     if opened_ms is None:
         return None, "trade opened_at is missing or invalid"
 
+    identity = _trade_exchange_identity(trade)
+    close_identity_available = _has_close_identity(identity)
+
     candidates: list[dict[str, Any]] = []
     for record in records:
         if str(record.get("symbol") or "").upper() != symbol:
+            continue
+        if close_identity_available and not _record_matches_role_identity(
+            record, identity, role="close"
+        ):
             continue
         side = str(record.get("side") or "")
         if side and side != expected_side:
@@ -168,6 +175,8 @@ def aggregate_closed_pnl_records(
         candidates.append(record)
 
     if not candidates:
+        if close_identity_available:
+            return None, "exact Bybit closed PnL record for this trade identity is not available yet"
         return None, "exact Bybit closed PnL record is not available yet"
 
     candidates.sort(key=lambda item: _record_time_ms(item) or 0)
@@ -220,6 +229,7 @@ def aggregate_closed_pnl_records(
         "fill_count": fill_count,
         "record_count": len(selected),
         "close_order_ids": [str(item.get("orderId") or "") for item in selected if item.get("orderId")],
+        "identity_match": "exact" if close_identity_available else "legacy_single_trade",
         "synced_at": datetime.now(UTC).isoformat(),
         "records": selected,
     }
@@ -332,6 +342,8 @@ def aggregate_transaction_log_records(
     trade: dict[str, Any],
     records: list[dict[str, Any]],
     opened_ms: int | None = None,
+    *,
+    require_exact_identity: bool = False,
 ) -> tuple[dict[str, Any] | None, str | None]:
     symbol = str(trade.get("symbol") or "").upper().strip()
     direction = str(trade.get("direction") or "").lower().strip()
@@ -347,6 +359,17 @@ def aggregate_transaction_log_records(
     if opened_ms is None:
         return None, "trade opened_at is missing or invalid"
 
+    identity = _trade_exchange_identity(trade)
+    entry_identity_available = _has_entry_identity(identity)
+    close_identity_available = _has_close_identity(identity)
+    strict_identity = require_exact_identity or (
+        entry_identity_available and close_identity_available
+    )
+    if require_exact_identity and not entry_identity_available:
+        return None, "exact entry order identity is required for overlapping trades"
+    if require_exact_identity and not close_identity_available:
+        return None, "exact close order identity is required for overlapping trades"
+
     trade_rows: list[dict[str, Any]] = []
     close_rows: list[dict[str, Any]] = []
     for record in records:
@@ -360,6 +383,10 @@ def aggregate_transaction_log_records(
         direction_value = _transaction_direction(record)
         if direction_value not in {entry_side, close_side}:
             continue
+        if strict_identity:
+            role = "entry" if direction_value == entry_side else "close"
+            if not _record_matches_role_identity(record, identity, role=role):
+                continue
         qty = _number(record.get("qty") or record.get("quantity") or record.get("execQty"))
         if qty is None or qty <= 0:
             continue
@@ -368,7 +395,13 @@ def aggregate_transaction_log_records(
             close_rows.append(record)
 
     if not close_rows:
+        if strict_identity:
+            return None, "exact Bybit transaction log close row for this trade identity is not available yet"
         return None, "Bybit transaction log close row is not available yet"
+    if strict_identity and not any(
+        _transaction_direction(record) == entry_side for record in trade_rows
+    ):
+        return None, "exact Bybit transaction log entry row for this trade identity is not available yet"
 
     trade_rows.sort(key=lambda item: _transaction_time_ms(item) or 0)
     close_rows.sort(key=lambda item: _transaction_time_ms(item) or 0)
@@ -436,6 +469,11 @@ def aggregate_transaction_log_records(
         "close_fees": close_fee_total,
         "record_count": len(compact_records),
         "record_keys": [record["record_key"] for record in compact_records],
+        "identity_match": "exact" if strict_identity else "legacy_single_trade",
+        "matched_entry_order_ids": sorted(identity["entry_order_ids"]),
+        "matched_close_order_ids": sorted(identity["close_order_ids"]),
+        "matched_entry_order_link_ids": sorted(identity["entry_order_link_ids"]),
+        "matched_close_order_link_ids": sorted(identity["close_order_link_ids"]),
         "synced_at": datetime.now(UTC).isoformat(),
         "records": compact_records,
     }
@@ -450,6 +488,161 @@ def aggregate_transaction_log_records(
         "fees": all_fee_total,
         "exchange_metadata": {**existing_metadata, "close_sync": close_sync},
     }, None
+
+
+def _trade_exchange_identity(trade: dict[str, Any]) -> dict[str, set[str]]:
+    identity: dict[str, set[str]] = {
+        "entry_order_ids": set(),
+        "entry_order_link_ids": set(),
+        "entry_exec_ids": set(),
+        "close_order_ids": set(),
+        "close_order_link_ids": set(),
+        "close_exec_ids": set(),
+        "position_idxs": set(),
+    }
+    metadata = trade.get("exchange_metadata") if isinstance(trade.get("exchange_metadata"), dict) else {}
+    management = trade.get("management") if isinstance(trade.get("management"), dict) else {}
+    metadata_management = metadata.get("management") if isinstance(metadata.get("management"), dict) else {}
+    merged_management = {**metadata_management, **management}
+
+    _add_identity(identity["entry_order_ids"], trade.get("order_id"), metadata.get("order_id"))
+    _add_identity(identity["entry_order_link_ids"], metadata.get("order_link_id"))
+
+    for source in (metadata.get("order_response"), metadata.get("fill_confirmation")):
+        _collect_identity_mapping(source, identity, role="entry")
+    fill_confirmation = metadata.get("fill_confirmation")
+    if isinstance(fill_confirmation, dict):
+        _collect_identity_mapping(fill_confirmation.get("raw"), identity, role="entry")
+
+    for prefix in ("tp1", "tp2"):
+        _add_identity(
+            identity["close_order_ids"],
+            merged_management.get(f"{prefix}_order_id"),
+        )
+        _add_identity(
+            identity["close_order_link_ids"],
+            merged_management.get(f"{prefix}_order_link_id"),
+        )
+
+    native_orders = metadata.get("native_profit_orders")
+    if isinstance(native_orders, dict):
+        for source in native_orders.values():
+            _collect_identity_mapping(source, identity, role="close")
+
+    manual_close = metadata.get("manual_close")
+    if isinstance(manual_close, dict):
+        _add_identity(identity["close_order_link_ids"], manual_close.get("request_id"))
+        for key in ("order_response", "recovered_order"):
+            _collect_identity_mapping(manual_close.get(key), identity, role="close")
+
+    close_sync = metadata.get("close_sync")
+    if isinstance(close_sync, dict):
+        _add_identity(identity["close_order_ids"], *(close_sync.get("close_order_ids") or []))
+        for source in close_sync.get("records") or []:
+            _collect_identity_mapping(source, identity, role="close")
+
+    exchange_identity = metadata.get("exchange_identity")
+    if isinstance(exchange_identity, dict):
+        _add_identity(identity["position_idxs"], exchange_identity.get("position_idx"))
+    position_snapshot = metadata.get("position_snapshot")
+    if isinstance(position_snapshot, dict):
+        _add_identity(identity["position_idxs"], position_snapshot.get("positionIdx"))
+    _add_identity(identity["position_idxs"], trade.get("position_idx"))
+
+    return identity
+
+
+def _collect_identity_mapping(
+    source: Any,
+    identity: dict[str, set[str]],
+    *,
+    role: str,
+) -> None:
+    if not isinstance(source, dict):
+        return
+    prefix = "entry" if role == "entry" else "close"
+    _add_identity(
+        identity[f"{prefix}_order_ids"],
+        source.get("orderId"),
+        source.get("order_id"),
+    )
+    _add_identity(
+        identity[f"{prefix}_order_link_ids"],
+        source.get("orderLinkId"),
+        source.get("order_link_id"),
+        source.get("request_id"),
+    )
+    _add_identity(
+        identity[f"{prefix}_exec_ids"],
+        source.get("execId"),
+        source.get("exec_id"),
+    )
+    _add_identity(
+        identity["position_idxs"],
+        source.get("positionIdx"),
+        source.get("position_idx"),
+    )
+
+
+def _add_identity(target: set[str], *values: Any) -> None:
+    for value in values:
+        if isinstance(value, (list, tuple, set)):
+            _add_identity(target, *value)
+            continue
+        if value is None:
+            continue
+        normalized = str(value).strip()
+        if normalized:
+            target.add(normalized)
+
+
+def _has_entry_identity(identity: dict[str, set[str]]) -> bool:
+    return bool(
+        identity["entry_order_ids"]
+        or identity["entry_order_link_ids"]
+        or identity["entry_exec_ids"]
+    )
+
+
+def _has_close_identity(identity: dict[str, set[str]]) -> bool:
+    return bool(
+        identity["close_order_ids"]
+        or identity["close_order_link_ids"]
+        or identity["close_exec_ids"]
+    )
+
+
+def _record_matches_role_identity(
+    record: dict[str, Any],
+    identity: dict[str, set[str]],
+    *,
+    role: str,
+) -> bool:
+    prefix = "entry" if role == "entry" else "close"
+    record_order_id = str(record.get("orderId") or record.get("order_id") or "").strip()
+    record_order_link_id = str(
+        record.get("orderLinkId") or record.get("order_link_id") or ""
+    ).strip()
+    record_exec_id = str(record.get("execId") or record.get("exec_id") or "").strip()
+    position_idx_value = record.get("positionIdx")
+    if position_idx_value is None:
+        position_idx_value = record.get("position_idx")
+    record_position_idx = (
+        "" if position_idx_value is None else str(position_idx_value).strip()
+    )
+
+    if identity["position_idxs"] and record_position_idx:
+        if record_position_idx not in identity["position_idxs"]:
+            return False
+
+    return bool(
+        (record_order_id and record_order_id in identity[f"{prefix}_order_ids"])
+        or (
+            record_order_link_id
+            and record_order_link_id in identity[f"{prefix}_order_link_ids"]
+        )
+        or (record_exec_id and record_exec_id in identity[f"{prefix}_exec_ids"])
+    )
 
 
 def _initial_quantity(trade: dict[str, Any]) -> float | None:
@@ -537,6 +730,10 @@ def _compact_transaction_record(record: dict[str, Any]) -> dict[str, Any]:
     event_ms = _transaction_time_ms(record)
     return {
         "record_key": _transaction_key(record),
+        "order_id": str(record.get("orderId") or record.get("order_id") or "").strip() or None,
+        "order_link_id": str(record.get("orderLinkId") or record.get("order_link_id") or "").strip() or None,
+        "exec_id": str(record.get("execId") or record.get("exec_id") or "").strip() or None,
+        "position_idx": str(record.get("positionIdx") or record.get("position_idx") or "").strip() or None,
         "symbol": str(record.get("symbol") or record.get("contract") or "").upper(),
         "direction": str(record.get("direction") or record.get("side") or ""),
         "quantity": _number(record.get("qty") or record.get("quantity") or record.get("execQty")) or 0.0,
