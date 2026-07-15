@@ -9,6 +9,7 @@ on:
   pull_request:
     branches:
       - main
+      - temp/pr62-ci-base
 
 jobs:
   backend:
