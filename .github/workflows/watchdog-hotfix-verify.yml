@@ -1,0 +1,55 @@
+name: Verify Watchdog Compatibility Hotfix
+
+on:
+  push:
+    branches:
+      - fix/watchdog-status-backward-compatibility
+
+permissions:
+  contents: write
+
+jobs:
+  verify-and-clean:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout hotfix branch
+        uses: actions/checkout@v4
+        with:
+          ref: fix/watchdog-status-backward-compatibility
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install backend dependencies
+        run: pip install -r requirements.txt
+
+      - name: Compile backend
+        run: python -m compileall app
+
+      - name: Run focused compatibility test
+        run: pytest -q tests/test_watchdog_status_compatibility.py
+
+      - name: Run full backend suite
+        run: pytest -q
+
+      - name: Verify frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run typecheck
+          npm run build
+
+      - name: Remove temporary verifier
+        run: rm -f .github/workflows/watchdog-hotfix-verify.yml
+
+      - name: Commit verified clean head
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "ci: verified watchdog compatibility hotfix"
+          git push origin HEAD:fix/watchdog-status-backward-compatibility
