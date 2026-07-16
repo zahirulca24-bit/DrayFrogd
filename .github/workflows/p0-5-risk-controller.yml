@@ -40,7 +40,12 @@ jobs:
 
       - name: Apply integrations
         if: steps.guard.outputs.apply == 'true'
-        run: python scripts/apply_p0_5_risk_engine.py
+        shell: bash
+        run: |
+          python scripts/apply_p0_5_risk_engine.py
+          if [ -f scripts/apply_p0_5_compat.py ]; then
+            python scripts/apply_p0_5_compat.py
+          fi
 
       - name: Compile backend
         if: steps.guard.outputs.apply == 'true'
@@ -81,7 +86,7 @@ jobs:
 
       - name: Remove branch-local controller files
         if: steps.guard.outputs.apply == 'true'
-        run: rm -f .github/workflows/apply-p0-5-risk-engine.yml scripts/apply_p0_5_risk_engine.py
+        run: rm -f .github/workflows/apply-p0-5-risk-engine.yml scripts/apply_p0_5_risk_engine.py scripts/apply_p0_5_compat.py
 
       - name: Commit verified product changes
         if: steps.guard.outputs.apply == 'true'
