@@ -57,6 +57,15 @@ def calculate_position_size(
     if target_risk_amount is None:
         return _reject("Fixed USDT risk amount is unavailable")
 
+    configured_target_risk_amount = target_risk_amount
+    risk_headroom_ratio = _non_negative_float(settings.get("risk_headroom_ratio"))
+    if risk_headroom_ratio is None:
+        risk_headroom_ratio = _non_negative_float(app_settings.execution_risk_headroom_ratio)
+    risk_headroom_ratio = min(max(float(risk_headroom_ratio or 0.90), 0.50), 1.0)
+    execution_risk_budget = configured_target_risk_amount * risk_headroom_ratio
+    if execution_risk_budget <= 0 or not isfinite(execution_risk_budget):
+        return _reject("Execution risk budget is invalid")
+
     leverage_cap = _positive_float(settings.get("leverage_cap"))
     exposure_cap = _positive_float(settings.get("exposure_cap"))
     if leverage_cap is None:
@@ -112,7 +121,7 @@ def calculate_position_size(
         )
 
     risk_per_unit_with_fees = unit_economics["net_risk"]
-    raw_quantity = target_risk_amount / risk_per_unit_with_fees
+    raw_quantity = execution_risk_budget / risk_per_unit_with_fees
     normalized_quantity = client.normalize_quantity(raw_quantity, str(qty_step))
     quantity = _positive_float(normalized_quantity)
     if quantity is None:
@@ -154,8 +163,8 @@ def calculate_position_size(
     actual_risk_amount = economics["net_risk"]
     if price_risk_amount <= 0 or actual_risk_amount <= 0 or not isfinite(actual_risk_amount):
         return _reject("Position risk is invalid")
-    if actual_risk_amount > target_risk_amount * 1.001:
-        return _reject("Minimum quantity exceeds configured fee-inclusive USDT risk")
+    if actual_risk_amount > execution_risk_budget * 1.001:
+        return _reject("Minimum quantity exceeds the headroom-adjusted execution risk budget")
     if economics["net_risk_reward"] + 1e-9 < min_net_risk_reward:
         return _reject(
             f"Net risk reward {economics['net_risk_reward']:.4f} is below "
@@ -234,7 +243,10 @@ def calculate_position_size(
         "slippage_bps": slippage_bps,
         "min_net_risk_reward": min_net_risk_reward,
         "risk_per_unit_with_fees": risk_per_unit_with_fees,
-        "target_risk_amount": target_risk_amount,
+        "target_risk_amount": configured_target_risk_amount,
+        "execution_risk_budget": execution_risk_budget,
+        "risk_headroom_ratio": risk_headroom_ratio,
+        "risk_headroom_amount": configured_target_risk_amount - execution_risk_budget,
         "risk_mode": "fixed_usdt" if fixed_risk_mode else "legacy_percent",
         "notional": notional,
         "required_margin": required_margin,

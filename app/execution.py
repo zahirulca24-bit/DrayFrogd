@@ -61,6 +61,7 @@ from app.native_profit_orders import (
 from app.trade_management_profiles import (
     build_profile_management_state,
     extract_observed_entry_fee,
+    price_at_r,
     trade_type_from_trade,
 )
 from app.trading_costs import calculate_cost_adjusted_geometry
@@ -69,7 +70,30 @@ from app.trading_costs import calculate_cost_adjusted_geometry
 RISK_AMOUNT_TOLERANCE = 1.001
 
 
+def _with_profile_runner_target(signal: dict[str, Any]) -> dict[str, Any]:
+    profiled = dict(signal)
+    try:
+        profile = get_engine_profile(profiled.get("trade_type"))
+        entry = float(profiled.get("entry"))
+        stop_loss = float(profiled.get("stop_loss"))
+        direction = str(profiled.get("direction") or "").lower().strip()
+    except (TypeError, ValueError):
+        return profiled
+
+    if direction not in {"long", "short"} or entry <= 0 or stop_loss <= 0 or entry == stop_loss:
+        return profiled
+
+    runner_target = price_at_r(entry, stop_loss, direction, profile.runner_r)
+    profiled["strategy_take_profit"] = profiled.get("take_profit")
+    profiled["strategy_risk_reward"] = profiled.get("risk_reward")
+    profiled["take_profit"] = runner_target
+    profiled["risk_reward"] = profile.runner_r
+    profiled["execution_target_source"] = "profile_runner"
+    return profiled
+
+
 def execute_signal(client: Any, signal: dict[str, Any], auto_triggered: bool = False) -> dict[str, Any]:
+    signal = _with_profile_runner_target(signal)
     spread_gate = _execution_spread_gate(client, str(signal.get("symbol") or "").upper())
     if not spread_gate.get("allowed"):
         return {
@@ -126,6 +150,8 @@ def execute_signal(client: Any, signal: dict[str, Any], auto_triggered: bool = F
         )
         _sync_active_safety_state(safe_result)
         return safe_result
+    if actual_fill_costs.get("warning"):
+        result["execution_economics_warning"] = actual_fill_costs["warning"]
 
     profiled = _apply_management_profile(client, trade, spread_gate)
     if not profiled.get("ok"):
@@ -139,6 +165,31 @@ def execute_signal(client: Any, signal: dict[str, Any], auto_triggered: bool = F
         _sync_active_safety_state(safe_result)
         return safe_result
     trade = profiled["trade"]
+    managed_target_costs = _validate_actual_fill_costs(result, trade)
+    managed_metadata = trade.get("exchange_metadata") if isinstance(trade.get("exchange_metadata"), dict) else {}
+    trade = {
+        **trade,
+        "exchange_metadata": {
+            **managed_metadata,
+            "managed_target_cost_validation": managed_target_costs,
+        },
+    }
+    result["managed_target_cost_validation"] = managed_target_costs
+    if not managed_target_costs.get("allowed"):
+        safe_result = _emergency_close_pending_sync(
+            client=client,
+            trade=trade,
+            error="MANAGED_TARGET_COST_VIOLATION",
+            detail=str(
+                managed_target_costs.get("reason")
+                or "Final managed target failed fee-inclusive Net RR validation."
+            ),
+            sizing=result.get("sizing") or {},
+        )
+        _sync_active_safety_state(safe_result)
+        return safe_result
+    if managed_target_costs.get("warning"):
+        result["execution_economics_warning"] = managed_target_costs["warning"]
 
     native_setup = install_native_profit_orders(client, trade)
     if not native_setup.get("ok"):
@@ -260,6 +311,7 @@ def _validate_actual_fill_costs(result: dict[str, Any], trade: dict[str, Any]) -
 
     min_rr = float(validation.get("min_risk_reward") or profile_min_rr or 0.0)
     target_risk = float(validation.get("risk_amount") or sizing.get("target_risk_amount") or 0.0)
+    execution_risk_budget = float(sizing.get("execution_risk_budget") or target_risk or 0.0)
     fee_bps = float(sizing.get("fee_bps") if sizing.get("fee_bps") is not None else app_settings.execution_taker_fee_bps)
     slippage_bps = float(
         sizing.get("slippage_bps") if sizing.get("slippage_bps") is not None else app_settings.execution_slippage_bps
@@ -287,6 +339,7 @@ def _validate_actual_fill_costs(result: dict[str, Any], trade: dict[str, Any]) -
         "gross_price_risk": economics["gross_risk"],
         "fee_inclusive_risk": economics["net_risk"],
         "target_risk": target_risk,
+        "execution_risk_budget": execution_risk_budget,
         "gross_risk_reward": economics["gross_risk_reward"],
         "net_risk_reward": economics["net_risk_reward"],
         "minimum_net_risk_reward": min_rr,
@@ -311,12 +364,26 @@ def _validate_actual_fill_costs(result: dict[str, Any], trade: dict[str, Any]) -
         return {
             **evidence,
             "allowed": False,
+            "status": "HARD_RISK_CAP_EXCEEDED",
             "reason": (
                 f"Actual fill fee-inclusive risk {economics['net_risk']:.8f} "
-                f"exceeds target {target_risk:.8f}"
+                f"exceeds hard target {target_risk:.8f}"
             ),
         }
-    return {**evidence, "allowed": True, "reason": ""}
+    if execution_risk_budget > 0 and economics["net_risk"] > execution_risk_budget * RISK_AMOUNT_TOLERANCE + 1e-9:
+        warning = (
+            f"Actual fill consumed execution headroom: fee-inclusive risk "
+            f"{economics['net_risk']:.8f} exceeds sizing budget {execution_risk_budget:.8f} "
+            f"but remains inside hard target {target_risk:.8f}"
+        )
+        return {
+            **evidence,
+            "allowed": True,
+            "status": "HEADROOM_CONSUMED",
+            "reason": "",
+            "warning": warning,
+        }
+    return {**evidence, "allowed": True, "reason": "", "warning": None}
 
 
 def _execution_spread_gate(client: Any, symbol: str) -> dict[str, Any]:
