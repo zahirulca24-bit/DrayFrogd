@@ -52,6 +52,25 @@ class RiskRuntimeState(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
 
+class WatchdogRuntimeState(Base):
+    __tablename__ = "watchdog_runtime_state"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    interval_seconds: Mapped[int] = mapped_column(Integer, default=30, nullable=False)
+    action_mode: Mapped[str] = mapped_column(String(24), default="safe_stop", nullable=False)
+    mismatch_tolerance_cycles: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    exposure_tolerance_ratio: Mapped[float] = mapped_column(Float, default=0.01, nullable=False)
+    pnl_tolerance: Mapped[float] = mapped_column(Float, default=0.10, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="UNINITIALIZED", nullable=False)
+    execution_blocked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    reasons_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    consecutive_mismatch_cycles: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_snapshot_version: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+
 class TradeJournal(Base):
     __tablename__ = "trade_journal"
 
