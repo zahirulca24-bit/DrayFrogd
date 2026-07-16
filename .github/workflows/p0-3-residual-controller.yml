@@ -25,12 +25,13 @@ jobs:
           python-version: "3.12"
       - run: python -m pip install --upgrade pip && pip install -r requirements.txt
       - run: python scripts/apply_p0_3_residual_truth.py
+      - run: python scripts/fix_p0_3_clean_fixture.py
       - run: python -m compileall -q app tests
       - run: python -m unittest tests.test_exchange_journal_backfill -v
       - run: python -m unittest discover -s tests -p "test_*.py" -v
       - working-directory: frontend
         run: npm ci && npm run lint && npm run build
-      - run: rm -f .github/workflows/p0-3-residual-controller.yml scripts/apply_p0_3_residual_truth.py
+      - run: rm -f .github/workflows/p0-3-residual-controller.yml scripts/apply_p0_3_residual_truth.py scripts/fix_p0_3_clean_fixture.py
       - run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
