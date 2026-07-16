@@ -32,8 +32,11 @@ jobs:
       - name: Compile backend
         run: python -m compileall app
 
-      - name: Run focused tests
-        run: pytest -q tests/test_watchdog_api_compat.py tests/test_runtime_watchdog.py
+      - name: Run compatibility tests
+        run: pytest -q tests/test_watchdog_api_compat.py
+
+      - name: Run existing watchdog tests
+        run: pytest -q tests/test_runtime_watchdog.py
 
       - name: Run full backend tests
         run: pytest -q
