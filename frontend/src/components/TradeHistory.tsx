@@ -246,10 +246,17 @@ function journalToRow(item: JournalTradeEntry, index: number): JournalRow {
   const feesValue = nullableNumber(financial.fees);
   const quantityValue = nullableNumber(item.quantity);
   const outcome = deriveOutcome(pnlValue, item.result, isClosed);
-  const strategy = String(financial.strategy_name || financial.strategy || metadata.strategy_name || metadata.strategy || "unknown");
+  const rawStrategy = String(financial.strategy_name || financial.strategy || metadata.strategy_name || metadata.strategy || "unknown");
   const leverage = nullableNumber(metadata.leverage ?? orderResponse.leverage ?? positionSnapshot.leverage);
   const executionKey = String(financial.execution_key || metadata.execution_key || "").trim() || null;
   const syncSource = String(closeSync.source || metadata.close_sync_source || "").trim() || null;
+  const isExchangeBackfill =
+    metadata.source === "exchange_transaction_log_backfill" ||
+    syncSource === "bybit_account_transaction_log" ||
+    String(financial.close_reason || "").toUpperCase() === "EXCHANGE_TRANSACTION_LOG_BACKFILL" ||
+    String(item.journal_id || "").startsWith("exchange-ledger-") ||
+    Boolean(executionKey?.startsWith("ledger-"));
+  const strategy = rawStrategy.toLowerCase() === "unknown" && isExchangeBackfill ? "exchange_backfill" : rawStrategy;
   const protectionAttachedAt = String(metadata.protection_attached_at || "").trim() || null;
   const protectionAttached =
     metadata.protection_attached === true || protectionAttachedAt
@@ -266,12 +273,19 @@ function journalToRow(item: JournalTradeEntry, index: number): JournalRow {
   const adoptedPosition = metadata.source === "exchange_position_only";
 
   const missingClosedEvidence = isClosed && (exitValue === null || pnlValue === null || feesValue === null);
+  const exactExchangeCloseComplete =
+    isExchangeBackfill &&
+    isClosed &&
+    exitValue !== null &&
+    pnlValue !== null &&
+    feesValue !== null &&
+    Boolean(syncSource);
   const needsAttention =
     ["FAILED", "UNCERTAIN", "UNKNOWN"].includes(status) ||
     (isClosed && outcome === "UNKNOWN") ||
     missingClosedEvidence ||
-    strategy.toLowerCase() === "unknown" ||
-    (!item.order_id && !adoptedPosition);
+    (!isExchangeBackfill && strategy.toLowerCase() === "unknown") ||
+    (!item.order_id && !adoptedPosition && !exactExchangeCloseComplete);
 
   const timeline: TimelineStep[] = [
     {
@@ -396,7 +410,7 @@ function journalToRow(item: JournalTradeEntry, index: number): JournalRow {
     reason: closeReason,
     side: normalizeDirection(item.direction),
     leverageText: leverage === null ? "N/A" : `${leverage}x`,
-    rrValue: calcRr(entryPrice, stopLoss, takeProfit),
+    rrValue: protectionAttached === true ? calcRr(entryPrice, stopLoss, takeProfit) : null,
     durationText: durationBetween(openedAt || detectedAt, closedAt),
     auditStatus: status,
     outcome,
@@ -916,8 +930,8 @@ function TradeAuditDetail({ trade }: { trade: JournalRow }) {
 
       <div className="mt-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
         <DetailMetric label="Entry" value={formatMoney(trade.entryPrice)} />
-        <DetailMetric label="Stop Loss" value={formatMoney(trade.stopLoss)} tone="bad" />
-        <DetailMetric label="Take Profit" value={formatMoney(trade.takeProfit)} tone="good" />
+        <DetailMetric label="Stop Loss" value={trade.protectionAttached === true ? formatMoney(trade.stopLoss) : "N/A"} tone="bad" />
+        <DetailMetric label="Take Profit" value={trade.protectionAttached === true ? formatMoney(trade.takeProfit) : "N/A"} tone="good" />
         <DetailMetric label="Exit" value={formatMoney(trade.exitValue)} />
         <DetailMetric label="Quantity" value={formatQuantity(trade.quantityValue)} />
         <DetailMetric label="Leverage" value={trade.leverageText} />
