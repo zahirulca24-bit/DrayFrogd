@@ -162,7 +162,38 @@ class ExchangeJournalBackfillTests(unittest.TestCase):
         update_mock.assert_called_once()
         updates = update_mock.call_args.args[1]
         self.assertEqual(updates["status"], "closed")
+        self.assertEqual(updates["strategy_name"], "exchange_backfill")
         self.assertAlmostEqual(updates["realized_pnl"], 1.20)
+        event_mock.assert_called_once()
+        create_mock.assert_not_called()
+
+    def test_closed_unknown_strategy_row_is_reclassified_before_idempotent_skip(self) -> None:
+        existing = {
+            "journal_id": "existing-unknown",
+            "execution_key": "ledger-existing-unknown",
+            "symbol": "ONDOUSDT",
+            "direction": "long",
+            "quantity": 10.0,
+            "status": "closed",
+            "strategy_name": "unknown",
+            "exchange_metadata": {
+                "close_sync": {"record_keys": ["id:open-1", "id:close-1", "id:close-2"]}
+            },
+        }
+        persisted = {**existing, "strategy_name": "exchange_backfill"}
+        with (
+            patch("app.exchange_journal_backfill.get_trade_history", return_value=[existing]),
+            patch("app.exchange_journal_backfill.update_trade_entry", return_value=persisted) as update_mock,
+            patch("app.exchange_journal_backfill.append_trade_event") as event_mock,
+            patch("app.exchange_journal_backfill.create_trade_entry") as create_mock,
+        ):
+            result = backfill_exchange_journal_lifecycle(
+                FakeClient(),
+                bdt_date="2026-07-16",
+            )
+
+        self.assertEqual(result["updated"], ["existing-unknown"])
+        self.assertEqual(update_mock.call_args.args[1]["strategy_name"], "exchange_backfill")
         event_mock.assert_called_once()
         create_mock.assert_not_called()
 
@@ -174,6 +205,7 @@ class ExchangeJournalBackfillTests(unittest.TestCase):
             "direction": "long",
             "quantity": 10.0,
             "status": "closed",
+            "strategy_name": "exchange_backfill",
             "exchange_metadata": {
                 "close_sync": {"record_keys": ["id:open-1", "id:close-1", "id:close-2"]}
             },
