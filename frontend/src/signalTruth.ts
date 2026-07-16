@@ -238,9 +238,11 @@ function summarize(
     });
   }
 
+  const representedSymbols = new Set(results.map((signal) => signal.symbol)).size;
+
   return {
-    symbolsScanned: scan ? finiteInteger(scan.symbols_scanned) : null,
-    symbolsRepresented: new Set(results.map((signal) => signal.symbol)).size,
+    symbolsScanned: scan ? finiteInteger(scan.symbols_scanned) : representedSymbols || null,
+    symbolsRepresented: representedSymbols,
     rankedMarkets: scan ? finiteInteger(scan.ranked_symbols) : new Set(marketRows.map((signal) => signal.symbol)).size,
     strategyChecks: scan ? finiteInteger(scan.strategy_checks) : results.length,
     nearSetups: primarySignals.filter((signal) => signal.signalState === "NEAR_SETUP").length,

@@ -21,14 +21,25 @@ from app.scanner_trend import (
 )
 from app.scalping_cooldown import sync_scalping_reentry_cooldowns
 from app.signal_pipeline import evaluate_signal_contexts, normalize_strategy_result
+from app.strategy import EMA_BIAS_PERIOD, RSI_PERIOD
 
 
 SCANNER_SYMBOLS: list[str] = []
 UNIVERSE_LIMIT = max(1, settings.scanner_universe_limit)
 
+MIN_STRATEGY_SETUP_CANDLES = EMA_BIAS_PERIOD + RSI_PERIOD + 1
+
 INTRADAY_TREND_CANDLE_LIMIT = max(MIN_TREND_CANDLES, settings.intraday_trend_candle_limit)
-INTRADAY_SETUP_CANDLE_LIMIT = max(STRUCTURE_SCAN_WINDOW, settings.intraday_setup_candle_limit)
-SCALPING_SETUP_CANDLE_LIMIT = max(STRUCTURE_SCAN_WINDOW, settings.scalping_setup_candle_limit)
+INTRADAY_SETUP_CANDLE_LIMIT = max(
+    STRUCTURE_SCAN_WINDOW,
+    MIN_STRATEGY_SETUP_CANDLES,
+    settings.intraday_setup_candle_limit,
+)
+SCALPING_SETUP_CANDLE_LIMIT = max(
+    STRUCTURE_SCAN_WINDOW,
+    MIN_STRATEGY_SETUP_CANDLES,
+    settings.scalping_setup_candle_limit,
+)
 SCALPING_TRIGGER_CANDLE_LIMIT = max(MIN_TRIGGER_CANDLES, settings.scalping_trigger_candle_limit)
 
 INTRADAY_TREND_INTERVAL = INTRADAY_PROFILE.trend_interval
