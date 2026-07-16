@@ -1,0 +1,52 @@
+name: Apply P0 Execution Economics Repair
+
+on:
+  push:
+    branches:
+      - fix/p0-execution-economics-runtime
+    paths:
+      - .github/workflows/apply-p0-execution-economics.yml
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repair branch
+        uses: actions/checkout@v4
+        with:
+          ref: fix/p0-execution-economics-runtime
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Apply deterministic repair
+        run: python scripts/apply_p0_execution_economics.py
+
+      - name: Remove temporary repair controller
+        run: |
+          rm scripts/apply_p0_execution_economics.py
+          rm .github/workflows/apply-p0-execution-economics.yml
+
+      - name: Install backend dependencies
+        run: python -m pip install --upgrade pip && pip install -r requirements.txt
+
+      - name: Compile backend
+        run: python -m compileall -q app tests
+
+      - name: Run execution economics tests
+        run: python -m unittest tests.test_execution_economics_guard tests.test_fee_inclusive_risk -v
+
+      - name: Commit repaired implementation
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .env.example app/config.py app/execution.py app/position_sizing.py tests/test_execution_economics_guard.py
+          git add -u scripts/apply_p0_execution_economics.py .github/workflows/apply-p0-execution-economics.yml
+          git commit -m "P0: harden managed-target execution economics"
+          git push origin HEAD:fix/p0-execution-economics-runtime
