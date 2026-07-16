@@ -7,10 +7,10 @@ Bybit-first automated trading terminal built with **FastAPI, React, PostgreSQL a
 The project is in **Demo Beta / Engineering Verification**. Live-capital trading is **not approved**.
 
 > **Last documentation update:** 16 July 2026 (`Asia/Dhaka`)  
-> **Latest `main` status:** PR cleanup and current project-status sync complete  
-> **Runtime status:** **CODE PASS / RUNTIME PENDING** — fresh Render and Bybit Demo verification is still required  
+> **Latest `main` status:** PR #77 fee-inclusive execution risk merged; CI #635 PASS  
+> **Runtime status:** **CODE PASS / CI PASS / POST-MERGE DEMO VERIFICATION PENDING**  
 > **Runtime tracker:** Issue #37  
-> **Live trading:** blocked by default
+> **Live trading:** intentionally blocked by default
 
 ---
 
@@ -18,15 +18,17 @@ The project is in **Demo Beta / Engineering Verification**. Live-capital trading
 
 | PR | Status | Result |
 |---:|---|---|
+| #77 | ✅ Merged | `FEE-RISK-001` rebuilt from latest `main`; fee-inclusive sizing, canonical net-RR admission and actual-fill cost validation merged after CI #635 PASS. |
+| #62 | Closed / superseded | Stale implementation PR replaced by clean PR #77; not merged. |
+| #76 | Closed / temporary | Temporary PR #62 base mechanism is no longer required. |
 | #48 | ✅ Merged | Exact PnL attribution foundation merged; full Journal identity capture still requires runtime proof. |
 | #49 | ✅ Merged | Active / pending / stale trade-state separation merged. |
 | #50 | ✅ Merged | Auth/session hardening merged. |
 | #32 | ✅ Merged | Scalping TP2 profit-lock retry merged; CI #608 PASS; runtime verification pending. |
 | #60 | Closed / superseded | Broad deterministic backtest PR was superseded by PR #75 and later main changes; not merged. |
 | #52 | Closed / stale docs | Governance docs were outdated and would have recorded stale repo truth; not merged. |
-| #62 | 🔴 Pending / Repair Required | Valid fee-risk PR, but must be rebuilt from latest `main`, pass CI, then merge. |
 
-Authoritative open-PR tracker: `docs/OPEN_PR_STATUS.md`.
+Authoritative PR tracker: `docs/OPEN_PR_STATUS.md`.
 
 ---
 
@@ -40,19 +42,22 @@ Authoritative open-PR tracker: `docs/OPEN_PR_STATUS.md`.
 - Scalping TP2 profit-lock retry guard is merged.
 - Authentication/session hardening is merged.
 - Exact PnL attribution foundation is merged.
+- Fee-inclusive position sizing and canonical net-RR admission are merged.
+- Actual exchange fills are revalidated against fee-inclusive risk and net RR before trade-management installation.
 
 ### Runtime still pending
 
-The following are **not complete** until fresh Render + Bybit Demo evidence exists:
+The Product Owner reports that Render deployment and Journal operation are currently working. The following post-merge evidence is still required before describing the fee-risk repair as runtime verified:
 
-- Render deployment of latest `main`.
-- `/health` and frontend load on deployed app.
-- Login/session verification.
+- Confirm Render deploys merge commit `67ffbd0d` or later.
+- `/health` and frontend load after the new deployment.
+- Login/session verification after deployment.
 - Scanner and Backtest page smoke test.
 - Live `trade_type` / `engine_profile` evidence.
+- One controlled Bybit Demo admission showing fee-inclusive sizing metadata.
+- One rejected setup showing net RR below the canonical profile minimum.
 - Private Bybit Demo order/protection lifecycle.
 - Scalping TP2 → TP1-price Stop Loss retry verification.
-- Journal/PnL evidence persistence across refresh/restart.
 
 ---
 
@@ -86,8 +91,8 @@ FastAPI Backend
         +-- Shared Approved Strategy Layer
         +-- Canonical Signal Engine / Signal Gate
         +-- Risk Engine
-        +-- Position Sizing
-        +-- Execution Service
+        +-- Fee-Inclusive Position Sizing
+        +-- Execution Service and Actual-Fill Cost Validation
         +-- Trade-Type-Specific Management
         +-- Backtest Engine using canonical profile/signal gates
         +-- Journal and Authoritative Reconciliation
@@ -109,9 +114,9 @@ Bybit V5 Demo / Live APIs
 | Rule | Scalping | Intraday |
 |---|---:|---:|
 | Timeframes | 15m trend / 5m setup / 1m trigger | 1h trend / 15m setup / 5m trigger |
-| Fixed risk per trade | 20 USDT | 50 USDT |
+| Fixed risk per trade | 20 USDT including estimated entry/stop-exit costs | 50 USDT including estimated entry/stop-exit costs |
 | Maximum leverage | 20x | 10x |
-| Minimum Risk:Reward | 1:1.5 | 1:2.0 |
+| Minimum net Risk:Reward | 1:1.5 after configured fees/slippage | 1:2.0 after configured fees/slippage |
 | TP1 | 1.5R — close 50% | 2R — close 50% |
 | TP2 | 2R — close 25% | 2.5R — close 25% |
 | Final target / Runner | 2.5R — final 25% | 3R — final 25% runner |
@@ -119,7 +124,7 @@ Bybit V5 Demo / Live APIs
 | After TP2 | Move remaining SL to TP1 price | Activate trailing protection |
 | Trailing stop | Disabled | Enabled only after TP2 |
 | Backtest maximum hold | 30 trigger candles | 72 trigger candles |
-| Maximum live duration | 59 minutes | 6 hours |
+| Maximum live duration | 30 minutes | 6 hours |
 
 Scalping and Intraday must never silently share one generic management profile.
 
@@ -127,12 +132,12 @@ Scalping and Intraday must never silently share one generic management profile.
 
 ## Next recommended order
 
-1. Confirm Render deploys latest `main`.
-2. Run deployed smoke test: health, frontend, login, scanner, backtest.
-3. Verify active/pending/stale rows are displayed truthfully.
-4. Verify Scalping TP2 profit-lock retry on Bybit Demo.
-5. Rebuild PR #62 from latest `main` and run fresh CI.
-6. Merge #62 only after clean CI and no regression risk.
+1. Confirm Render deployed merge commit `67ffbd0d` or later.
+2. Confirm `EXECUTION_TAKER_FEE_BPS` and `EXECUTION_SLIPPAGE_BPS` are intentionally configured.
+3. Run deployed smoke tests: health, frontend, login, scanner and backtest.
+4. Verify a controlled Demo sizing result records gross risk, estimated costs, fee-inclusive risk and net RR.
+5. Verify a nominal gross-RR setup is blocked when fees reduce net RR below 1.5R Scalping or 2.0R Intraday.
+6. Continue the remaining Issue #37 lifecycle verification without enabling live trading.
 
 ---
 
