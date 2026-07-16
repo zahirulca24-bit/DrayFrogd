@@ -349,6 +349,12 @@ def _build_trade_payload(trade: dict[str, Any], *, journal_id: str, default_open
 
 
 def _send_supabase(table: str, payload: dict[str, Any], upsert: bool) -> None:
+    database_url = str(settings.database_url or "").strip().lower()
+    if database_url.startswith(("postgres://", "postgresql://", "postgresql+psycopg://")):
+        # PostgreSQL is already the durable primary. Mirroring the same payload
+        # through Supabase REST would create duplicate bot events and redundant
+        # journal writes against the same database.
+        return
     if not settings.supabase_url or not settings.supabase_service_role_key:
         return
 
