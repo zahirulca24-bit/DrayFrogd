@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from math import isfinite
 from typing import Any
 
+from app.authoritative_risk_engine import issue_execution_approval, verify_risk_approval
 from app.bot_controls import can_execute, get_execution_mode
 from app.execution_core import (
     _add_active_trade_once,
@@ -88,12 +89,34 @@ def execute_signal(client: BybitClient, signal: dict[str, Any], auto_triggered: 
     if quote_geometry is None:
         return {"ok": False, "error": "Live quote invalidated entry/SL/TP geometry", "pre_order_quote": quote}
     execution_signal["risk_reward"] = quote_geometry["risk_reward"]
-    refresh_risk_state(account_equity=account_equity)
+    risk_state = refresh_risk_state(account_equity=account_equity)
     validation = validate_trade(execution_signal, account_equity=account_equity)
     if not validation.get("allowed"):
         return {
             "ok": False,
             "error": validation.get("reason", "Risk validation failed"),
+            "pre_order_quote": quote,
+        }
+
+    execution_mode = get_execution_mode()
+    approval = issue_execution_approval(
+        client,
+        {**execution_signal, "auto_triggered": auto_triggered},
+        auto_triggered=auto_triggered,
+        wallet=wallet,
+        positions=positions,
+        account_equity=account_equity,
+        identity_signal=original_signal,
+        validation=validation,
+        risk_state=risk_state,
+        execution_mode=execution_mode,
+    )
+    if not approval.get("allowed"):
+        return {
+            "ok": False,
+            "error": approval.get("error") or "RISK_APPROVAL_REJECTED",
+            "detail": approval.get("reason"),
+            "risk_approval": approval,
             "pre_order_quote": quote,
         }
 
@@ -134,8 +157,8 @@ def execute_signal(client: BybitClient, signal: dict[str, Any], auto_triggered: 
             "pre_order_quote": quote,
             "protection": {"stop_loss": stop_loss, "take_profit": execution_signal["take_profit"]},
         }
-    execution_mode = get_execution_mode()
-    execution_key = _build_execution_key(original_signal, execution_mode)
+    approval_decision = dict(approval.get("decision") or {})
+    execution_key = str(approval_decision.get("execution_key") or _build_execution_key(original_signal, execution_mode))
     order_link_id = _build_order_link_id(execution_key)
     selected_leverage = float(sizing.get("selected_leverage") or sizing.get("leverage") or 1.0)
 
@@ -171,8 +194,24 @@ def execute_signal(client: BybitClient, signal: dict[str, Any], auto_triggered: 
             "position_sizing": sizing,
             "risk_validation": validation,
             "selected_leverage": selected_leverage,
+            "risk_approval": approval_decision,
         },
     }
+
+    consumed = verify_risk_approval(
+        str(approval.get("token") or ""),
+        {**execution_signal, "auto_triggered": auto_triggered},
+        execution_mode=execution_mode,
+        consume=True,
+    )
+    if not consumed.get("allowed"):
+        return {
+            "ok": False,
+            "error": consumed.get("error") or "RISK_APPROVAL_REJECTED",
+            "detail": consumed.get("reason"),
+            "risk_approval": consumed,
+            "sizing": sizing,
+        }
 
     try:
         reservation = reserve_execution_capacity(
@@ -725,11 +764,11 @@ def _fail_before_order(
     _safe_update_trade_entry(
         journal_id,
         {
-            "status": "closed",
+            "status": "execution_failed",
             "result": "execution_failed",
             "close_reason": error,
-            "closed_at": closed_at,
-            "exchange_metadata": {**metadata, "execution_error": detail},
+            "closed_at": None,
+            "exchange_metadata": {**metadata, "execution_error": detail, "failed_at": closed_at},
         },
     )
     release_active_trade(symbol)

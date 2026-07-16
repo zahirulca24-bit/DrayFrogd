@@ -55,7 +55,7 @@ from app.models import UserSession
 from app.position_sizing import calculate_position_size
 from app.readiness import get_readiness_status
 from app.reconciliation import reconcile_state
-from app.risk import get_risk_state, validate_trade
+from app.risk import extract_account_equity, get_risk_state, validate_trade
 from app.scanner import SCANNER_SYMBOLS, get_active_signals, get_latest_signals, run_scan
 from app.schemas import BacktestRequest, BotConfigRequest, ExecuteSignalRequest, LoginRequest, PositionSizeRequest, RiskSignalRequest, SessionVerifyResponse, TokenResponse
 from app.strategy_audit import get_strategy_audit
@@ -407,12 +407,19 @@ def signals(_: dict = Depends(require_authenticated)) -> dict:
 
 @app.post("/risk/validate")
 def risk_validate(payload: RiskSignalRequest, _: dict = Depends(require_authenticated)) -> dict:
-    return validate_trade(payload.model_dump())
+    client = get_exchange_client(get_execution_mode())
+    wallet_ok, wallet, wallet_error = client.safe_fetch_wallet_balance()
+    if not wallet_ok or wallet is None:
+        return {"allowed": False, "reason": wallet_error or "Wallet balance unavailable"}
+    return validate_trade(payload.model_dump(), account_equity=extract_account_equity(wallet))
 
 
 @app.get("/risk/state")
 def risk_state(_: dict = Depends(require_authenticated)) -> dict:
-    return get_risk_state()
+    client = get_exchange_client(get_execution_mode())
+    wallet_ok, wallet, _ = client.safe_fetch_wallet_balance()
+    equity = extract_account_equity(wallet) if wallet_ok else None
+    return get_risk_state(account_equity=equity)
 
 
 @app.post("/position-size/calculate")

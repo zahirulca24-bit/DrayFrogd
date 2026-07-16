@@ -519,6 +519,12 @@ export interface RiskValidationResponse {
 }
 
 export interface RiskStateResponse {
+  risk_policy_authority?: string;
+  risk_profiles?: Record<"scalping" | "intraday", {
+    risk_amount: number;
+    leverage_cap: number;
+    min_risk_reward: number;
+  }>;
   risk_per_trade: number;
   leverage_cap: number;
   exposure_cap: number;

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useMemo, type ReactNode } from "react";
 import {
   Activity,
   AlertTriangle,
@@ -58,13 +58,6 @@ interface ControlPanelProps {
   onRefresh: () => Promise<void>;
   onModeChange: (mode: "demo" | "live") => Promise<void>;
   onAutoTradingToggle: (enabled: boolean) => Promise<void>;
-  onRiskSettingsChange: (settings: {
-    risk_per_trade?: number;
-    leverage_cap?: number;
-    exposure_cap?: number;
-    max_open_trades?: number;
-    max_daily_trades?: number;
-  }) => Promise<void>;
 }
 
 const BDT_DATE_TIME = new Intl.DateTimeFormat("en-BD", {
@@ -133,26 +126,7 @@ export default function ControlPanel({
   onEmergencyStop,
   onResume,
   onRefresh,
-  onRiskSettingsChange,
 }: ControlPanelProps) {
-  const [riskForm, setRiskForm] = useState({
-    riskPercent: String((riskState.risk_per_trade * 100).toFixed(2)),
-    leverageCap: String(riskState.leverage_cap),
-    exposureCap: String((riskState.exposure_cap * 100).toFixed(0)),
-    maxOpenTrades: String(riskState.max_open_trades),
-    maxDailyTrades: String(riskState.max_trades_per_day),
-  });
-  const [riskFormError, setRiskFormError] = useState<string | null>(null);
-
-  useEffect(() => {
-    setRiskForm({
-      riskPercent: String((riskState.risk_per_trade * 100).toFixed(2)),
-      leverageCap: String(riskState.leverage_cap),
-      exposureCap: String((riskState.exposure_cap * 100).toFixed(0)),
-      maxOpenTrades: String(riskState.max_open_trades),
-      maxDailyTrades: String(riskState.max_trades_per_day),
-    });
-  }, [riskState]);
 
   const criticalModules = useMemo(
     () => watchdog.modules.filter((module) => CRITICAL_MODULES.has(module.module)),
@@ -166,41 +140,6 @@ export default function ControlPanel({
     criticalModules.every((module) => HEALTHY_MODULE_STATUSES.has(module.status));
   const localJournal = readiness.persistence?.local_journal_storage;
   const externalAudit = readiness.persistence?.external_audit_sink;
-
-  const saveRiskSettings = async () => {
-    const parsed = {
-      riskPercent: Number(riskForm.riskPercent),
-      leverageCap: Number(riskForm.leverageCap),
-      exposureCap: Number(riskForm.exposureCap),
-      maxOpenTrades: Number(riskForm.maxOpenTrades),
-      maxDailyTrades: Number(riskForm.maxDailyTrades),
-    };
-
-    if (
-      !Number.isFinite(parsed.riskPercent) ||
-      parsed.riskPercent <= 0 ||
-      !Number.isFinite(parsed.leverageCap) ||
-      parsed.leverageCap <= 0 ||
-      !Number.isFinite(parsed.exposureCap) ||
-      parsed.exposureCap <= 0 ||
-      !Number.isFinite(parsed.maxOpenTrades) ||
-      parsed.maxOpenTrades <= 0 ||
-      !Number.isFinite(parsed.maxDailyTrades) ||
-      parsed.maxDailyTrades < 0
-    ) {
-      setRiskFormError("Risk values must be positive; max daily trades can be 0 for unlimited.");
-      return;
-    }
-
-    setRiskFormError(null);
-    await onRiskSettingsChange({
-      risk_per_trade: parsed.riskPercent / 100,
-      leverage_cap: parsed.leverageCap,
-      exposure_cap: parsed.exposureCap / 100,
-      max_open_trades: Math.floor(parsed.maxOpenTrades),
-      max_daily_trades: Math.floor(parsed.maxDailyTrades),
-    });
-  };
 
   return (
     <div className="space-y-4" id="control-center-root">
@@ -347,10 +286,10 @@ export default function ControlPanel({
 
         <Panel title="Risk Settings" subtitle="Review the active policy, then save only deliberate changes." icon={<ShieldCheck className="h-4 w-4 text-sky-400" />}>
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-            <Metric label="Risk / Trade" value={formatPercent(riskState.risk_per_trade)} />
-            <Metric label="Leverage Cap" value={`${riskState.leverage_cap}x`} />
+            <Metric label="Scalping Risk" value={`${formatMoney(riskState.risk_profiles?.scalping.risk_amount)} · ${riskState.risk_profiles?.scalping.leverage_cap ?? 20}x`} />
+            <Metric label="Intraday Risk" value={`${formatMoney(riskState.risk_profiles?.intraday.risk_amount)} · ${riskState.risk_profiles?.intraday.leverage_cap ?? 10}x`} />
             <Metric label="Exposure Cap" value={formatPercent(riskState.exposure_cap)} />
-            <Metric label="Minimum RR" value={`${riskState.min_risk_reward.toFixed(1)}R`} />
+            <Metric label="Authority" value={readable(riskState.risk_policy_authority, "Authoritative Risk Engine")} />
             <Metric label="Max Open" value={String(riskState.max_open_trades)} />
             <Metric label="Trades Today" value={formatDailyTradeLimit(riskState)} />
             <Metric label="Active Symbols" value={riskState.active_symbols.length ? riskState.active_symbols.join(", ") : "None"} />
@@ -376,24 +315,9 @@ export default function ControlPanel({
             </div>
           )}
 
-          <div className="my-5 border-t border-slate-800" />
-
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
-            <RiskInput label="Risk %" value={riskForm.riskPercent} onChange={(value) => setRiskForm((current) => ({ ...current, riskPercent: value }))} />
-            <RiskInput label="Leverage Cap" value={riskForm.leverageCap} onChange={(value) => setRiskForm((current) => ({ ...current, leverageCap: value }))} />
-            <RiskInput label="Exposure %" value={riskForm.exposureCap} onChange={(value) => setRiskForm((current) => ({ ...current, exposureCap: value }))} />
-            <RiskInput label="Max Open Trades" value={riskForm.maxOpenTrades} onChange={(value) => setRiskForm((current) => ({ ...current, maxOpenTrades: value }))} />
-            <RiskInput label="Max Daily Trades" value={riskForm.maxDailyTrades} onChange={(value) => setRiskForm((current) => ({ ...current, maxDailyTrades: value }))} />
-            <button
-              type="button"
-              onClick={() => void saveRiskSettings()}
-              disabled={actionLoading === "bot-config-risk"}
-              className="mt-auto inline-flex h-[42px] items-center justify-center rounded-xl border border-emerald-500/20 bg-emerald-500/10 px-4 text-xs font-semibold text-emerald-300 transition-colors hover:bg-emerald-500/20 disabled:opacity-50"
-            >
-              {actionLoading === "bot-config-risk" ? "SAVING..." : "SAVE RISK SETTINGS"}
-            </button>
+          <div className="mt-5 rounded-xl border border-sky-500/20 bg-sky-500/10 p-3 text-xs text-sky-200">
+            Risk budgets, leverage caps, daily limits and fee-aware execution gates are locked by the Authoritative Risk Engine. UI fields cannot override execution policy.
           </div>
-          {riskFormError && <div className="mt-3 text-xs text-rose-300">{riskFormError}</div>}
         </Panel>
       </section>
 
@@ -444,10 +368,6 @@ function GateRow({ label, value, passed }: { label: string; value: string; passe
 
 function Metric({ label, value }: { label: string; value: string }) {
   return <div className="rounded-xl border border-slate-800 bg-[#0A0B0E] p-3"><div className="text-[10px] font-mono uppercase tracking-wider text-slate-500">{label}</div><div className="mt-2 break-words text-xs font-semibold text-white">{value}</div></div>;
-}
-
-function RiskInput({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
-  return <label className="block space-y-2"><span className="text-[10px] font-mono uppercase tracking-wider text-slate-500">{label}</span><input type="number" min="0" step="any" value={value} onChange={(event) => onChange(event.target.value)} className="dashboard-input" /></label>;
 }
 
 function ModuleRow({ module }: { module: WatchdogModuleStatus }) {
