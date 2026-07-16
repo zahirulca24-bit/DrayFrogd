@@ -7,7 +7,7 @@ from unittest.mock import patch
 from app.exchange_journal_backfill import backfill_exchange_journal_lifecycle
 
 
-# Fixed timestamps and record identities make the restart/idempotency contract deterministic.
+# Fixed timestamps and record identities make the restart, repair, and idempotency contract deterministic.
 OPEN_MS = int(datetime(2026, 7, 16, 12, 0, tzinfo=UTC).timestamp() * 1000)
 
 
