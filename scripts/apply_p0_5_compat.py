@@ -25,6 +25,11 @@ replace_once(
     '''    mode = get_execution_mode()\n''',
     '''    mode = str(execution_mode or get_execution_mode()).lower().strip()\n''',
 )
+replace_once(
+    "app/authoritative_risk_engine.py",
+    '''    existing = get_trade_by_execution_key(execution_key)\n    if existing is not None:\n        return _reject(\n            "SIGNAL_ALREADY_CONSUMED",\n            "This exact signal already has a journal lifecycle and cannot be executed again",\n            execution_key=execution_key,\n            journal_id=existing.get("journal_id"),\n            existing_status=existing.get("status"),\n        )\n\n''',
+    '''    # Duplicate execution, same-symbol cooldown, daily count and risk capacity\n    # are enforced atomically by reserve_execution_capacity after this signed\n    # decision is consumed. A pre-approval Journal query would introduce a\n    # second database dependency and a time-of-check/time-of-use race.\n''',
+)
 
 replace_once(
     "app/execution_service.py",
