@@ -42,6 +42,8 @@ class Settings:
     supabase_url: str = os.getenv("SUPABASE_URL", "")
     supabase_service_role_key: str = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
     bot_scan_interval_seconds: int = int(os.getenv("BOT_SCAN_INTERVAL_SECONDS", "30"))
+    execution_taker_fee_bps: float = float(os.getenv("EXECUTION_TAKER_FEE_BPS", "5.5"))
+    execution_slippage_bps: float = float(os.getenv("EXECUTION_SLIPPAGE_BPS", "0.0"))
     scanner_universe_limit: int = int(
         os.getenv(
             "SCANNER_UNIVERSE_LIMIT",

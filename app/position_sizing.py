@@ -4,12 +4,14 @@ from datetime import UTC, datetime, timedelta
 from math import isfinite
 from typing import Any
 
+from app.config import settings as app_settings
+from app.engines.profiles import get_engine_profile
 from app.exchange import BybitClient
+from app.trading_costs import calculate_cost_adjusted_geometry
 
 
 SIGNAL_MAX_AGE_MINUTES = 10
 DEFAULT_MIN_NOTIONAL = 5.0
-DEFAULT_FEE_BPS_PER_SIDE = 5.5
 
 
 def calculate_position_size(
@@ -71,15 +73,45 @@ def calculate_position_size(
     if not tick_size:
         return _reject("Symbol tickSize is unavailable")
 
-    fee_bps_per_side = _non_negative_float(settings.get("fee_bps_per_side"))
-    if fee_bps_per_side is None:
-        fee_bps_per_side = DEFAULT_FEE_BPS_PER_SIDE
-    fee_rate = fee_bps_per_side / 10_000
-    estimated_fee_per_unit = (entry + stop_loss) * fee_rate
-    risk_per_unit_with_fees = sl_distance + estimated_fee_per_unit
-    if risk_per_unit_with_fees <= 0 or not isfinite(risk_per_unit_with_fees):
-        return _reject("Position risk including fees is invalid")
+    fee_bps = _non_negative_float(settings.get("fee_bps"))
+    if fee_bps is None:
+        fee_bps = _non_negative_float(settings.get("fee_bps_per_side"))
+    if fee_bps is None:
+        fee_bps = max(float(app_settings.execution_taker_fee_bps), 0.0)
 
+    slippage_bps = _non_negative_float(settings.get("slippage_bps"))
+    if slippage_bps is None:
+        slippage_bps = max(float(app_settings.execution_slippage_bps), 0.0)
+
+    min_net_risk_reward = _non_negative_float(settings.get("min_risk_reward"))
+    if min_net_risk_reward is None:
+        min_net_risk_reward = _non_negative_float(signal.get("engine_min_risk_reward"))
+    if min_net_risk_reward is None:
+        try:
+            min_net_risk_reward = get_engine_profile(signal.get("trade_type")).min_risk_reward
+        except ValueError:
+            min_net_risk_reward = 0.0
+
+    unit_economics = calculate_cost_adjusted_geometry(
+        direction=normalized["direction"],
+        entry=entry,
+        stop_loss=stop_loss,
+        take_profit=normalized["take_profit"],
+        quantity=1.0,
+        fee_bps=fee_bps,
+        slippage_bps=slippage_bps,
+    )
+    if unit_economics is None:
+        return _reject("Invalid entry/SL/TP geometry")
+    if unit_economics["net_reward"] <= 0:
+        return _reject("Estimated fees and slippage eliminate the trade reward")
+    if unit_economics["net_risk_reward"] + 1e-9 < min_net_risk_reward:
+        return _reject(
+            f"Net risk reward {unit_economics['net_risk_reward']:.4f} is below "
+            f"minimum {min_net_risk_reward:.4f} after fees and slippage"
+        )
+
+    risk_per_unit_with_fees = unit_economics["net_risk"]
     raw_quantity = target_risk_amount / risk_per_unit_with_fees
     normalized_quantity = client.normalize_quantity(raw_quantity, str(qty_step))
     quantity = _positive_float(normalized_quantity)
@@ -103,15 +135,32 @@ def calculate_position_size(
         if notional < min_notional:
             return _reject("Minimum notional cannot be satisfied with symbol precision")
 
-    price_risk_amount = quantity * sl_distance
-    estimated_open_fee = quantity * entry * fee_rate
-    estimated_stop_fee = quantity * stop_loss * fee_rate
+    economics = calculate_cost_adjusted_geometry(
+        direction=normalized["direction"],
+        entry=entry,
+        stop_loss=stop_loss,
+        take_profit=normalized["take_profit"],
+        quantity=quantity,
+        fee_bps=fee_bps,
+        slippage_bps=slippage_bps,
+    )
+    if economics is None:
+        return _reject("Position economics are invalid")
+
+    price_risk_amount = economics["gross_risk"]
+    estimated_open_fee = economics["estimated_entry_fee"]
+    estimated_stop_fee = economics["estimated_stop_exit_fee"]
     estimated_round_trip_fees = estimated_open_fee + estimated_stop_fee
-    actual_risk_amount = price_risk_amount + estimated_round_trip_fees
+    actual_risk_amount = economics["net_risk"]
     if price_risk_amount <= 0 or actual_risk_amount <= 0 or not isfinite(actual_risk_amount):
         return _reject("Position risk is invalid")
     if actual_risk_amount > target_risk_amount * 1.001:
-        return _reject("Minimum quantity exceeds configured fixed USDT risk after fees")
+        return _reject("Minimum quantity exceeds configured fee-inclusive USDT risk")
+    if economics["net_risk_reward"] + 1e-9 < min_net_risk_reward:
+        return _reject(
+            f"Net risk reward {economics['net_risk_reward']:.4f} is below "
+            f"minimum {min_net_risk_reward:.4f} after quantity normalization"
+        )
 
     existing_margin = _current_margin(active_trades, positions, leverage_cap)
     max_allowed_margin = equity * exposure_cap
@@ -169,10 +218,21 @@ def calculate_position_size(
         "risk_percent": actual_risk_amount / equity,
         "risk_amount": actual_risk_amount,
         "price_risk_amount": price_risk_amount,
+        "gross_price_risk_amount": price_risk_amount,
+        "fee_inclusive_risk_amount": actual_risk_amount,
         "estimated_open_fee": estimated_open_fee,
+        "estimated_entry_fee": estimated_open_fee,
         "estimated_stop_fee": estimated_stop_fee,
+        "estimated_stop_exit_fee": estimated_stop_fee,
         "estimated_round_trip_fees": estimated_round_trip_fees,
-        "fee_bps_per_side": fee_bps_per_side,
+        "estimated_stop_costs": economics["estimated_stop_costs"],
+        "estimated_net_reward": economics["net_reward"],
+        "gross_risk_reward": economics["gross_risk_reward"],
+        "net_risk_reward": economics["net_risk_reward"],
+        "fee_bps_per_side": fee_bps,
+        "fee_bps": fee_bps,
+        "slippage_bps": slippage_bps,
+        "min_net_risk_reward": min_net_risk_reward,
         "risk_per_unit_with_fees": risk_per_unit_with_fees,
         "target_risk_amount": target_risk_amount,
         "risk_mode": "fixed_usdt" if fixed_risk_mode else "legacy_percent",

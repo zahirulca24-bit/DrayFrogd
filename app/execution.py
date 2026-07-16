@@ -8,6 +8,8 @@ partial profit orders are installed before a successful execution is returned.
 
 from typing import Any
 
+from app.config import settings as app_settings
+from app.engines.profiles import get_engine_profile
 from app.execution_core import (
     RESULT_EXECUTION_FAILED,
     RESULT_EXECUTION_UNCERTAIN,
@@ -61,6 +63,10 @@ from app.trade_management_profiles import (
     extract_observed_entry_fee,
     trade_type_from_trade,
 )
+from app.trading_costs import calculate_cost_adjusted_geometry
+
+
+RISK_AMOUNT_TOLERANCE = 1.001
 
 
 def execute_signal(client: Any, signal: dict[str, Any], auto_triggered: bool = False) -> dict[str, Any]:
@@ -98,6 +104,28 @@ def execute_signal(client: Any, signal: dict[str, Any], auto_triggered: bool = F
     trade = result.get("trade") if isinstance(result.get("trade"), dict) else None
     if not trade:
         return {"ok": False, "error": "ACTIVE_TRADE_PAYLOAD_UNAVAILABLE", **result}
+
+    actual_fill_costs = _validate_actual_fill_costs(result, trade)
+    metadata = trade.get("exchange_metadata") if isinstance(trade.get("exchange_metadata"), dict) else {}
+    trade = {
+        **trade,
+        "exchange_metadata": {
+            **metadata,
+            "actual_fill_cost_validation": actual_fill_costs,
+        },
+    }
+    result["trade"] = trade
+    result["actual_fill_cost_validation"] = actual_fill_costs
+    if not actual_fill_costs.get("allowed"):
+        safe_result = _emergency_close_pending_sync(
+            client=client,
+            trade=trade,
+            error="ACTUAL_FILL_COST_VIOLATION",
+            detail=str(actual_fill_costs.get("reason") or "Actual fill failed fee-inclusive validation."),
+            sizing=result.get("sizing") or {},
+        )
+        _sync_active_safety_state(safe_result)
+        return safe_result
 
     profiled = _apply_management_profile(client, trade, spread_gate)
     if not profiled.get("ok"):
@@ -199,6 +227,96 @@ def execute_signal(client: Any, signal: dict[str, Any], auto_triggered: bool = F
     result["management_profile"] = management.get("profile_name")
     result["spread"] = spread_gate
     return result
+
+
+def _validate_actual_fill_costs(result: dict[str, Any], trade: dict[str, Any]) -> dict[str, Any]:
+    actual_fill = result.get("actual_fill") if isinstance(result.get("actual_fill"), dict) else None
+    validation = result.get("pre_order_risk") if isinstance(result.get("pre_order_risk"), dict) else None
+    sizing = result.get("sizing") if isinstance(result.get("sizing"), dict) else {}
+    if actual_fill is None or validation is None:
+        return {
+            "allowed": True,
+            "reason": "",
+            "status": "LEGACY_EVIDENCE_UNAVAILABLE",
+        }
+
+    try:
+        entry = float(actual_fill.get("avg_price") or trade.get("entry"))
+        quantity = float(actual_fill.get("quantity") or trade.get("quantity"))
+        stop_loss = float(trade.get("stop_loss"))
+        take_profit = float(trade.get("take_profit"))
+    except (TypeError, ValueError):
+        return {
+            "allowed": False,
+            "reason": "Actual fill cost validation values are invalid",
+            "status": "INVALID_EVIDENCE",
+        }
+
+    trade_type = validation.get("trade_type") or trade.get("trade_type") or (trade.get("exchange_metadata") or {}).get("trade_type")
+    try:
+        profile_min_rr = get_engine_profile(trade_type).min_risk_reward
+    except ValueError:
+        profile_min_rr = 0.0
+
+    min_rr = float(validation.get("min_risk_reward") or profile_min_rr or 0.0)
+    target_risk = float(validation.get("risk_amount") or sizing.get("target_risk_amount") or 0.0)
+    fee_bps = float(sizing.get("fee_bps") if sizing.get("fee_bps") is not None else app_settings.execution_taker_fee_bps)
+    slippage_bps = float(
+        sizing.get("slippage_bps") if sizing.get("slippage_bps") is not None else app_settings.execution_slippage_bps
+    )
+    observed_entry_fee = extract_observed_entry_fee(trade)
+    economics = calculate_cost_adjusted_geometry(
+        direction=str(trade.get("direction") or ""),
+        entry=entry,
+        stop_loss=stop_loss,
+        take_profit=take_profit,
+        quantity=quantity,
+        fee_bps=fee_bps,
+        slippage_bps=slippage_bps,
+        observed_entry_fee=observed_entry_fee if observed_entry_fee > 0 else None,
+    )
+    if economics is None:
+        return {
+            "allowed": False,
+            "reason": "Actual fill invalidated fee-inclusive entry/SL/TP geometry",
+            "status": "INVALID_GEOMETRY",
+        }
+
+    evidence = {
+        "status": "VERIFIED",
+        "gross_price_risk": economics["gross_risk"],
+        "fee_inclusive_risk": economics["net_risk"],
+        "target_risk": target_risk,
+        "gross_risk_reward": economics["gross_risk_reward"],
+        "net_risk_reward": economics["net_risk_reward"],
+        "minimum_net_risk_reward": min_rr,
+        "estimated_entry_fee": economics["estimated_entry_fee"],
+        "estimated_stop_exit_fee": economics["estimated_stop_exit_fee"],
+        "estimated_stop_costs": economics["estimated_stop_costs"],
+        "estimated_target_costs": economics["estimated_target_costs"],
+        "estimated_net_reward": economics["net_reward"],
+        "fee_bps": economics["fee_bps"],
+        "slippage_bps": economics["slippage_bps"],
+    }
+    if economics["net_reward"] <= 0 or economics["net_risk_reward"] + 1e-9 < min_rr:
+        return {
+            **evidence,
+            "allowed": False,
+            "reason": (
+                f"Actual fill net RR {economics['net_risk_reward']:.4f} is below "
+                f"minimum {min_rr:.4f} after fees and slippage"
+            ),
+        }
+    if target_risk > 0 and economics["net_risk"] > target_risk * RISK_AMOUNT_TOLERANCE + 1e-9:
+        return {
+            **evidence,
+            "allowed": False,
+            "reason": (
+                f"Actual fill fee-inclusive risk {economics['net_risk']:.8f} "
+                f"exceeds target {target_risk:.8f}"
+            ),
+        }
+    return {**evidence, "allowed": True, "reason": ""}
 
 
 def _execution_spread_gate(client: Any, symbol: str) -> dict[str, Any]:
