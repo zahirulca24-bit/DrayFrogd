@@ -55,6 +55,14 @@ def records() -> list[dict]:
     ]
 
 
+def plain_side_records() -> list[dict]:
+    payload = [dict(record) for record in records()]
+    payload[0]["direction"] = "Buy"
+    payload[1]["direction"] = "Sell"
+    payload[2]["direction"] = "Sell"
+    return payload
+
+
 class FakeClient:
     mode = "demo"
 
@@ -90,6 +98,42 @@ class ExchangeJournalBackfillTests(unittest.TestCase):
         self.assertAlmostEqual(payload["realized_pnl"], 1.20)
         self.assertAlmostEqual(payload["fees"], 0.20)
         self.assertEqual(payload["exchange_metadata"]["close_sync"]["record_count"], 3)
+
+    def test_plain_buy_sell_rows_are_classified_from_lifecycle_sequence(self) -> None:
+        with (
+            patch("app.exchange_journal_backfill.get_trade_history", return_value=[]),
+            patch("app.exchange_journal_backfill.get_trade_by_execution_key", return_value=None),
+            patch("app.exchange_journal_backfill.create_trade_entry", side_effect=lambda value: value) as create_mock,
+        ):
+            result = backfill_exchange_journal_lifecycle(
+                FakeClient(plain_side_records()),
+                bdt_date="2026-07-16",
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["pending"], [])
+        create_mock.assert_called_once()
+        payload = create_mock.call_args.args[0]
+        self.assertEqual(payload["direction"], "long")
+        self.assertEqual(payload["status"], "closed")
+        self.assertAlmostEqual(payload["realized_pnl"], 1.20)
+        self.assertAlmostEqual(payload["fees"], 0.20)
+
+    def test_plain_side_close_without_open_is_not_fabricated(self) -> None:
+        orphan = [dict(records()[1])]
+        orphan[0]["direction"] = "Sell"
+        with (
+            patch("app.exchange_journal_backfill.get_trade_history", return_value=[]),
+            patch("app.exchange_journal_backfill.create_trade_entry") as create_mock,
+        ):
+            result = backfill_exchange_journal_lifecycle(
+                FakeClient(orphan),
+                bdt_date="2026-07-16",
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertIn("no same-day open lifecycle", result["pending"][0]["error"])
+        create_mock.assert_not_called()
 
     def test_existing_recovered_open_row_is_finalized_not_duplicated(self) -> None:
         existing = {

@@ -72,10 +72,24 @@ def backfill_exchange_journal_lifecycle(
             or record.get("price")
         )
         event_ms = _event_ms(record)
-        if not symbol or role is None or side is None or qty is None or qty <= 0 or event_ms is None:
+        if not symbol or side is None or qty is None or qty <= 0 or event_ms is None:
             continue
 
         state = states.get(symbol)
+        if role is None:
+            if state is None:
+                cash_flow = _number(record.get("cashFlow"))
+                if cash_flow is not None and abs(cash_flow) > 1e-12:
+                    pending.append({
+                        "symbol": symbol,
+                        "error": "plain-side close row has no same-day open lifecycle",
+                    })
+                    continue
+                role = "open"
+            else:
+                expected_open_side = "buy" if state["direction"] == "long" else "sell"
+                role = "open" if side == expected_open_side else "close"
+
         if role == "open":
             direction = "long" if side == "buy" else "short"
             if state is not None and state["remaining_quantity"] > state["tolerance"]:
@@ -362,6 +376,10 @@ def _role_and_side(record: dict[str, Any]) -> tuple[str | None, str | None]:
         return "close", "buy"
     if normalized in {"close sell", "sell close"}:
         return "close", "sell"
+    if normalized == "buy":
+        return None, "buy"
+    if normalized == "sell":
+        return None, "sell"
     return None, None
 
 
