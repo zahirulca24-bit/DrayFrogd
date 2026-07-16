@@ -1,3 +1,5 @@
+"""Regression coverage for the Control Center watchdog response contract."""
+
 from app.main import app
 
 
