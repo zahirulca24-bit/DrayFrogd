@@ -1,0 +1,49 @@
+name: Update P0 Execution Economics Tests
+
+on:
+  push:
+    branches:
+      - fix/p0-execution-economics-runtime
+    paths:
+      - .github/workflows/update-p0-execution-economics-tests.yml
+
+permissions:
+  contents: write
+
+jobs:
+  update-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repair branch
+        uses: actions/checkout@v4
+        with:
+          ref: fix/p0-execution-economics-runtime
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Update regression expectations
+        run: python scripts/update_p0_execution_economics_tests.py
+
+      - name: Remove temporary updater
+        run: |
+          rm scripts/update_p0_execution_economics_tests.py
+          rm .github/workflows/update-p0-execution-economics-tests.yml
+
+      - name: Install backend dependencies
+        run: python -m pip install --upgrade pip && pip install -r requirements.txt
+
+      - name: Run affected tests
+        run: python -m unittest tests.test_position_sizing tests.test_risk_authority tests.test_execution_economics_guard -v
+
+      - name: Commit updated regression contract
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add tests/test_position_sizing.py tests/test_risk_authority.py
+          git add -u scripts/update_p0_execution_economics_tests.py .github/workflows/update-p0-execution-economics-tests.yml
+          git commit -m "Test 90 percent execution risk headroom"
+          git push origin HEAD:fix/p0-execution-economics-runtime
