@@ -304,6 +304,20 @@ export interface MetricsResponse {
   loss_trades: number;
   win_rate: number;
   pnl_r: number;
+  today_realized_pnl: number;
+  today_account_net_pnl: number;
+  today_trade_net_pnl: number;
+  today_fees: number;
+  today_funding: number;
+  today_financial_date: string;
+  today_financial_status: "authoritative" | "fallback" | "unavailable";
+  today_financial_source: "bybit_transaction_log" | "journal_fallback" | "unavailable";
+  financial_truth_error: string | null;
+  journal_today_realized_pnl: number;
+  journal_today_fees: number;
+  reconciliation_gap: number | null;
+  ledger_record_count: number;
+  daily_accounting_timezone: string;
 }
 
 export interface PortfolioSummary {

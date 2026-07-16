@@ -831,8 +831,8 @@ function LedgerAuditPanel({ audit }: { audit: LedgerAuditResponse | null }) {
         </div>
 
         <div className="grid grid-cols-2 gap-2 md:grid-cols-4 xl:min-w-[620px]">
-          <LedgerMetric label="Net Change" value={formatMoney(netChange)} tone={netChange === null ? "neutral" : netChange >= 0 ? "good" : "bad"} />
-          <LedgerMetric label="Trade Change" value={formatMoney(summary?.trade_change ?? null)} />
+          <LedgerMetric label="Account Net (Bybit)" value={formatMoney(netChange)} tone={netChange === null ? "neutral" : netChange >= 0 ? "good" : "bad"} />
+          <LedgerMetric label="Trade Net (Bybit)" value={formatMoney(summary?.trade_change ?? null)} />
           <LedgerMetric label="Fees Paid" value={formatMoney(summary?.fees ?? null)} tone="bad" />
           <LedgerMetric label="Records" value={String(summary?.record_count ?? 0)} />
         </div>
