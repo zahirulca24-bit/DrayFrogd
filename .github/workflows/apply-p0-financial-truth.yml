@@ -12,6 +12,7 @@ on:
     paths:
       - .github/workflows/apply-p0-financial-truth.yml
       - scripts/apply_p0_financial_truth.py
+      - scripts/fix_p0_financial_truth_patcher.py
 
 permissions:
   contents: write
@@ -28,6 +29,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
+      - name: Repair patch contract
+        run: python scripts/fix_p0_financial_truth_patcher.py
 
       - name: Apply reconciliation patch
         run: python scripts/apply_p0_financial_truth.py
@@ -49,6 +53,7 @@ jobs:
       - name: Remove temporary patch machinery
         run: |
           rm -f scripts/apply_p0_financial_truth.py
+          rm -f scripts/fix_p0_financial_truth_patcher.py
           rm -f .github/workflows/apply-p0-financial-truth.yml
 
       - name: Commit repaired implementation
