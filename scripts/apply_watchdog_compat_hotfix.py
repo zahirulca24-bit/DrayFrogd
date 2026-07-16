@@ -1,5 +1,6 @@
 from pathlib import Path
 
+# Controller trigger: apply the compatibility route patch once.
 path = Path("app/main.py")
 text = path.read_text(encoding="utf-8")
 old = '''@app.get("/watchdog/status")
