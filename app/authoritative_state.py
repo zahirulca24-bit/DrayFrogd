@@ -6,15 +6,37 @@ from threading import RLock
 from typing import Any
 
 _lock = RLock()
-_snapshot: dict[str, Any] = {
-    "version": 0,
-    "mode": "demo",
-    "source": "uninitialized",
-    "updated_at": None,
-    "positions_synced": False,
-    "trades": [],
-    "errors": [],
-}
+
+
+def _initial_snapshot() -> dict[str, Any]:
+    return {
+        "version": 0,
+        "mode": "demo",
+        "source": "uninitialized",
+        "updated_at": None,
+        "positions_synced": False,
+        "trades": [],
+        "errors": [],
+        "captured_at": None,
+        "wallet": {},
+        "positions": [],
+        "open_orders": [],
+        "exchange_position_count": 0,
+        "app_position_count": 0,
+        "exchange_exposure": 0.0,
+        "app_exposure": 0.0,
+        "exposure_gap": 0.0,
+        "account_net": None,
+        "trade_net": None,
+        "fees": None,
+        "funding": None,
+        "ledger_status": "unavailable",
+        "ledger_error": None,
+        "reconciliation_ok": False,
+    }
+
+
+_snapshot: dict[str, Any] = _initial_snapshot()
 
 
 def publish_snapshot(
@@ -27,15 +49,31 @@ def publish_snapshot(
 ) -> dict[str, Any]:
     global _snapshot
     with _lock:
-        _snapshot = {
-            "version": int(_snapshot.get("version") or 0) + 1,
-            "mode": str(mode or "demo").lower(),
-            "source": source,
-            "updated_at": datetime.now(UTC).isoformat(),
-            "positions_synced": bool(positions_synced),
-            "trades": deepcopy(trades),
-            "errors": list(errors or []),
-        }
+        previous = dict(_snapshot)
+        previous.update(
+            {
+                "version": int(_snapshot.get("version") or 0) + 1,
+                "mode": str(mode or "demo").lower(),
+                "source": source,
+                "updated_at": datetime.now(UTC).isoformat(),
+                "positions_synced": bool(positions_synced),
+                "trades": deepcopy(trades),
+                "errors": list(errors or []),
+            }
+        )
+        _snapshot = previous
+        return deepcopy(_snapshot)
+
+
+def publish_runtime_fields(fields: dict[str, Any], *, source: str) -> dict[str, Any]:
+    global _snapshot
+    with _lock:
+        next_snapshot = dict(_snapshot)
+        next_snapshot.update(deepcopy(fields))
+        next_snapshot["version"] = int(_snapshot.get("version") or 0) + 1
+        next_snapshot["source"] = str(source or "runtime_watchdog")
+        next_snapshot["updated_at"] = datetime.now(UTC).isoformat()
+        _snapshot = next_snapshot
         return deepcopy(_snapshot)
 
 
@@ -81,15 +119,7 @@ def patch_ticker(symbol: str, ticker: dict[str, Any]) -> bool:
 def reset_snapshot() -> None:
     global _snapshot
     with _lock:
-        _snapshot = {
-            "version": 0,
-            "mode": "demo",
-            "source": "uninitialized",
-            "updated_at": None,
-            "positions_synced": False,
-            "trades": [],
-            "errors": [],
-        }
+        _snapshot = _initial_snapshot()
 
 
 def _number(value: Any) -> float | None:
