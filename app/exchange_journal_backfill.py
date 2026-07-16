@@ -133,8 +133,10 @@ def backfill_exchange_journal_lifecycle(
             matched_close_sync = matched_metadata.get("close_sync") if isinstance(matched_metadata.get("close_sync"), dict) else {}
             matched_record_keys = set(matched_close_sync.get("record_keys") or [])
             payload_record_keys = set(payload["exchange_metadata"]["close_sync"]["record_keys"])
+            matched_strategy = str(matched.get("strategy_name") or matched.get("strategy") or "").strip().lower()
             if (
                 str(matched.get("status") or "").lower() == "closed"
+                and matched_strategy not in {"", "unknown"}
                 and payload_record_keys
                 and payload_record_keys.issubset(matched_record_keys)
             ):
@@ -351,6 +353,7 @@ def _match_existing_row(rows: list[dict[str, Any]], payload: dict[str, Any]) -> 
 def _close_updates(payload: dict[str, Any]) -> dict[str, Any]:
     return {
         "status": "closed",
+        "strategy_name": payload.get("strategy_name") or "exchange_backfill",
         "result": payload.get("result"),
         "close_reason": payload.get("close_reason"),
         "exit_price": payload.get("exit_price"),
