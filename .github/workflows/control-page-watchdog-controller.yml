@@ -48,22 +48,22 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Compile backend
-        run: python -m compileall app
+        run: python -m compileall -q app tests
 
       - name: Run compatibility tests
-        run: pytest -q tests/test_watchdog_api_compat.py
+        run: python -m unittest tests.test_watchdog_api_compat -v
 
       - name: Run existing watchdog tests
-        run: pytest -q tests/test_runtime_watchdog.py
+        run: python -m unittest tests.test_runtime_watchdog -v
 
       - name: Run full backend tests
-        run: pytest -q
+        run: python -m unittest discover -s tests -p "test_*.py" -v
 
       - name: Verify frontend
         working-directory: frontend
         run: |
           npm ci
-          npm run typecheck
+          npm run lint
           npm run build
 
       - name: Remove temporary patcher
