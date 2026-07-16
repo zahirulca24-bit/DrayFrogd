@@ -1,0 +1,62 @@
+name: Watchdog Compatibility Controller
+
+on:
+  pull_request:
+    branches:
+      - ops/p0-5-1-watchdog-controller
+
+permissions:
+  contents: write
+
+jobs:
+  patch-test-commit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout hotfix branch
+        uses: actions/checkout@v4
+        with:
+          ref: fix/watchdog-status-backward-compatibility
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install backend dependencies
+        run: pip install -r requirements.txt
+
+      - name: Apply compatibility patch
+        run: python scripts/apply_watchdog_compat_hotfix.py
+
+      - name: Remove temporary patcher
+        run: rm scripts/apply_watchdog_compat_hotfix.py
+
+      - name: Compile backend
+        run: python -m compileall app
+
+      - name: Run focused compatibility tests
+        run: pytest -q tests/test_watchdog_status_compatibility.py
+
+      - name: Run full backend tests
+        run: pytest -q
+
+      - name: Verify frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run typecheck
+          npm run build
+
+      - name: Commit verified hotfix
+        run: |
+          if git diff --quiet && git diff --cached --quiet; then
+            echo "No product changes to commit"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/main.py tests/test_watchdog_status_compatibility.py scripts/apply_watchdog_compat_hotfix.py || true
+          git add -A
+          git commit -m "fix: preserve watchdog status API compatibility"
+          git push origin HEAD:fix/watchdog-status-backward-compatibility
