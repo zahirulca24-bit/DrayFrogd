@@ -35,6 +35,8 @@ class FakeLedgerClient:
 
 
 class FinancialTruthMetricsTests(unittest.TestCase):
+    """Journal, Performance and Dashboard must share one explicit BDT-day truth source."""
+
     @patch("app.metrics.get_trade_history", return_value=[])
     @patch("app.metrics.get_closed_trade_history", return_value=[])
     @patch("app.metrics.get_closed_trades", return_value=[])
