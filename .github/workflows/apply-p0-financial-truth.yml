@@ -6,6 +6,12 @@ on:
       - fix/p0-financial-truth-reconciliation
     paths:
       - .github/workflows/apply-p0-financial-truth.yml
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/apply-p0-financial-truth.yml
+      - scripts/apply_p0_financial_truth.py
 
 permissions:
   contents: write
