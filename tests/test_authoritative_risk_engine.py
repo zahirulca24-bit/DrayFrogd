@@ -58,6 +58,11 @@ RISK_STATE = {"active_symbols": [], "active_trade_count": 0, "available_risk": 5
 
 
 class AuthoritativeRiskEngineTests(unittest.TestCase):
+    def setUp(self) -> None:
+        mode_patch = patch("app.authoritative_risk_engine.get_execution_mode", return_value="demo")
+        mode_patch.start()
+        self.addCleanup(mode_patch.stop)
+
     def test_signed_approval_is_signal_bound_short_lived_and_one_time(self) -> None:
         payload = signal()
         with patch("app.authoritative_risk_engine.get_trade_by_execution_key", return_value=None):
