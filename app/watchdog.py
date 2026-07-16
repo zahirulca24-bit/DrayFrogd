@@ -185,3 +185,23 @@ def _now_iso() -> str:
     from datetime import UTC, datetime
 
     return datetime.now(UTC).isoformat()
+
+
+def _install_runtime_status_compatibility() -> None:
+    """Keep /watchdog/status backward compatible for the existing Control page."""
+
+    from app import runtime_watchdog
+
+    original_runtime_status = runtime_watchdog.get_watchdog_runtime_status
+
+    def compatible_runtime_status() -> dict[str, Any]:
+        runtime_state = original_runtime_status()
+        worker_running = bool(runtime_state.get("enabled", True))
+        operations = get_watchdog_snapshot(worker_running=worker_running)
+        operations["runtime"] = runtime_state
+        return operations
+
+    runtime_watchdog.get_watchdog_runtime_status = compatible_runtime_status
+
+
+_install_runtime_status_compatibility()
