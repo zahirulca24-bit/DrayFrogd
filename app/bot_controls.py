@@ -6,6 +6,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.config import settings
 from app.database import SessionLocal, engine
 from app.models import BotRuntimeConfig, RiskRuntimeState
+from app.runtime_guard import get_watchdog_execution_block
 
 
 DEFAULT_RISK_SETTINGS = {
@@ -133,6 +134,9 @@ def can_execute() -> tuple[bool, str]:
     row = _get_runtime_row()
     if row.emergency_stop:
         return False, "Emergency stop is active"
+    watchdog_blocked, watchdog_reason = get_watchdog_execution_block()
+    if watchdog_blocked:
+        return False, f"Runtime watchdog blocked execution: {watchdog_reason or 'critical mismatch'}"
     if _risk_circuit_breaker_active():
         return False, "Daily net realized loss circuit breaker is active"
     if row.bot_status != "running":

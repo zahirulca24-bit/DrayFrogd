@@ -18,6 +18,7 @@ from app.risk_cooldown_sync import sync_loss_cooldowns
 from app.risk_execution import execute_signal
 from app.risk_sync import sync_partial_realized_pnl
 from app.runtime_integration import install_runtime_integration
+from app.runtime_watchdog import run_watchdog_cycle
 from app.scalping_profit_lock_guard import enforce_scalping_tp2_profit_locks
 from app.scanner import get_active_signals, run_scan
 from app.trade_management import manage_open_trades
@@ -159,6 +160,12 @@ async def auto_trading_loop() -> None:
                             "error_code": "RISK_EQUITY_UNAVAILABLE",
                         },
                     )
+
+                watchdog_result = await asyncio.to_thread(
+                    run_watchdog_cycle, client, reconciliation_result=reconciliation_result
+                )
+                if watchdog_result.get("execution_blocked"):
+                    logger.warning("Runtime watchdog blocked new execution: %s", watchdog_result.get("reasons"))
 
                 allowed, reason = can_execute()
                 if not allowed:

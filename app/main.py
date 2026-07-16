@@ -6,6 +6,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.active_trade_control import enrich_active_trades, request_market_close
+from app.authoritative_state import get_snapshot
 from app.auth import (
     authenticate_admin,
     check_login_rate_limit,
@@ -57,11 +58,18 @@ from app.readiness import get_readiness_status
 from app.reconciliation import reconcile_state
 from app.risk import extract_account_equity, get_risk_state, validate_trade
 from app.scanner import SCANNER_SYMBOLS, get_active_signals, get_latest_signals, run_scan
-from app.schemas import BacktestRequest, BotConfigRequest, ExecuteSignalRequest, LoginRequest, PositionSizeRequest, RiskSignalRequest, SessionVerifyResponse, TokenResponse
+from app.schemas import BacktestRequest, BotConfigRequest, ExecuteSignalRequest, LoginRequest, PositionSizeRequest, RiskSignalRequest, SessionVerifyResponse, TokenResponse, WatchdogConfigRequest
 from app.strategy_audit import get_strategy_audit
 from app.symbols import get_symbol_metadata, refresh_symbol_metadata
 from app.trade_management import manage_open_trades
 from app.watchdog import get_watchdog_snapshot
+from app.runtime_watchdog import (
+    ensure_watchdog_state,
+    get_watchdog_incidents,
+    get_watchdog_runtime_status,
+    run_watchdog_cycle,
+    update_watchdog_config,
+)
 
 
 app = FastAPI(title=settings.app_name)
@@ -86,6 +94,7 @@ async def on_startup() -> None:
     global _background_task
     Base.metadata.create_all(bind=engine)
     ensure_runtime_config()
+    ensure_watchdog_state()
     if not get_active_trades():
         replace_active_trades(get_active_trade_history())
     if _background_task is None or _background_task.done():
@@ -535,11 +544,41 @@ def bot_events(_: dict = Depends(require_authenticated), limit: int = 100) -> di
     return {"events": get_bot_events(limit=max(10, min(limit, 300)))}
 
 
+@app.get("/runtime/snapshot")
+def runtime_snapshot(_: dict = Depends(require_authenticated)) -> dict:
+    return get_snapshot()
+
+
 @app.get("/watchdog/status")
 def watchdog_status(_: dict = Depends(require_authenticated)) -> dict:
+    return get_watchdog_runtime_status()
+
+
+@app.get("/watchdog/operations")
+def watchdog_operations(_: dict = Depends(require_authenticated)) -> dict:
     global _background_task
     worker_running = _background_task is not None and not _background_task.done()
     return get_watchdog_snapshot(worker_running=worker_running)
+
+
+@app.get("/watchdog/incidents")
+def watchdog_incidents(limit: int = 100, _: dict = Depends(require_authenticated)) -> dict:
+    return {"incidents": get_watchdog_incidents(limit=max(10, min(limit, 300)))}
+
+
+@app.post("/watchdog/config")
+def watchdog_config(payload: WatchdogConfigRequest, _: dict = Depends(require_authenticated)) -> dict:
+    try:
+        return update_watchdog_config(**payload.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@app.post("/watchdog/run-now")
+def watchdog_run_now(_: dict = Depends(require_authenticated)) -> dict:
+    client = get_exchange_client(get_execution_mode())
+    reconciliation_result = reconcile_state(client)
+    return run_watchdog_cycle(client, reconciliation_result=reconciliation_result)
 
 
 @app.post("/reconcile")

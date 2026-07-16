@@ -69,6 +69,15 @@ class BotConfigRequest(BaseModel):
     max_daily_trades: int | None = None
 
 
+class WatchdogConfigRequest(BaseModel):
+    enabled: bool | None = None
+    interval_seconds: int | None = None
+    action_mode: str | None = None
+    mismatch_tolerance_cycles: int | None = None
+    exposure_tolerance_ratio: float | None = None
+    pnl_tolerance: float | None = None
+
+
 class BacktestRequest(BaseModel):
     symbol: str = "BTCUSDT"
     strategy: str = "all"
