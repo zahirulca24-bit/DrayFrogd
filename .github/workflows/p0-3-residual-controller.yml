@@ -1,17 +1,19 @@
 name: P0-3 Residual Journal Truth Controller
 
 on:
-  push:
+  pull_request:
     branches:
-      - fix/p0-3-residual-journal-truth
-    paths:
-      - scripts/apply_p0_3_residual_truth.py
+      - main
+    types:
+      - opened
+      - reopened
 
 permissions:
   contents: write
 
 jobs:
   patch-verify-commit:
+    if: github.head_ref == 'fix/p0-3-residual-journal-truth'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
