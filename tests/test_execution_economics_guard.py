@@ -13,6 +13,8 @@ class FakeClient:
 
 
 class ExecutionEconomicsGuardTests(unittest.TestCase):
+    """Regression contract for final-target Net RR and execution headroom."""
+
     def test_profile_runner_target_replaces_scanner_target_before_execution(self) -> None:
         result = _with_profile_runner_target(
             {
