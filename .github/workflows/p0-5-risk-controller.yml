@@ -48,7 +48,17 @@ jobs:
 
       - name: Run focused tests
         if: steps.guard.outputs.apply == 'true'
-        run: python -m unittest tests.test_authoritative_risk_engine tests.test_p0_5_runtime_truth -v
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m unittest tests.test_authoritative_risk_engine tests.test_p0_5_runtime_truth -v 2>&1 | tee focused-test.log
+
+      - name: Upload focused diagnostics
+        if: always() && steps.guard.outputs.apply == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: p0-5-focused-test-log
+          path: focused-test.log
 
       - name: Run full backend tests
         if: steps.guard.outputs.apply == 'true'
