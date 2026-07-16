@@ -551,6 +551,13 @@ def runtime_snapshot(_: dict = Depends(require_authenticated)) -> dict:
 
 @app.get("/watchdog/status")
 def watchdog_status(_: dict = Depends(require_authenticated)) -> dict:
+    global _background_task
+    worker_running = _background_task is not None and not _background_task.done()
+    return get_watchdog_snapshot(worker_running=worker_running)
+
+
+@app.get("/watchdog/runtime-status")
+def watchdog_runtime_status(_: dict = Depends(require_authenticated)) -> dict:
     return get_watchdog_runtime_status()
 
 
