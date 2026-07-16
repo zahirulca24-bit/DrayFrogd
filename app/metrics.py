@@ -22,7 +22,10 @@ def get_metrics(
     snapshot = get_snapshot()
     active_trades = list(snapshot.get("trades") or []) if int(snapshot.get("version") or 0) > 0 else get_operator_active_trades()
     closed_trades = get_closed_trades() or get_closed_trade_history()
-    total_trades = len(active_trades) + len(closed_trades)
+    active_trade_count = _exchange_active_count(client)
+    if active_trade_count is None:
+        active_trade_count = len(active_trades)
+    total_trades = active_trade_count + len(closed_trades)
     outcomes = [_classify_outcome(trade) for trade in closed_trades]
     win_trades = sum(1 for outcome in outcomes if outcome == "win")
     loss_trades = sum(1 for outcome in outcomes if outcome == "loss")
@@ -44,7 +47,7 @@ def get_metrics(
 
     return {
         "total_trades": total_trades,
-        "active_trades_count": len(active_trades),
+        "active_trades_count": active_trade_count,
         "closed_trades_count": len(closed_trades),
         "win_trades": win_trades,
         "loss_trades": loss_trades,
@@ -74,6 +77,26 @@ def get_portfolio_summary(client: Any | None = None) -> dict[str, Any]:
         "today_financial_source": metrics["today_financial_source"],
         "execution_mode": str(get_snapshot().get("mode") or next((trade.get("execution_mode") for trade in get_operator_active_trades() if trade.get("execution_mode")), "demo")),
     }
+
+
+def _exchange_active_count(client: Any | None) -> int | None:
+    if client is None:
+        return None
+    try:
+        ok, positions, _ = client.safe_fetch_positions()
+    except Exception:
+        return None
+    if not ok:
+        return None
+    count = 0
+    for position in positions or []:
+        try:
+            size = float(position.get("size") or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if isfinite(size) and size > 0:
+            count += 1
+    return count
 
 
 def _daily_financial_truth(

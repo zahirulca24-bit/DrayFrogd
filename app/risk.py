@@ -15,7 +15,7 @@ from app.engines import ENGINE_PROFILES
 from app.database import SessionLocal, engine
 from app.journal import log_bot_event
 from app.models import RiskRuntimeState, TradeJournal
-from app.trade_state import CAPACITY_BLOCKING_STATUSES
+from app.trade_state import CAPACITY_BLOCKING_STATUSES, is_capacity_blocking_status
 
 
 BDT = ZoneInfo("Asia/Dhaka")
@@ -237,7 +237,7 @@ def refresh_risk_state(
             }
 
             journal_rows = db.query(TradeJournal).all()
-            active_rows = [item for item in journal_rows if str(item.status or "").lower() != "closed"]
+            active_rows = [item for item in journal_rows if is_capacity_blocking_status(item.status)]
             active_symbols = sorted(
                 {
                     str(item.symbol or "").upper().strip()
@@ -313,6 +313,7 @@ def refresh_risk_state(
             breaker_activated = circuit_breaker_active and not previous_breaker
             snapshot = {
                 "risk_model": "dynamic_fixed_usdt",
+                "risk_policy_authority": "authoritative_risk_engine_v1",
                 "risk_profiles": {
                     name: dict(profile)
                     for name, profile in RISK_PROFILES.items()
@@ -377,8 +378,8 @@ def refresh_risk_state(
     return snapshot
 
 
-def get_risk_state() -> dict[str, Any]:
-    return refresh_risk_state()
+def get_risk_state(account_equity: float | None = None) -> dict[str, Any]:
+    return refresh_risk_state(account_equity=account_equity)
 
 
 def restore_risk_state(

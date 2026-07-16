@@ -45,6 +45,8 @@ class Settings:
     execution_taker_fee_bps: float = float(os.getenv("EXECUTION_TAKER_FEE_BPS", "5.5"))
     execution_slippage_bps: float = float(os.getenv("EXECUTION_SLIPPAGE_BPS", "2.0"))
     execution_risk_headroom_ratio: float = float(os.getenv("EXECUTION_RISK_HEADROOM_RATIO", "0.90"))
+    risk_approval_ttl_seconds: int = int(os.getenv("RISK_APPROVAL_TTL_SECONDS", "20"))
+    risk_signal_max_age_seconds: int = int(os.getenv("RISK_SIGNAL_MAX_AGE_SECONDS", "120"))
     scanner_universe_limit: int = int(
         os.getenv(
             "SCANNER_UNIVERSE_LIMIT",

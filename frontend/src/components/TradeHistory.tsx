@@ -78,6 +78,7 @@ type JournalRow = TradeHistoryEntry & {
   syncSource: string | null;
   protectionAttached: boolean | null;
   needsAttention: boolean;
+  countsAsTrade: boolean;
   isClosed: boolean;
   metadata: Record<string, any>;
   timeline: TimelineStep[];
@@ -271,6 +272,10 @@ function journalToRow(item: JournalTradeEntry, index: number): JournalRow {
   const closeSyncedAt = String(closeSync.synced_at || "").trim() || null;
   const closedAt = item.closed_at || null;
   const adoptedPosition = metadata.source === "exchange_position_only";
+  const executionFailedBeforeOrder =
+    String(item.result || "").toLowerCase() === "execution_failed" &&
+    !item.order_id &&
+    !openedAt;
 
   const missingClosedEvidence = isClosed && (exitValue === null || pnlValue === null || feesValue === null);
   const exactExchangeCloseComplete =
@@ -281,11 +286,12 @@ function journalToRow(item: JournalTradeEntry, index: number): JournalRow {
     feesValue !== null &&
     Boolean(syncSource);
   const needsAttention =
+    !executionFailedBeforeOrder && (
     ["FAILED", "UNCERTAIN", "UNKNOWN"].includes(status) ||
     (isClosed && outcome === "UNKNOWN") ||
     missingClosedEvidence ||
     (!isExchangeBackfill && strategy.toLowerCase() === "unknown") ||
-    (!item.order_id && !adoptedPosition && !exactExchangeCloseComplete);
+    (!item.order_id && !adoptedPosition && !exactExchangeCloseComplete));
 
   const timeline: TimelineStep[] = [
     {
@@ -423,6 +429,7 @@ function journalToRow(item: JournalTradeEntry, index: number): JournalRow {
     syncSource,
     protectionAttached,
     needsAttention,
+    countsAsTrade: !executionFailedBeforeOrder,
     isClosed,
     metadata,
     timeline,
@@ -459,6 +466,7 @@ function fallbackToRow(trade: TradeHistoryEntry, index: number): JournalRow {
     syncSource: null,
     protectionAttached: trade.slVerified && trade.tpVerified ? true : null,
     needsAttention,
+    countsAsTrade: true,
     isClosed,
     metadata: {},
     timeline: [
@@ -614,10 +622,10 @@ export default function TradeHistory({ authToken, history }: TradeHistoryProps) 
   }, [filteredRows.length, filters, rows.length]);
 
   const summary = useMemo(() => ({
-    total: rows.length,
-    open: rows.filter((row) => !row.isClosed && !isPendingSyncStatus(row.auditStatus)).length,
-    pending: rows.filter((row) => isPendingSyncStatus(row.auditStatus)).length,
-    closedToday: rows.filter((row) => row.isClosed && bdtDate(row.closedAt) === todayBdtDate()).length,
+    total: rows.filter((row) => row.countsAsTrade).length,
+    open: rows.filter((row) => row.countsAsTrade && row.auditStatus === "OPEN").length,
+    pending: rows.filter((row) => row.countsAsTrade && isPendingSyncStatus(row.auditStatus)).length,
+    closedToday: rows.filter((row) => row.countsAsTrade && row.isClosed && bdtDate(row.closedAt) === todayBdtDate()).length,
     attention: rows.filter((row) => row.needsAttention).length,
   }), [rows]);
 

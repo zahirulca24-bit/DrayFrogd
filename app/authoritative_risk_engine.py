@@ -29,6 +29,13 @@ def issue_execution_approval(
     *,
     auto_triggered: bool = False,
     now: datetime | None = None,
+    wallet: dict[str, Any] | None = None,
+    positions: list[dict[str, Any]] | None = None,
+    account_equity: float | None = None,
+    identity_signal: dict[str, Any] | None = None,
+    validation: dict[str, Any] | None = None,
+    risk_state: dict[str, Any] | None = None,
+    execution_mode: str | None = None,
 ) -> dict[str, Any]:
     """Issue a short-lived, signal-bound risk approval.
 
@@ -54,38 +61,39 @@ def issue_execution_approval(
     if lifecycle is not None:
         return lifecycle
 
-    mode = get_execution_mode()
-    execution_key = _build_execution_key(normalized, mode)
-    existing = get_trade_by_execution_key(execution_key)
-    if existing is not None:
-        return _reject(
-            "SIGNAL_ALREADY_CONSUMED",
-            "This exact signal already has a journal lifecycle and cannot be executed again",
-            execution_key=execution_key,
-            journal_id=existing.get("journal_id"),
-            existing_status=existing.get("status"),
-        )
-
-    ok_positions, positions, positions_error = client.safe_fetch_positions()
-    if not ok_positions:
-        return _reject("POSITION_STATE_UNAVAILABLE", positions_error or "Position data unavailable")
-    if _has_open_symbol(positions, normalized["symbol"]):
+    mode = str(execution_mode or get_execution_mode()).lower().strip()
+    identity = _normalize_signal(identity_signal or signal)
+    if identity is None:
+        return _reject("INVALID_SIGNAL_IDENTITY", "Execution signal identity is invalid")
+    execution_key = _build_execution_key(identity, mode)
+    # Duplicate execution, same-symbol cooldown, daily count and risk capacity
+    # are enforced atomically by reserve_execution_capacity after this signed
+    # decision is consumed. A pre-approval Journal query would introduce a
+    # second database dependency and a time-of-check/time-of-use race.
+    resolved_positions = positions
+    if resolved_positions is None:
+        ok_positions, resolved_positions, positions_error = client.safe_fetch_positions()
+        if not ok_positions:
+            return _reject("POSITION_STATE_UNAVAILABLE", positions_error or "Position data unavailable")
+    if _has_open_symbol(resolved_positions, normalized["symbol"]):
         return _reject("SYMBOL_ALREADY_ACTIVE", f"{normalized['symbol']} already has an exchange position")
 
-    ok_wallet, wallet, wallet_error = client.safe_fetch_wallet_balance()
-    if not ok_wallet or wallet is None:
-        return _reject("WALLET_STATE_UNAVAILABLE", wallet_error or "Wallet balance unavailable")
-    account_equity = extract_account_equity(wallet)
-    if account_equity is None:
+    resolved_wallet = wallet
+    if resolved_wallet is None:
+        ok_wallet, resolved_wallet, wallet_error = client.safe_fetch_wallet_balance()
+        if not ok_wallet or resolved_wallet is None:
+            return _reject("WALLET_STATE_UNAVAILABLE", wallet_error or "Wallet balance unavailable")
+    resolved_equity = account_equity if account_equity is not None else extract_account_equity(resolved_wallet)
+    if resolved_equity is None:
         return _reject("EQUITY_UNAVAILABLE", "Fresh account equity is unavailable")
 
-    risk_state = refresh_risk_state(account_equity=account_equity, now=current)
-    validation = validate_trade(normalized, account_equity=account_equity)
-    if not validation.get("allowed"):
+    resolved_risk_state = risk_state or refresh_risk_state(account_equity=resolved_equity, now=current)
+    resolved_validation = validation or validate_trade(normalized, account_equity=resolved_equity)
+    if not resolved_validation.get("allowed"):
         return _reject(
             "RISK_POLICY_REJECTED",
-            str(validation.get("reason") or "Risk validation failed"),
-            risk_state=risk_state,
+            str(resolved_validation.get("reason") or "Risk validation failed"),
+            risk_state=resolved_risk_state,
         )
 
     economics = calculate_cost_adjusted_geometry(
@@ -97,7 +105,7 @@ def issue_execution_approval(
         fee_bps=settings.execution_taker_fee_bps,
         slippage_bps=settings.execution_slippage_bps,
     )
-    minimum_net_rr = float(validation.get("min_risk_reward") or 0.0)
+    minimum_net_rr = float(resolved_validation.get("min_risk_reward") or 0.0)
     if economics is None or economics["net_reward"] <= 0:
         return _reject("FEE_VIABILITY_REJECTED", "Estimated fees/slippage eliminate the target reward")
     if economics["net_risk_reward"] + 1e-9 < minimum_net_rr:
@@ -125,13 +133,13 @@ def issue_execution_approval(
         "trade_type": normalized["trade_type"],
         "direction": normalized["direction"],
         "execution_mode": mode,
-        "risk_amount": float(validation.get("risk_amount") or 0.0),
-        "risk_per_trade": float(validation.get("risk_per_trade") or 0.0),
-        "leverage_cap": float(validation.get("leverage_cap") or 0.0),
-        "exposure_cap": float(validation.get("exposure_cap") or 0.0),
+        "risk_amount": float(resolved_validation.get("risk_amount") or 0.0),
+        "risk_per_trade": float(resolved_validation.get("risk_per_trade") or 0.0),
+        "leverage_cap": float(resolved_validation.get("leverage_cap") or 0.0),
+        "exposure_cap": float(resolved_validation.get("exposure_cap") or 0.0),
         "min_net_risk_reward": minimum_net_rr,
         "estimated_net_risk_reward": float(economics["net_risk_reward"]),
-        "account_equity": account_equity,
+        "account_equity": resolved_equity,
         "auto_triggered": bool(auto_triggered),
         "issued_at": current.isoformat(),
         "expires_at": expires_at.isoformat(),
@@ -142,6 +150,9 @@ def issue_execution_approval(
         "error": None,
         "token": _encode_token(decision, secret),
         "decision": decision,
+        "validation": resolved_validation,
+        "risk_state": resolved_risk_state,
+        "economics": economics,
     }
 
 
@@ -201,10 +212,12 @@ def _validate_signal_lifecycle(normalized: dict[str, Any], current: datetime) ->
     if expires_at is not None and current >= expires_at:
         return _reject("SIGNAL_EXPIRED", "Signal expiry timestamp has passed")
 
+    if normalized.get("auto_triggered") and not normalized.get("detected_at"):
+        return _reject("SIGNAL_TIMESTAMP_REQUIRED", "Automatic execution requires a detected_at timestamp")
     detected_at = _parse_time(normalized.get("detected_at"))
     if normalized.get("detected_at") and detected_at is None:
         return _reject("SIGNAL_TIMESTAMP_INVALID", "Signal detected_at timestamp is invalid")
-    if detected_at is not None:
+    if detected_at is not None and normalized.get("auto_triggered"):
         max_age = max(int(settings.risk_signal_max_age_seconds), 1)
         age_seconds = (current - detected_at).total_seconds()
         if age_seconds < -5:
@@ -246,6 +259,7 @@ def _normalize_signal(signal: dict[str, Any]) -> dict[str, Any] | None:
         "signal_state": str(signal.get("signal_state") or "").upper().strip() or None,
         "is_executable": signal.get("is_executable") if "is_executable" in signal else None,
         "primary_signal": signal.get("primary_signal") if "primary_signal" in signal else None,
+        "auto_triggered": bool(signal.get("auto_triggered")),
     }
 
 
@@ -279,7 +293,9 @@ def _has_open_symbol(positions: list[dict[str, Any]], symbol: str) -> bool:
 def _approval_secret() -> bytes | None:
     value = str(settings.session_secret or "").strip()
     if not value:
-        return None
+        if str(settings.app_env or "").lower() == "production":
+            return None
+        value = "dayfrogd-development-risk-approval"
     return hashlib.sha256(f"{value}|dayfrogd-risk-approval-v1".encode("utf-8")).digest()
 
 

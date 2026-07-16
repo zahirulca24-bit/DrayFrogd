@@ -6,6 +6,7 @@ import {
   ExecutableSignal,
   MarketTicker,
   MetricsResponse,
+  RiskStateResponse,
   SystemReadiness,
   Trade,
 } from "../types";
@@ -36,6 +37,7 @@ interface DashboardViewProps {
   botStatus: BotControlState;
   account: AccountResponse;
   metrics: MetricsResponse;
+  riskState: RiskStateResponse;
   activeTrades: Trade[];
   signals: ExecutableSignal[];
   lastSync?: Date | null;
@@ -138,6 +140,7 @@ export default function DashboardView({
   botStatus,
   account,
   metrics,
+  riskState,
   activeTrades,
   signals,
   lastSync,
@@ -366,10 +369,10 @@ export default function DashboardView({
             </div>
             <div className="my-4 border-t border-slate-800" />
             <div className="grid grid-cols-2 gap-3">
-              <LimitCard label="Risk / trade" value={`${(numberValue(botStatus.risk_per_trade || 0.01) * 100).toFixed(2)}%`} />
-              <LimitCard label="Leverage cap" value={`${numberValue(botStatus.leverage_cap || 5).toFixed(0)}x`} />
-              <LimitCard label="Max open" value={String(botStatus.max_open_trades || 3)} />
-              <LimitCard label="Daily trades" value={String(botStatus.max_daily_trades || 8)} />
+              <LimitCard label="Risk budgets" value={`$${riskState.risk_profiles?.scalping.risk_amount ?? 20} / $${riskState.risk_profiles?.intraday.risk_amount ?? 50}`} />
+              <LimitCard label="Leverage caps" value={`${riskState.risk_profiles?.scalping.leverage_cap ?? 20}x / ${riskState.risk_profiles?.intraday.leverage_cap ?? 10}x`} />
+              <LimitCard label="Max open" value={String(riskState.max_open_trades)} />
+              <LimitCard label="Daily trades" value={`${riskState.trades_today} / ${riskState.max_trades_per_day}`} />
             </div>
             {botStatus.emergency_stop && (
               <div className="mt-4 flex items-start gap-2 rounded-xl border border-rose-500/20 bg-rose-500/10 p-3 text-xs text-rose-300">

@@ -102,6 +102,11 @@ const emptyBotStatus: BotControlState = {
 };
 
 const emptyRiskState: RiskStateResponse = {
+  risk_policy_authority: "authoritative_risk_engine_v1",
+  risk_profiles: {
+    scalping: { risk_amount: 20, leverage_cap: 20, min_risk_reward: 1.5 },
+    intraday: { risk_amount: 50, leverage_cap: 10, min_risk_reward: 2 },
+  },
   risk_per_trade: 0.01,
   leverage_cap: 5,
   exposure_cap: 0.3,
@@ -382,6 +387,7 @@ export default function App() {
             botStatus={botStatus}
             account={account}
             metrics={metrics}
+            riskState={riskState}
             activeTrades={activeTrades}
             signals={signals}
             lastSync={lastSync}
@@ -469,7 +475,6 @@ export default function App() {
             onRefresh={() => fetchAllData()}
             onModeChange={(mode) => authToken ? runAction("bot-config-mode", () => api.updateBotConfig(authToken, { execution_mode: mode })) : Promise.resolve()}
             onAutoTradingToggle={(enabled) => authToken ? runAction("bot-config-auto", () => api.updateBotConfig(authToken, { auto_trading_enabled: enabled })) : Promise.resolve()}
-            onRiskSettingsChange={(settings) => authToken ? runAction("bot-config-risk", () => api.updateBotConfig(authToken, settings)) : Promise.resolve()}
           />
         );
       default:
