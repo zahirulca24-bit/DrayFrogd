@@ -68,6 +68,20 @@ const emptyMetrics: MetricsResponse = {
   loss_trades: 0,
   win_rate: 0,
   pnl_r: 0,
+  today_realized_pnl: 0,
+  today_account_net_pnl: 0,
+  today_trade_net_pnl: 0,
+  today_fees: 0,
+  today_funding: 0,
+  today_financial_date: "",
+  today_financial_status: "unavailable",
+  today_financial_source: "unavailable",
+  financial_truth_error: null,
+  journal_today_realized_pnl: 0,
+  journal_today_fees: 0,
+  reconciliation_gap: null,
+  ledger_record_count: 0,
+  daily_accounting_timezone: "Asia/Dhaka",
 };
 
 const emptyPortfolio: PortfolioSummary = {
@@ -367,9 +381,9 @@ export default function App() {
             readiness={readiness}
             botStatus={botStatus}
             account={account}
+            metrics={metrics}
             activeTrades={activeTrades}
             signals={signals}
-            tradeHistory={tradeHistory}
             lastSync={lastSync}
             isStale={isStale}
             actionLoading={actionLoading}
@@ -413,6 +427,7 @@ export default function App() {
           <PerformanceStrategy
             authToken={authToken}
             history={tradeHistory}
+            metrics={metrics}
           />
         );
       case "watchdog":

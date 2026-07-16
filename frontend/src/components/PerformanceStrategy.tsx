@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Activity, BarChart3, LineChart, ShieldAlert, Target } from "lucide-react";
 import { api } from "../api";
-import { JournalTradeEntry, StrategyAuditResponse, TradeHistoryEntry } from "../types";
+import { JournalTradeEntry, MetricsResponse, StrategyAuditResponse, TradeHistoryEntry } from "../types";
 
 interface PerformanceStrategyProps {
   authToken: string | null;
   history: TradeHistoryEntry[];
+  metrics: MetricsResponse;
 }
 
 type FinancialJournalTrade = JournalTradeEntry & {
@@ -203,7 +204,7 @@ function journalToPerformanceRow(item: JournalTradeEntry, index: number): Perfor
   };
 }
 
-export default function PerformanceStrategy({ authToken, history }: PerformanceStrategyProps) {
+export default function PerformanceStrategy({ authToken, history, metrics }: PerformanceStrategyProps) {
   const [journalTrades, setJournalTrades] = useState<JournalTradeEntry[]>([]);
   const [strategyAudit, setStrategyAudit] = useState<StrategyAuditResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -346,6 +347,7 @@ export default function PerformanceStrategy({ authToken, history }: PerformanceS
       }, new Map<string, number>()),
   );
 
+  const accountNetPnl = metrics.today_financial_status === "unavailable" ? null : metrics.today_account_net_pnl;
   const auditStrategies = strategyAudit?.ok ? strategyAudit.strategies : [];
   const auditSummary = strategyAudit?.ok ? strategyAudit.summary : null;
   const auditedTrades = strategyAudit?.ok ? strategyAudit.trades : [];
@@ -378,7 +380,7 @@ export default function PerformanceStrategy({ authToken, history }: PerformanceS
         <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-4">
           <div>
             <h3 className="text-sm font-semibold text-white tracking-tight font-sans">Performance & Strategy</h3>
-            <p className="text-xs text-slate-500 mt-1">Real persisted journal data. Open trades populate counts/breakdowns; realized PnL cards use closed trades only.</p>
+            <p className="text-xs text-slate-500 mt-1">Account-level Net PnL uses the same Bybit transaction-log truth as Journal and Dashboard. Strategy metrics remain ledger-matched trade analytics.</p>
           </div>
           <div className="text-[10px] font-mono text-slate-500">BDT {BDT_DATE_TIME.format(new Date())}</div>
         </div>
@@ -389,7 +391,8 @@ export default function PerformanceStrategy({ authToken, history }: PerformanceS
         <KpiCard label="Total Trades" value={totalTrades > 0 ? String(totalTrades) : "Insufficient Data"} />
         <KpiCard label="Open Trades" value={openRows.length > 0 ? String(openRows.length) : "0"} />
         <KpiCard label="Win Rate" value={winRate !== null ? formatPercent(winRate) : "Insufficient Data"} />
-        <KpiCard label="Net PnL" value={netPnl !== null ? formatMoney(netPnl) : "Insufficient Data"} />
+        <KpiCard label="Account Net (Bybit)" value={accountNetPnl !== null ? formatMoney(accountNetPnl) : "N/A"} />
+        <KpiCard label="Strategy Net (Matched)" value={netPnl !== null ? formatMoney(netPnl) : "Insufficient Data"} />
         <KpiCard label="Profit Factor" value={profitFactor === Infinity ? "Infinity" : profitFactor !== null ? profitFactor.toFixed(2) : "Insufficient Data"} />
         <KpiCard label="Average RR" value={avgRr !== null ? `${avgRr.toFixed(2)}R` : "Insufficient Data"} />
         <KpiCard label="Average Win" value={avgWin !== null ? formatMoney(avgWin) : "Insufficient Data"} />

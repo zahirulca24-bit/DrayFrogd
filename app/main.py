@@ -547,12 +547,22 @@ def trade_management_run(_: dict = Depends(require_authenticated)) -> dict:
 
 @app.get("/metrics")
 def metrics(_: dict = Depends(require_authenticated)) -> dict:
-    return get_metrics()
+    client = get_exchange_client(get_execution_mode())
+    try:
+        repair_incomplete_journal_closes(client)
+    except Exception:
+        pass
+    return get_metrics(client)
 
 
 @app.get("/portfolio")
 def portfolio(_: dict = Depends(require_authenticated)) -> dict:
-    return get_portfolio_summary()
+    client = get_exchange_client(get_execution_mode())
+    try:
+        repair_incomplete_journal_closes(client)
+    except Exception:
+        pass
+    return get_portfolio_summary(client)
 
 
 @app.post("/bot/start")

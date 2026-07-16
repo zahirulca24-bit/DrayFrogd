@@ -5,9 +5,9 @@ import {
   BotControlState,
   ExecutableSignal,
   MarketTicker,
+  MetricsResponse,
   SystemReadiness,
   Trade,
-  TradeHistoryEntry,
 } from "../types";
 import { fetchSignalTruth, TruthSignal } from "../signalTruth";
 import {
@@ -35,9 +35,9 @@ interface DashboardViewProps {
   readiness: SystemReadiness;
   botStatus: BotControlState;
   account: AccountResponse;
+  metrics: MetricsResponse;
   activeTrades: Trade[];
   signals: ExecutableSignal[];
-  tradeHistory: TradeHistoryEntry[];
   lastSync?: Date | null;
   isStale?: boolean;
   actionLoading?: string | null;
@@ -61,7 +61,8 @@ function numberValue(value: unknown) {
   return Number.isFinite(numeric) ? numeric : 0;
 }
 
-function formatMoney(value: number) {
+function formatMoney(value: number | null) {
+  if (value === null || !Number.isFinite(value)) return "N/A";
   const sign = value < 0 ? "-" : "";
   return `${sign}$${Math.abs(value).toLocaleString(undefined, {
     minimumFractionDigits: 2,
@@ -97,15 +98,6 @@ function formatBdtDateTime(value?: string | Date | null) {
   if (!value) return "Not synced";
   const date = value instanceof Date ? value : new Date(value);
   return Number.isNaN(date.getTime()) ? "Not synced" : BDT_DATE_TIME.format(date);
-}
-
-function isTodayInBdt(value?: string | null) {
-  if (!value) return false;
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return false;
-  const itemDay = parsed.toLocaleDateString("en-CA", { timeZone: "Asia/Dhaka" });
-  const currentDay = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Dhaka" });
-  return itemDay === currentDay;
 }
 
 function resolveUnrealizedPnl(
@@ -145,9 +137,9 @@ export default function DashboardView({
   readiness,
   botStatus,
   account,
+  metrics,
   activeTrades,
   signals,
-  tradeHistory,
   lastSync,
   isStale,
   actionLoading,
@@ -163,17 +155,9 @@ export default function DashboardView({
   );
   const unrealizedPnl = resolveUnrealizedPnl(wallet, account, activeTrades);
   const exposure = resolveExposure(account, activeTrades);
-  const [reportedRealizedPnl, setReportedRealizedPnl] = useState<number | null>(null);
-
-  const closedOnlyTodayRealizedPnl = useMemo(
-    () =>
-      tradeHistory
-        .filter((trade) => isTodayInBdt(trade.closedAt))
-        .reduce((sum, trade) => sum + numberValue(trade.pnl), 0),
-    [tradeHistory],
-  );
-  const todayRealizedPnl = reportedRealizedPnl ?? closedOnlyTodayRealizedPnl;
-  const todayNetPnl = todayRealizedPnl + unrealizedPnl;
+  const financialTruthAvailable = metrics.today_financial_status !== "unavailable";
+  const todayAccountNetPnl = financialTruthAvailable ? numberValue(metrics.today_account_net_pnl) : null;
+  const todayTotalPnl = todayAccountNetPnl === null ? null : todayAccountNetPnl + unrealizedPnl;
   const recentTrades = useMemo(() => activeTrades.slice(0, 4), [activeTrades]);
 
   const [truthSignals, setTruthSignals] = useState<TruthSignal[]>([]);
@@ -239,28 +223,6 @@ export default function DashboardView({
       clearInterval(interval);
     };
   }, [authToken]);
-
-  useEffect(() => {
-    if (!authToken) return;
-    let cancelled = false;
-
-    const loadDailyFinancials = async () => {
-      try {
-        const response = (await api.getMetrics(authToken)) as { today_realized_pnl?: number };
-        const value = Number(response.today_realized_pnl);
-        if (!cancelled) setReportedRealizedPnl(Number.isFinite(value) ? value : null);
-      } catch {
-        if (!cancelled) setReportedRealizedPnl(null);
-      }
-    };
-
-    void loadDailyFinancials();
-    const interval = setInterval(loadDailyFinancials, 10_000);
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-  }, [authToken, activeTrades.length, tradeHistory.length]);
 
   const running = botStatus.status === "running";
   const ready = readiness.ready_for_execution;
@@ -329,9 +291,9 @@ export default function DashboardView({
       <section className="grid grid-cols-2 gap-3 xl:grid-cols-6" id="dashboard-kpi-grid">
         <KpiCard label="Total Equity" value={formatMoney(totalEquity)} icon={<Wallet className="h-4 w-4" />} tone="neutral" helper="Exchange account equity" />
         <KpiCard label="Available" value={formatMoney(availableBalance)} icon={<Coins className="h-4 w-4" />} tone="good" helper="Free trading balance" />
-        <KpiCard label="Today's Realized" value={formatMoney(todayRealizedPnl)} icon={todayRealizedPnl >= 0 ? <ArrowUpRight className="h-4 w-4" /> : <ArrowDownRight className="h-4 w-4" />} tone={todayRealizedPnl >= 0 ? "good" : "bad"} helper="Closed trades + open partial fills today" />
+        <KpiCard label="Today's Account Net" value={formatMoney(todayAccountNetPnl)} icon={(todayAccountNetPnl ?? 0) >= 0 ? <ArrowUpRight className="h-4 w-4" /> : <ArrowDownRight className="h-4 w-4" />} tone={todayAccountNetPnl === null ? "neutral" : todayAccountNetPnl >= 0 ? "good" : "bad"} helper={metrics.today_financial_status === "authoritative" ? `Bybit ledger · fees ${formatMoney(metrics.today_fees)}` : metrics.today_financial_status === "fallback" ? "Journal fallback" : "Financial truth unavailable"} />
         <KpiCard label="Unrealized" value={formatMoney(unrealizedPnl)} icon={<Layers3 className="h-4 w-4" />} tone={unrealizedPnl >= 0 ? "good" : "bad"} helper="Open-position PnL" />
-        <KpiCard label="Today's Net" value={formatMoney(todayNetPnl)} icon={<Zap className="h-4 w-4" />} tone={todayNetPnl >= 0 ? "good" : "bad"} helper="Realized + unrealized" />
+        <KpiCard label="Today's Total" value={formatMoney(todayTotalPnl)} icon={<Zap className="h-4 w-4" />} tone={todayTotalPnl === null ? "neutral" : todayTotalPnl >= 0 ? "good" : "bad"} helper="Account net + unrealized" />
         <KpiCard label="Exposure" value={formatMoney(exposure)} icon={<ShieldCheck className="h-4 w-4" />} tone="warn" helper={`${activeTrades.length} active trade${activeTrades.length === 1 ? "" : "s"}`} />
       </section>
 
