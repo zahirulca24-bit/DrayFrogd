@@ -46,11 +46,13 @@ class PositionSizingTests(unittest.TestCase):
         )
 
         self.assertTrue(result["allowed"])
-        self.assertEqual(result["quantity"], "1.958")
-        self.assertAlmostEqual(result["risk_amount"], 9.9999955)
-        self.assertAlmostEqual(result["price_risk_amount"], 9.79)
-        self.assertAlmostEqual(result["estimated_round_trip_fees"], 0.2099955)
-        self.assertAlmostEqual(result["notional"], 195.8)
+        self.assertEqual(result["quantity"], "1.748")
+        self.assertAlmostEqual(result["target_risk_amount"], 10.0)
+        self.assertAlmostEqual(result["execution_risk_budget"], 9.0)
+        self.assertAlmostEqual(result["risk_amount"], 8.995645)
+        self.assertAlmostEqual(result["price_risk_amount"], 8.74)
+        self.assertAlmostEqual(result["estimated_round_trip_fees"], 0.187473)
+        self.assertAlmostEqual(result["notional"], 174.8)
 
     def test_rejects_when_required_margin_exceeds_available_balance(self) -> None:
         result = calculate_position_size(
@@ -174,15 +176,17 @@ class PositionSizingTests(unittest.TestCase):
         )
 
         self.assertTrue(result["allowed"])
-        self.assertEqual(result["quantity"], "40.4")
-        self.assertAlmostEqual(result["risk_amount"], 19.973, places=3)
-        self.assertAlmostEqual(result["price_risk_amount"], 16.564, places=3)
-        self.assertAlmostEqual(result["estimated_round_trip_fees"], 3.409, places=3)
-        self.assertAlmostEqual(result["notional"], 3090.60, places=2)
+        self.assertEqual(result["quantity"], "34.2")
+        self.assertAlmostEqual(result["target_risk_amount"], 20.0)
+        self.assertAlmostEqual(result["execution_risk_budget"], 18.0)
+        self.assertAlmostEqual(result["risk_amount"], 17.9569665, places=6)
+        self.assertAlmostEqual(result["price_risk_amount"], 14.022, places=3)
+        self.assertAlmostEqual(result["estimated_round_trip_fees"], 2.8856421, places=6)
+        self.assertAlmostEqual(result["notional"], 2616.30, places=2)
         self.assertEqual(result["selected_leverage"], 20.0)
-        self.assertAlmostEqual(result["required_margin"], 154.53, places=4)
-        self.assertLess(result["trade_margin_utilization"], 0.32)
-        self.assertGreater(result["remaining_margin_capacity"], 145.0)
+        self.assertAlmostEqual(result["required_margin"], 130.815, places=4)
+        self.assertLess(result["trade_margin_utilization"], 0.23)
+        self.assertGreater(result["remaining_margin_capacity"], 169.0)
 
     def test_fixed_risk_trade_is_rejected_when_profile_leverage_cannot_fit_portfolio_cap(self) -> None:
         result = calculate_position_size(
@@ -257,7 +261,8 @@ class PositionSizingTests(unittest.TestCase):
         self.assertEqual(result["direction"], "short")
         self.assertEqual(result["stop_loss"], 105.0)
         self.assertEqual(result["take_profit"], 90.0)
-        self.assertEqual(result["quantity"], "1.955")
+        self.assertEqual(result["quantity"], "1.746")
+        self.assertAlmostEqual(result["execution_risk_budget"], 9.0)
 
     def test_fee_aware_sui_regression_keeps_net_stop_loss_inside_target_risk(self) -> None:
         result = calculate_position_size(
@@ -287,10 +292,12 @@ class PositionSizingTests(unittest.TestCase):
         )
 
         self.assertTrue(result["allowed"])
-        self.assertEqual(result["quantity"], "3751")
-        self.assertLessEqual(result["risk_amount"], 20.0)
-        self.assertAlmostEqual(result["price_risk_amount"], 16.8795, places=4)
-        self.assertAlmostEqual(result["estimated_round_trip_fees"], 3.1179, places=4)
+        self.assertEqual(result["quantity"], "3195")
+        self.assertAlmostEqual(result["target_risk_amount"], 20.0)
+        self.assertAlmostEqual(result["execution_risk_budget"], 18.0)
+        self.assertLessEqual(result["risk_amount"], 18.0)
+        self.assertAlmostEqual(result["price_risk_amount"], 14.3775, places=4)
+        self.assertAlmostEqual(result["estimated_round_trip_fees"], 2.655731925, places=6)
 
 
 if __name__ == "__main__":
