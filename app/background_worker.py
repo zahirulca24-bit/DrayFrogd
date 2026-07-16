@@ -9,6 +9,7 @@ from app.bybit_websocket import websocket_service
 from app.close_fill_sync import repair_incomplete_journal_closes
 from app.config import settings
 from app.exchange import get_exchange_client
+from app.exchange_journal_backfill import backfill_exchange_journal_lifecycle
 from app.intraday_protection_guard import enforce_intraday_protection
 from app.journal import log_bot_event
 from app.native_profit_reconcile import reconcile_native_profit_orders
@@ -125,6 +126,22 @@ async def auto_trading_loop() -> None:
                 ledger_repair_result = await asyncio.to_thread(repair_incomplete_journal_closes, client)
                 if not ledger_repair_result.get("ok") and ledger_repair_result.get("pending"):
                     logger.debug("Ledger close repair pending: %s", ledger_repair_result.get("pending"))
+
+                lifecycle_result = await asyncio.to_thread(backfill_exchange_journal_lifecycle, client)
+                if not lifecycle_result.get("ok"):
+                    _safe_log_bot_event(
+                        "exchange_journal_backfill_failed",
+                        lifecycle_result.get("error") or "Exchange lifecycle backfill failed",
+                        level="warning",
+                        metadata={
+                            "endpoint": "background:exchange_journal_backfill",
+                            "affected_module": "journal",
+                            "error_code": "EXCHANGE_JOURNAL_BACKFILL_FAILED",
+                            "result": lifecycle_result,
+                        },
+                    )
+                elif lifecycle_result.get("pending"):
+                    logger.debug("Exchange journal lifecycle backfill pending: %s", lifecycle_result.get("pending"))
 
                 await asyncio.to_thread(sync_loss_cooldowns)
 

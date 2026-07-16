@@ -117,6 +117,45 @@ def _persist_pending_close_sync(journal_id: str, trade: dict[str, Any]) -> None:
     )
 
 
+def _persist_exact_close(
+    journal_id: str,
+    trade: dict[str, Any],
+    exact_close: dict[str, Any],
+) -> dict[str, Any] | None:
+    if not journal_id:
+        return None
+    trade_metadata = trade.get("exchange_metadata") if isinstance(trade.get("exchange_metadata"), dict) else {}
+    close_metadata = exact_close.get("exchange_metadata") if isinstance(exact_close.get("exchange_metadata"), dict) else {}
+    metadata = {**trade_metadata, **close_metadata}
+    persisted = update_trade_entry(
+        journal_id,
+        {
+            "status": "closed",
+            "result": exact_close.get("result"),
+            "sl_hit_reason": exact_close.get("sl_hit_reason"),
+            "close_reason": exact_close.get("close_reason"),
+            "exit_price": exact_close.get("exit_price"),
+            "realized_pnl": exact_close.get("realized_pnl"),
+            "fees": exact_close.get("fees"),
+            "closed_at": exact_close.get("closed_at"),
+            "exchange_metadata": metadata,
+        },
+    )
+    if persisted is not None:
+        append_trade_event(
+            journal_id,
+            "RECONCILED_CLOSED_EXACT",
+            "Exchange position is absent and exact Bybit close fill/PnL/fees were persisted after restart.",
+            {
+                "symbol": trade.get("symbol"),
+                "source": ((metadata.get("close_sync") or {}).get("source") if isinstance(metadata.get("close_sync"), dict) else None),
+                "realized_pnl": exact_close.get("realized_pnl"),
+                "fees": exact_close.get("fees"),
+            },
+        )
+    return persisted
+
+
 def _persist_reconciliation_event(
     journal_id: str,
     event_type: str,

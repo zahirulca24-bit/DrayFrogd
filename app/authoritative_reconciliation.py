@@ -16,8 +16,9 @@ from app.reconciliation_identity import (
     _ticker_price_map, _trade_identity,
 )
 from app.reconciliation_persistence import (
-    _mark_journal_stale, _persist_active_trade, _persist_pending_close_sync,
-    _persist_reconciliation_event, _persist_reconciliation_state,
+    _mark_journal_stale, _persist_active_trade, _persist_exact_close,
+    _persist_pending_close_sync, _persist_reconciliation_event,
+    _persist_reconciliation_state,
 )
 from app.risk import release_active_trade
 from app.trade_state import is_capacity_blocking_status
@@ -149,6 +150,10 @@ def _reconcile_state_locked(client: BybitClient, *, source: str = "rest_reconcil
         exact_close, close_sync_error = fetch_exact_close_result(client, trade)
         if exact_close is not None:
             closed_trade = close_trade(journal_id, exact_close) if journal_id else None
+            persisted_after_restart = False
+            if closed_trade is None and journal_id:
+                closed_trade = _persist_exact_close(journal_id, trade, exact_close)
+                persisted_after_restart = closed_trade is not None
             if closed_trade is None:
                 closed_trade = {**trade, **exact_close, "status": "closed"}
             closed_symbols.append(symbol)
@@ -160,12 +165,13 @@ def _reconcile_state_locked(client: BybitClient, *, source: str = "rest_reconcil
                     "reason": "Exact Bybit closed PnL synchronized",
                 }
             )
-            _persist_reconciliation_event(
-                journal_id,
-                "RECONCILED_CLOSED_EXACT",
-                "Exchange position is absent and exact Bybit close fill/PnL/fees were synchronized.",
-                exact_close,
-            )
+            if not persisted_after_restart:
+                _persist_reconciliation_event(
+                    journal_id,
+                    "RECONCILED_CLOSED_EXACT",
+                    "Exchange position is absent and exact Bybit close fill/PnL/fees were synchronized.",
+                    exact_close,
+                )
             continue
 
         stale = _mark_journal_stale(
