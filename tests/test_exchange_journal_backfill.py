@@ -121,11 +121,22 @@ class ExchangeJournalBackfillTests(unittest.TestCase):
         event_mock.assert_called_once()
         create_mock.assert_not_called()
 
-    def test_repeated_run_skips_stable_execution_key(self) -> None:
-        existing = {"journal_id": "existing", "execution_key": "ledger-existing"}
+    def test_repeated_run_skips_already_closed_record_keys_without_new_event(self) -> None:
+        existing = {
+            "journal_id": "existing",
+            "execution_key": "ledger-existing",
+            "symbol": "ONDOUSDT",
+            "direction": "long",
+            "quantity": 10.0,
+            "status": "closed",
+            "exchange_metadata": {
+                "close_sync": {"record_keys": ["id:open-1", "id:close-1", "id:close-2"]}
+            },
+        }
         with (
-            patch("app.exchange_journal_backfill.get_trade_history", return_value=[]),
-            patch("app.exchange_journal_backfill.get_trade_by_execution_key", return_value=existing),
+            patch("app.exchange_journal_backfill.get_trade_history", return_value=[existing]),
+            patch("app.exchange_journal_backfill.update_trade_entry") as update_mock,
+            patch("app.exchange_journal_backfill.append_trade_event") as event_mock,
             patch("app.exchange_journal_backfill.create_trade_entry") as create_mock,
         ):
             result = backfill_exchange_journal_lifecycle(
@@ -134,6 +145,8 @@ class ExchangeJournalBackfillTests(unittest.TestCase):
             )
 
         self.assertEqual(result["skipped"], ["existing"])
+        update_mock.assert_not_called()
+        event_mock.assert_not_called()
         create_mock.assert_not_called()
 
     def test_orphan_close_is_reported_without_fabricated_journal(self) -> None:

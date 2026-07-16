@@ -115,6 +115,18 @@ def backfill_exchange_journal_lifecycle(
         matched = _match_existing_row(existing_rows, payload)
         if matched is not None:
             journal_id = str(matched.get("journal_id") or "")
+            matched_metadata = matched.get("exchange_metadata") if isinstance(matched.get("exchange_metadata"), dict) else {}
+            matched_close_sync = matched_metadata.get("close_sync") if isinstance(matched_metadata.get("close_sync"), dict) else {}
+            matched_record_keys = set(matched_close_sync.get("record_keys") or [])
+            payload_record_keys = set(payload["exchange_metadata"]["close_sync"]["record_keys"])
+            if (
+                str(matched.get("status") or "").lower() == "closed"
+                and payload_record_keys
+                and payload_record_keys.issubset(matched_record_keys)
+            ):
+                skipped.append(journal_id or str(payload["journal_id"]))
+                states.pop(symbol, None)
+                continue
             persisted = update_trade_entry(journal_id, _close_updates(payload)) if journal_id else None
             if persisted is not None:
                 append_trade_event(
