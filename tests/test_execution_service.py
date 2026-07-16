@@ -14,8 +14,8 @@ SIGNAL = {
     "direction": "long",
     "entry": 100.0,
     "stop_loss": 98.0,
-    "take_profit": 103.0,
-    "risk_reward": 1.5,
+    "take_profit": 104.0,
+    "risk_reward": 2.0,
     "detected_at": "2026-07-12T00:00:00+00:00",
     "status": "active",
 }
@@ -28,7 +28,7 @@ VALIDATION = {
     "leverage_cap": 20.0,
     "exposure_cap": 0.50,
     "min_risk_reward": 1.5,
-    "authoritative_risk_reward": 1.5,
+    "authoritative_risk_reward": 2.0,
     "max_active_trades": 5,
 }
 
@@ -68,7 +68,9 @@ class FakeExecutionClient:
         }], None
 
     def safe_fetch_positions(self):
-        if not self.fill_available:
+        # A pre-order authority check must see no position. The exchange position
+        # exists only after the market order has been submitted and filled.
+        if self.order_calls == 0 or not self.fill_available:
             return True, [], None
         return True, [{
             "symbol": "BTCUSDT",
