@@ -6,7 +6,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from app.authoritative_state import get_snapshot
-from app.execution import get_closed_trades, get_operator_active_trades
+from app.execution import get_active_trades, get_closed_trades, get_operator_active_trades
 from app.journal import get_closed_trade_history, get_trade_history
 from app.ledger_audit import get_account_ledger_audit
 
