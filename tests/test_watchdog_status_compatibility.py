@@ -1,38 +1,58 @@
 """Regression coverage for the Control Center watchdog response contract."""
 
+import unittest
+from unittest.mock import patch
+
 from app.main import app
 
 
-def test_watchdog_status_preserves_control_panel_contract(monkeypatch):
-    expected_runtime = {
-        "enabled": True,
-        "status": "HEALTHY",
-        "execution_blocked": False,
-        "reasons": [],
-    }
-    expected_operations = {
-        "generated_at": "2026-07-17T00:00:00+00:00",
-        "mode": "demo",
-        "admin_auth_configured": True,
-        "modules": [],
-        "incidents": [],
-        "summary": {
-            "overall_status": "HEALTHY",
-            "open_incidents": 0,
-            "total_incidents": 0,
-            "affected_modules": [],
-        },
-    }
+class WatchdogStatusCompatibilityTests(unittest.TestCase):
+    def test_watchdog_status_preserves_control_panel_contract(self) -> None:
+        expected_runtime = {
+            "enabled": True,
+            "status": "HEALTHY",
+            "execution_blocked": False,
+            "reasons": [],
+        }
+        expected_operations = {
+            "generated_at": "2026-07-17T00:00:00+00:00",
+            "mode": "demo",
+            "admin_auth_configured": True,
+            "modules": [],
+            "incidents": [],
+            "summary": {
+                "overall_status": "HEALTHY",
+                "open_incidents": 0,
+                "total_incidents": 0,
+                "affected_modules": [],
+            },
+        }
 
-    monkeypatch.setattr("app.watchdog.get_watchdog_snapshot", lambda worker_running: dict(expected_operations))
-    monkeypatch.setattr("app.runtime_watchdog.ensure_watchdog_state", lambda: dict(expected_runtime))
-    monkeypatch.setattr("app.runtime_watchdog.get_snapshot", lambda: {"version": 1})
+        route = next(
+            route
+            for route in app.routes
+            if getattr(route, "path", None) == "/watchdog/status"
+        )
 
-    route = next(route for route in app.routes if getattr(route, "path", None) == "/watchdog/status")
-    result = route.endpoint(_={"sub": "test"})
+        with (
+            patch(
+                "app.watchdog.get_watchdog_snapshot",
+                side_effect=lambda worker_running: dict(expected_operations),
+            ),
+            patch(
+                "app.runtime_watchdog.ensure_watchdog_state",
+                return_value=dict(expected_runtime),
+            ),
+            patch("app.runtime_watchdog.get_snapshot", return_value={"version": 1}),
+        ):
+            result = route.endpoint(_={"sub": "test"})
 
-    assert result["modules"] == []
-    assert result["incidents"] == []
-    assert result["summary"]["overall_status"] == "HEALTHY"
-    assert result["runtime"]["status"] == "HEALTHY"
-    assert result["runtime"]["snapshot"] == {"version": 1}
+        self.assertEqual(result["modules"], [])
+        self.assertEqual(result["incidents"], [])
+        self.assertEqual(result["summary"]["overall_status"], "HEALTHY")
+        self.assertEqual(result["runtime"]["status"], "HEALTHY")
+        self.assertEqual(result["runtime"]["snapshot"], {"version": 1})
+
+
+if __name__ == "__main__":
+    unittest.main()
