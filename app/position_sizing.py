@@ -12,6 +12,18 @@ from app.trading_costs import calculate_cost_adjusted_geometry
 
 SIGNAL_MAX_AGE_MINUTES = 10
 DEFAULT_MIN_NOTIONAL = 5.0
+PROFILE_CAPS = {
+    "scalping": {
+        "max_margin_ratio": 0.15,
+        "max_notional_ratio": 4.00,
+        "min_sl_bps": 15.0,
+    },
+    "intraday": {
+        "max_margin_ratio": 0.25,
+        "max_notional_ratio": 5.00,
+        "min_sl_bps": 30.0,
+    },
+}
 
 
 def calculate_position_size(
@@ -56,6 +68,14 @@ def calculate_position_size(
         target_risk_amount = equity * legacy_risk_percent
     if target_risk_amount is None:
         return _reject("Fixed USDT risk amount is unavailable")
+
+    trade_type = _resolve_trade_type(signal, settings)
+    sl_bps = (sl_distance / entry) * 10000.0
+    min_sl_bps = _profile_cap_value(trade_type, settings, "min_sl_bps")
+    if min_sl_bps is not None and sl_bps + 1e-9 < min_sl_bps:
+        return _reject(
+            f"SL distance {sl_bps:.2f} bps is below {trade_type} minimum {min_sl_bps:.2f} bps"
+        )
 
     configured_target_risk_amount = target_risk_amount
     risk_headroom_ratio = _non_negative_float(settings.get("risk_headroom_ratio"))
@@ -144,6 +164,17 @@ def calculate_position_size(
         if notional < min_notional:
             return _reject("Minimum notional cannot be satisfied with symbol precision")
 
+    max_trade_notional = _profile_cap_amount(
+        trade_type,
+        settings,
+        "max_notional_ratio",
+        equity,
+    )
+    if max_trade_notional is not None and notional > max_trade_notional + 1e-9:
+        return _reject(
+            f"Trade notional {notional:.2f} USDT exceeds {trade_type} cap {max_trade_notional:.2f} USDT"
+        )
+
     economics = calculate_cost_adjusted_geometry(
         direction=normalized["direction"],
         entry=entry,
@@ -175,9 +206,14 @@ def calculate_position_size(
     max_allowed_margin = equity * exposure_cap
     remaining_exposure_margin = max_allowed_margin - existing_margin
     margin_buffer = available_balance * 0.95
+    max_trade_margin = _profile_cap_amount(
+        trade_type,
+        settings,
+        "max_margin_ratio",
+        equity,
+    )
 
     if not fixed_risk_mode:
-        # Preserve the previous API behavior for legacy percentage sizing.
         selected_leverage = leverage_cap
         minimum_required_leverage = selected_leverage
         required_margin = notional / selected_leverage
@@ -190,14 +226,11 @@ def calculate_position_size(
             return _reject("Capital exposure cap exceeded")
 
         usable_margin = min(remaining_exposure_margin, margin_buffer)
+        if max_trade_margin is not None:
+            usable_margin = min(usable_margin, max_trade_margin)
         if usable_margin <= 0:
             return _reject("Required margin exceeds available balance")
 
-        # The 50% portfolio exposure limit is a hard ceiling, not a target. The
-        # previous fixed-risk implementation lowered leverage until one trade
-        # used almost the full remaining exposure budget. Fixed-risk trades now
-        # use the approved profile leverage cap (20x scalping / 10x intraday).
-        # The minimum below is only an admission check.
         minimum_required_leverage = max(notional / usable_margin, 1.0)
         if minimum_required_leverage > leverage_cap + 1e-9:
             return _reject(
@@ -208,6 +241,10 @@ def calculate_position_size(
         required_margin = notional / selected_leverage
         if required_margin > margin_buffer + 1e-9:
             return _reject("Required margin exceeds available balance")
+        if max_trade_margin is not None and required_margin > max_trade_margin + 1e-9:
+            return _reject(
+                f"Required margin {required_margin:.2f} USDT exceeds {trade_type} per-trade cap {max_trade_margin:.2f} USDT"
+            )
         if existing_margin + required_margin > max_allowed_margin + 1e-9:
             return _reject("Capital exposure cap exceeded")
 
@@ -223,7 +260,10 @@ def calculate_position_size(
         "stop_loss": stop_loss,
         "take_profit": normalized["take_profit"],
         "direction": normalized["direction"],
+        "trade_type": trade_type,
         "sl_distance": sl_distance,
+        "sl_distance_bps": sl_bps,
+        "min_sl_distance_bps": min_sl_bps,
         "risk_percent": actual_risk_amount / equity,
         "risk_amount": actual_risk_amount,
         "price_risk_amount": price_risk_amount,
@@ -249,7 +289,9 @@ def calculate_position_size(
         "risk_headroom_amount": configured_target_risk_amount - execution_risk_budget,
         "risk_mode": "fixed_usdt" if fixed_risk_mode else "legacy_percent",
         "notional": notional,
+        "max_trade_notional": max_trade_notional,
         "required_margin": required_margin,
+        "max_trade_margin": max_trade_margin,
         "equity": equity,
         "available_balance": available_balance,
         "leverage": selected_leverage,
@@ -289,6 +331,7 @@ def _normalize_signal(signal: dict[str, Any]) -> dict[str, Any] | None:
 
     return {
         "symbol": str(signal.get("symbol", "")).upper().strip(),
+        "trade_type": str(signal.get("trade_type") or "").lower().strip() or None,
         "direction": direction,
         "entry": entry,
         "stop_loss": stop_loss,
@@ -326,6 +369,32 @@ def _stale_reason(value: Any) -> str:
     if age > timedelta(minutes=SIGNAL_MAX_AGE_MINUTES):
         return "Signal is stale for position sizing"
     return ""
+
+
+def _resolve_trade_type(signal: dict[str, Any], settings: dict[str, Any]) -> str | None:
+    explicit = str(signal.get("trade_type") or settings.get("trade_type") or "").lower().strip()
+    return explicit if explicit in PROFILE_CAPS else None
+
+
+def _profile_cap_value(trade_type: str | None, settings: dict[str, Any], cap_name: str) -> float | None:
+    configured = _non_negative_float(settings.get(cap_name))
+    if configured is not None:
+        return configured
+    if trade_type not in PROFILE_CAPS:
+        return None
+    return float(PROFILE_CAPS[trade_type][cap_name])
+
+
+def _profile_cap_amount(
+    trade_type: str | None,
+    settings: dict[str, Any],
+    cap_name: str,
+    equity: float,
+) -> float | None:
+    ratio = _profile_cap_value(trade_type, settings, cap_name)
+    if ratio is None or ratio <= 0:
+        return None
+    return equity * ratio
 
 
 def _current_margin(

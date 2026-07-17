@@ -148,10 +148,11 @@ class PositionSizingTests(unittest.TestCase):
         self.assertTrue(result["allowed"])
         self.assertEqual(result["current_exposure"], 200.0)
 
-    def test_sol_scalping_regression_does_not_fill_remaining_exposure_budget(self) -> None:
+    def test_sol_scalping_regression_rejects_oversized_small_wallet_notional(self) -> None:
         result = calculate_position_size(
             signal={
                 "symbol": "SOLUSDT",
+                "trade_type": "scalping",
                 "direction": "short",
                 "entry": 76.50,
                 "stop_loss": 76.91,
@@ -175,23 +176,55 @@ class PositionSizingTests(unittest.TestCase):
             client=FakeClient(),
         )
 
+        self.assertFalse(result["allowed"])
+        self.assertIn("Trade notional", result["reason"])
+        self.assertIn("scalping cap", result["reason"])
+
+    def test_fixed_risk_scalping_remains_allowed_when_per_trade_caps_fit(self) -> None:
+        result = calculate_position_size(
+            signal={
+                "symbol": "SOLUSDT",
+                "trade_type": "scalping",
+                "direction": "short",
+                "entry": 76.50,
+                "stop_loss": 76.91,
+                "take_profit": 75.27,
+                "detected_at": datetime.now(UTC).isoformat(),
+            },
+            wallet={"totalEquity": "6000", "totalAvailableBalance": "6000"},
+            symbol_info={
+                "qtyStep": "0.1",
+                "tickSize": "0.01",
+                "minOrderQty": "0.1",
+                "minNotionalValue": "5",
+            },
+            active_trades=[],
+            positions=[],
+            settings={
+                "risk_amount": 20.0,
+                "leverage_cap": 20.0,
+                "exposure_cap": 0.50,
+            },
+            client=FakeClient(),
+        )
+
         self.assertTrue(result["allowed"])
         self.assertEqual(result["quantity"], "34.2")
         self.assertAlmostEqual(result["target_risk_amount"], 20.0)
         self.assertAlmostEqual(result["execution_risk_budget"], 18.0)
         self.assertAlmostEqual(result["risk_amount"], 17.9569665, places=6)
-        self.assertAlmostEqual(result["price_risk_amount"], 14.022, places=3)
-        self.assertAlmostEqual(result["estimated_round_trip_fees"], 2.8856421, places=6)
         self.assertAlmostEqual(result["notional"], 2616.30, places=2)
         self.assertEqual(result["selected_leverage"], 20.0)
         self.assertAlmostEqual(result["required_margin"], 130.815, places=4)
-        self.assertLess(result["trade_margin_utilization"], 0.23)
-        self.assertGreater(result["remaining_margin_capacity"], 169.0)
+        self.assertAlmostEqual(result["max_trade_margin"], 900.0)
+        self.assertAlmostEqual(result["max_trade_notional"], 24000.0)
+        self.assertLess(result["trade_margin_utilization"], 0.03)
 
-    def test_fixed_risk_trade_is_rejected_when_profile_leverage_cannot_fit_portfolio_cap(self) -> None:
+    def test_fixed_risk_trade_is_rejected_when_profile_leverage_cannot_fit_safety_caps(self) -> None:
         result = calculate_position_size(
             signal={
                 "symbol": "SOLUSDT",
+                "trade_type": "scalping",
                 "direction": "short",
                 "entry": 76.50,
                 "stop_loss": 76.91,
@@ -216,7 +249,33 @@ class PositionSizingTests(unittest.TestCase):
         )
 
         self.assertFalse(result["allowed"])
-        self.assertIn("profile cap", result["reason"])
+        self.assertIn("Trade notional", result["reason"])
+
+    def test_rejects_too_tight_scalping_stop_before_large_size_is_created(self) -> None:
+        result = calculate_position_size(
+            signal={
+                "symbol": "BTCUSDT",
+                "trade_type": "scalping",
+                "direction": "long",
+                "entry": 100.0,
+                "stop_loss": 99.95,
+                "take_profit": 101.0,
+                "detected_at": datetime.now(UTC).isoformat(),
+            },
+            wallet={"totalEquity": "10000", "totalAvailableBalance": "10000"},
+            symbol_info=self.symbol_info,
+            active_trades=[],
+            positions=[],
+            settings={
+                "risk_amount": 20.0,
+                "leverage_cap": 20.0,
+                "exposure_cap": 0.50,
+            },
+            client=FakeClient(),
+        )
+
+        self.assertFalse(result["allowed"])
+        self.assertIn("below scalping minimum", result["reason"])
 
     def test_rejects_long_when_stop_is_not_below_entry(self) -> None:
         result = calculate_position_size(
@@ -264,10 +323,11 @@ class PositionSizingTests(unittest.TestCase):
         self.assertEqual(result["quantity"], "1.746")
         self.assertAlmostEqual(result["execution_risk_budget"], 9.0)
 
-    def test_fee_aware_sui_regression_keeps_net_stop_loss_inside_target_risk(self) -> None:
+    def test_fee_aware_sui_regression_rejects_net_rr_when_oversize_cap_no_longer_applies(self) -> None:
         result = calculate_position_size(
             signal={
                 "symbol": "SUIUSDT",
+                "trade_type": "scalping",
                 "direction": "short",
                 "entry": 0.7534,
                 "stop_loss": 0.7579,
@@ -291,13 +351,8 @@ class PositionSizingTests(unittest.TestCase):
             client=FakeClient(),
         )
 
-        self.assertTrue(result["allowed"])
-        self.assertEqual(result["quantity"], "3195")
-        self.assertAlmostEqual(result["target_risk_amount"], 20.0)
-        self.assertAlmostEqual(result["execution_risk_budget"], 18.0)
-        self.assertLessEqual(result["risk_amount"], 18.0)
-        self.assertAlmostEqual(result["price_risk_amount"], 14.3775, places=4)
-        self.assertAlmostEqual(result["estimated_round_trip_fees"], 2.655731925, places=6)
+        self.assertFalse(result["allowed"])
+        self.assertIn("Net risk reward", result["reason"])
 
 
 if __name__ == "__main__":
