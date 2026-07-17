@@ -46,11 +46,10 @@ class Settings:
     execution_slippage_bps: float = float(os.getenv("EXECUTION_SLIPPAGE_BPS", "2.0"))
     execution_risk_headroom_ratio: float = float(os.getenv("EXECUTION_RISK_HEADROOM_RATIO", "0.90"))
     risk_approval_ttl_seconds: int = int(os.getenv("RISK_APPROVAL_TTL_SECONDS", "20"))
-    # Auto execution must tolerate normal scan-to-execution latency and the
-    # closed-candle timestamps used by signal generation. Keep this aligned with
-    # the 10-minute position-sizing freshness contract unless explicitly
-    # overridden by environment configuration.
-    risk_signal_max_age_seconds: int = int(os.getenv("RISK_SIGNAL_MAX_AGE_SECONDS", "600"))
+    # Auto execution must tolerate one or two scan cycles of latency, but it
+    # must not revive old signals after a restart or deploy. Keep this tighter
+    # than the broader position-sizing freshness contract.
+    risk_signal_max_age_seconds: int = int(os.getenv("RISK_SIGNAL_MAX_AGE_SECONDS", "180"))
     scanner_universe_limit: int = int(
         os.getenv(
             "SCANNER_UNIVERSE_LIMIT",
