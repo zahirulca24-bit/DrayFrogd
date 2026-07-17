@@ -17,10 +17,10 @@ from app.risk import refresh_risk_state, validate_trade
 
 
 class TradeChurnGuardTests(unittest.TestCase):
-    def test_policy_locks_daily_execution_limit_to_eight(self) -> None:
-        self.assertEqual(DEFAULT_RISK_SETTINGS["max_daily_trades"], 8)
+    def test_policy_reports_unlimited_daily_execution_count(self) -> None:
+        self.assertEqual(DEFAULT_RISK_SETTINGS["max_daily_trades"], 0)
 
-    def test_preflight_blocks_ninth_trade(self) -> None:
+    def test_preflight_does_not_block_after_many_daily_trades(self) -> None:
         state = {
             "circuit_breaker_active": False,
             "circuit_breaker_reason": None,
@@ -32,20 +32,22 @@ class TradeChurnGuardTests(unittest.TestCase):
             "live_risk": 0.0,
             "base_risk_pool": 50.0,
             "effective_risk_pool": 50.0,
-            "trades_today": 8,
-            "max_trades_per_day": 8,
+            "trades_today": 999,
+            "max_trades_per_day": 0,
         }
         with patch("app.risk.refresh_risk_state", return_value=state):
             result = validate_trade(self._signal(), account_equity=1000.0)
-        self.assertFalse(result["allowed"])
-        self.assertEqual(result["reason"], "DAILY_TRADE_LIMIT_REACHED")
+        self.assertTrue(result["allowed"])
+        self.assertEqual(result["trades_today"], 999)
+        self.assertEqual(result["max_daily_trades"], 0)
+        self.assertFalse(result["daily_trade_limit_enabled"])
 
-    def test_atomic_reservation_cannot_exceed_daily_limit(self) -> None:
+    def test_atomic_reservation_ignores_stale_daily_limit_argument(self) -> None:
         now = datetime(2026, 7, 14, 12, 0, tzinfo=UTC)
-        with self._database(trades_today=7, available_risk=100.0) as resources:
+        with self._database(trades_today=999, available_risk=100.0) as resources:
             TestSession, test_engine = resources
             with self._reservation_patches(TestSession, test_engine):
-                first = reserve_execution_capacity(
+                result = reserve_execution_capacity(
                     self._trade("BTCUSDT"),
                     "a" * 64,
                     required_risk=20.0,
@@ -54,18 +56,12 @@ class TradeChurnGuardTests(unittest.TestCase):
                     reentry_cooldown_minutes=30,
                     now=now,
                 )
-                ninth = reserve_execution_capacity(
-                    self._trade("ETHUSDT"),
-                    "b" * 64,
-                    required_risk=20.0,
-                    max_active_trades=5,
-                    max_daily_trades=8,
-                    reentry_cooldown_minutes=30,
-                    now=now,
-                )
-            self.assertTrue(first["reserved"])
-            self.assertFalse(ninth["reserved"])
-            self.assertEqual(ninth["reason"], "DAILY_TRADE_LIMIT_REACHED")
+        self.assertTrue(result["reserved"])
+        reservation = result["trade"]["exchange_metadata"]["risk_reservation"]
+        self.assertEqual(reservation["trades_today_before"], 999)
+        self.assertEqual(reservation["trades_today_after"], 1000)
+        self.assertEqual(reservation["max_daily_trades"], 0)
+        self.assertFalse(reservation["daily_trade_limit_enabled"])
 
     def test_recent_terminal_close_blocks_same_symbol_reentry(self) -> None:
         now = datetime(2026, 7, 14, 12, 0, tzinfo=UTC)
@@ -78,7 +74,7 @@ class TradeChurnGuardTests(unittest.TestCase):
                     "c" * 64,
                     required_risk=20.0,
                     max_active_trades=5,
-                    max_daily_trades=8,
+                    max_daily_trades=0,
                     reentry_cooldown_minutes=30,
                     now=now,
                 )
@@ -97,7 +93,7 @@ class TradeChurnGuardTests(unittest.TestCase):
                     "d" * 64,
                     required_risk=20.0,
                     max_active_trades=5,
-                    max_daily_trades=8,
+                    max_daily_trades=0,
                     reentry_cooldown_minutes=30,
                     now=now,
                 )
@@ -138,12 +134,13 @@ class TradeChurnGuardTests(unittest.TestCase):
             ):
                 state = refresh_risk_state(account_equity=1000.0, now=now)
             self.assertEqual(state["trades_today"], 0)
+            self.assertEqual(state["max_trades_per_day"], 0)
+            self.assertFalse(state["daily_trade_limit_enabled"])
 
     def test_expected_guard_blocks_are_not_execution_failures(self) -> None:
         for code in (
             "DUPLICATE_EXECUTION",
             "SYMBOL_ALREADY_ACTIVE",
-            "DAILY_TRADE_LIMIT_REACHED",
             "SYMBOL_REENTRY_COOLDOWN",
         ):
             with self.subTest(code=code):
