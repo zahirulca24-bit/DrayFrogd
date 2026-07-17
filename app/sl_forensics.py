@@ -148,10 +148,11 @@ def classify_sl_reason(
 
     if not is_sl and realized_pnl is not None and realized_pnl >= 0:
         return SL_REASON_NON_SL_CLOSE
-    if "FORCED" in reason_upper or "RISK" in reason_upper:
-        return SL_REASON_FORCED_RISK_CLOSE
-    if close_source in {"exchange", "exchange_close", "reconciliation", "bybit"} or "EXCHANGE" in reason_upper:
-        return SL_REASON_EXCHANGE_STOP
+
+    # Specific evidence should win before generic source/reason labels. A close
+    # can be reported by the exchange or risk module while the useful forensic
+    # cause is still stop-price confirmation, fee drag, or an overheld scalping
+    # trade.
     if exit_to_stop_bps is not None and exit_to_stop_bps <= STOP_PRICE_CONFIRMATION_BPS:
         return SL_REASON_STOP_PRICE_CONFIRMED
     if fee_drag_r is not None and fee_drag_r >= 0.50:
@@ -160,6 +161,10 @@ def classify_sl_reason(
         return SL_REASON_FEE_DRAG_LOSS
     if trade_type == "scalping" and held_seconds is not None and held_seconds > 30 * 60:
         return SL_REASON_OVERHELD_SCALPING
+    if "FORCED" in reason_upper or "RISK" in reason_upper:
+        return SL_REASON_FORCED_RISK_CLOSE
+    if close_source in {"exchange", "exchange_close", "reconciliation", "bybit"} or "EXCHANGE" in reason_upper:
+        return SL_REASON_EXCHANGE_STOP
     return SL_REASON_UNKNOWN
 
 
