@@ -20,7 +20,6 @@ from app.trade_state import CAPACITY_BLOCKING_STATUSES, is_capacity_blocking_sta
 
 BDT = ZoneInfo("Asia/Dhaka")
 ACTIVE_TRADE_LIMIT = 5
-DAILY_EXECUTED_TRADE_LIMIT = 8
 BASE_RISK_POOL_RATIO = 0.05
 DAILY_NET_LOSS_LIMIT_RATIO = 0.05
 CAPITAL_EXPOSURE_CAP = 0.50
@@ -84,9 +83,6 @@ def validate_trade(signal: dict[str, Any], account_equity: float | None = None) 
         return _reject("Symbol already has an active trade")
     if state["active_trade_count"] >= ACTIVE_TRADE_LIMIT:
         return _reject("Active trade limit reached")
-    daily_limit = int(state.get("max_trades_per_day") or DAILY_EXECUTED_TRADE_LIMIT)
-    if int(state.get("trades_today") or 0) >= daily_limit:
-        return _reject("DAILY_TRADE_LIMIT_REACHED")
 
     new_trade_risk = profile["risk_amount"]
     if new_trade_risk > state["available_risk"] + 1e-9:
@@ -112,7 +108,8 @@ def validate_trade(signal: dict[str, Any], account_equity: float | None = None) 
         "active_trade_count": state["active_trade_count"],
         "max_active_trades": ACTIVE_TRADE_LIMIT,
         "trades_today": int(state.get("trades_today") or 0),
-        "max_daily_trades": daily_limit,
+        "max_daily_trades": 0,
+        "daily_trade_limit_enabled": False,
         "reentry_cooldown_minutes": LOSS_COOLDOWN_MINUTES,
     }
 
@@ -323,8 +320,8 @@ def refresh_risk_state(
                 "exposure_cap": CAPITAL_EXPOSURE_CAP,
                 "max_open_trades": ACTIVE_TRADE_LIMIT,
                 "max_active_trades": ACTIVE_TRADE_LIMIT,
-                "max_trades_per_day": DAILY_EXECUTED_TRADE_LIMIT,
-                "daily_trade_limit_enabled": True,
+                "max_trades_per_day": 0,
+                "daily_trade_limit_enabled": False,
                 "min_risk_reward": RISK_PROFILES["scalping"]["min_risk_reward"],
                 "active_symbols": active_symbols,
                 "active_trade_count": active_trade_count,
