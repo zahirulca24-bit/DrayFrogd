@@ -28,12 +28,11 @@ def reserve_execution_capacity(
     reentry_cooldown_minutes: int | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
-    """Atomically reserve both the execution key and portfolio risk capacity.
+    """Atomically reserve execution key and portfolio risk capacity.
 
-    PostgreSQL locks the single risk-runtime row while active-trade count,
-    symbol exclusivity and available risk are checked and updated. This prevents
-    two different signals from passing the same stale portfolio-capacity view.
-    Legacy callers without a risk guard retain the existing reservation path.
+    Daily trade count is intentionally not an execution blocker. It remains a
+    reporting metric only; quality gates, active capacity, symbol cooldown,
+    dynamic risk capacity and the daily loss circuit breaker are the authorities.
     """
 
     if required_risk is None or max_active_trades is None:
@@ -43,7 +42,6 @@ def reserve_execution_capacity(
     symbol = str(trade.get("symbol") or "").upper().strip()
     risk_amount = float(required_risk)
     active_limit = int(max_active_trades)
-    daily_limit = int(max_daily_trades if max_daily_trades is not None else 8)
     cooldown_minutes = int(reentry_cooldown_minutes if reentry_cooldown_minutes is not None else 30)
     current = now.astimezone(UTC) if now and now.tzinfo else (now.replace(tzinfo=UTC) if now else datetime.now(UTC))
     if not normalized_key:
@@ -54,8 +52,6 @@ def reserve_execution_capacity(
         raise ValueError("required_risk must be positive")
     if active_limit <= 0:
         raise ValueError("max_active_trades must be positive")
-    if daily_limit <= 0:
-        raise ValueError("max_daily_trades must be positive")
     if cooldown_minutes < 0:
         raise ValueError("reentry_cooldown_minutes cannot be negative")
 
@@ -97,14 +93,6 @@ def reserve_execution_capacity(
                 "trade": None,
             }
         trades_today = int(state.trades_today or 0)
-        if trades_today >= daily_limit:
-            return {
-                "reserved": False,
-                "reason": "DAILY_TRADE_LIMIT_REACHED",
-                "trades_today": trades_today,
-                "max_daily_trades": daily_limit,
-                "trade": None,
-            }
         recent_close = (
             db.query(TradeJournal)
             .filter(
@@ -151,7 +139,8 @@ def reserve_execution_capacity(
             "active_trades_after": len(open_rows) + 1,
             "trades_today_before": trades_today,
             "trades_today_after": trades_today + 1,
-            "max_daily_trades": daily_limit,
+            "max_daily_trades": 0,
+            "daily_trade_limit_enabled": False,
             "reentry_cooldown_minutes": cooldown_minutes,
         }
         pending_trade["exchange_metadata"] = metadata
