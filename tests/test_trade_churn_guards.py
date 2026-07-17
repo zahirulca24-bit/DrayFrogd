@@ -141,10 +141,13 @@ class TradeChurnGuardTests(unittest.TestCase):
         for code in (
             "DUPLICATE_EXECUTION",
             "SYMBOL_ALREADY_ACTIVE",
+            "ACTIVE_TRADE_LIMIT_REACHED",
+            "DYNAMIC_RISK_CAPACITY_EXCEEDED",
             "SYMBOL_REENTRY_COOLDOWN",
         ):
             with self.subTest(code=code):
                 self.assertTrue(_is_expected_execution_block(code))
+        self.assertFalse(_is_expected_execution_block("DAILY_TRADE_LIMIT_REACHED"))
         self.assertFalse(_is_expected_execution_block("ORDER_NOT_ACCEPTED"))
 
     @staticmethod
