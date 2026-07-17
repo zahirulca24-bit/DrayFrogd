@@ -216,8 +216,8 @@ class PositionSizingTests(unittest.TestCase):
         self.assertAlmostEqual(result["notional"], 2616.30, places=2)
         self.assertEqual(result["selected_leverage"], 20.0)
         self.assertAlmostEqual(result["required_margin"], 130.815, places=4)
-        self.assertAlmostEqual(result["max_trade_margin"], 300.0)
-        self.assertAlmostEqual(result["max_trade_notional"], 3000.0)
+        self.assertAlmostEqual(result["max_trade_margin"], 900.0)
+        self.assertAlmostEqual(result["max_trade_notional"], 24000.0)
         self.assertLess(result["trade_margin_utilization"], 0.03)
 
     def test_fixed_risk_trade_is_rejected_when_profile_leverage_cannot_fit_safety_caps(self) -> None:
@@ -323,7 +323,7 @@ class PositionSizingTests(unittest.TestCase):
         self.assertEqual(result["quantity"], "1.746")
         self.assertAlmostEqual(result["execution_risk_budget"], 9.0)
 
-    def test_fee_aware_sui_regression_rejects_small_wallet_oversize(self) -> None:
+    def test_fee_aware_sui_regression_rejects_net_rr_when_oversize_cap_no_longer_applies(self) -> None:
         result = calculate_position_size(
             signal={
                 "symbol": "SUIUSDT",
@@ -352,7 +352,7 @@ class PositionSizingTests(unittest.TestCase):
         )
 
         self.assertFalse(result["allowed"])
-        self.assertIn("Trade notional", result["reason"])
+        self.assertIn("Net risk reward", result["reason"])
 
 
 if __name__ == "__main__":
