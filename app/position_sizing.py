@@ -14,13 +14,13 @@ SIGNAL_MAX_AGE_MINUTES = 10
 DEFAULT_MIN_NOTIONAL = 5.0
 PROFILE_CAPS = {
     "scalping": {
-        "max_margin_ratio": 0.05,
-        "max_notional_ratio": 0.50,
+        "max_margin_ratio": 0.15,
+        "max_notional_ratio": 4.00,
         "min_sl_bps": 15.0,
     },
     "intraday": {
-        "max_margin_ratio": 0.10,
-        "max_notional_ratio": 1.00,
+        "max_margin_ratio": 0.25,
+        "max_notional_ratio": 5.00,
         "min_sl_bps": 30.0,
     },
 }
