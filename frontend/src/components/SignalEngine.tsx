@@ -100,6 +100,9 @@ export default function SignalEngine(props: SignalEngineProps) {
   const [truthError, setTruthError] = useState<string | null>(null);
   const [scanLoading, setScanLoading] = useState(false);
   const [selectedSignalId, setSelectedSignalId] = useState<string | null>(null);
+  const [executingSignalId, setExecutingSignalId] = useState<string | null>(null);
+  const [executionMessage, setExecutionMessage] = useState<string | null>(null);
+  const [executionError, setExecutionError] = useState<string | null>(null);
   const [overview, setOverview] = useState<{ top_gainers: MarketTicker[]; watchlist: MarketTicker[] }>({
     top_gainers: [],
     watchlist: [],
@@ -172,6 +175,8 @@ export default function SignalEngine(props: SignalEngineProps) {
     if (!props.authToken) return;
     setScanLoading(true);
     setTruthError(null);
+    setExecutionMessage(null);
+    setExecutionError(null);
     try {
       const payload = await runSignalTruthScan(props.authToken);
       setTruth(payload);
@@ -180,6 +185,51 @@ export default function SignalEngine(props: SignalEngineProps) {
       setTruthError(error?.message || "Scan failed.");
     } finally {
       setScanLoading(false);
+    }
+  };
+
+  const handleExecuteSignal = async (signal: TruthSignal) => {
+    if (
+      executingSignalId ||
+      signal.signalState !== "ACTIVE" ||
+      !signal.isExecutable ||
+      signal.monitorOnly ||
+      !signal.direction ||
+      signal.entry === null ||
+      signal.stopLoss === null ||
+      signal.takeProfit === null ||
+      signal.riskReward === null
+    ) {
+      return;
+    }
+
+    setExecutingSignalId(signal.id);
+    setExecutionMessage(null);
+    setExecutionError(null);
+    try {
+      const result = await props.onExecuteSignal({
+        symbol: signal.symbol,
+        strategy_name: signal.strategyName,
+        strategy: signal.strategyName,
+        trade_type: signal.tradeType,
+        direction: signal.direction.toLowerCase(),
+        entry: signal.entry,
+        stop_loss: signal.stopLoss,
+        take_profit: signal.takeProfit,
+        risk_reward: signal.riskReward,
+        detected_at: signal.detectedAt,
+        status: "active",
+      });
+      if (result.ok) {
+        setExecutionMessage(`${signal.symbol} trade submitted successfully.`);
+        await props.onRefresh();
+      } else {
+        setExecutionError(String(result.detail || result.error || "Trade execution failed."));
+      }
+    } catch (error: any) {
+      setExecutionError(error?.message || "Trade execution failed.");
+    } finally {
+      setExecutingSignalId(null);
     }
   };
 
@@ -270,6 +320,14 @@ export default function SignalEngine(props: SignalEngineProps) {
         </div>
       )}
 
+      {executionMessage && (
+        <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/10 p-4 text-xs text-emerald-300">
+          {executionMessage}
+        </div>
+      )}
+
+      {executionError && <ErrorBanner message={executionError} />}
+
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-[0.46fr_0.54fr]">
         <section className="rounded-2xl border border-slate-800 bg-bento-card p-5 shadow-md">
           <div className="mb-4 flex items-start justify-between gap-4">
@@ -327,6 +385,8 @@ export default function SignalEngine(props: SignalEngineProps) {
                 signal={signal}
                 ticker={tickerMap.get(signal.symbol)}
                 selected={selectedSignal?.id === signal.id}
+                executing={executingSignalId === signal.id}
+                onExecute={() => void handleExecuteSignal(signal)}
                 onSelect={() => setSelectedSignalId(signal.id)}
               />
             ))}
@@ -419,18 +479,35 @@ function TruthSignalCard({
   signal,
   ticker,
   selected,
+  executing,
+  onExecute,
   onSelect,
 }: {
   signal: TruthSignal;
   ticker?: MarketTicker;
   selected: boolean;
+  executing: boolean;
+  onExecute: () => void;
   onSelect: () => void;
 }) {
   const riskGate = signal.signalState === "ACTIVE" ? "NOT EVALUATED" : "NOT APPLICABLE";
   const executionGate = signal.signalState === "ACTIVE" ? "ENGINE CONTROLLED" : "BLOCKED BY STATE";
-  const timeframe = [signal.timeframes.trend && `Trend ${signal.timeframes.trend}`, signal.timeframes.setup && `Setup ${signal.timeframes.setup}`, signal.timeframes.trigger && `Trigger ${signal.timeframes.trigger}`]
+  const canExecute =
+    signal.signalState === "ACTIVE" &&
+    signal.isExecutable &&
+    !signal.monitorOnly &&
+    signal.direction !== null &&
+    signal.entry !== null &&
+    signal.stopLoss !== null &&
+    signal.takeProfit !== null &&
+    signal.riskReward !== null;
+  const timeframe = [
+    signal.timeframes.trend && `Trend ${signal.timeframes.trend}`,
+    signal.timeframes.setup && `Setup ${signal.timeframes.setup}`,
+    signal.timeframes.trigger && `Trigger ${signal.timeframes.trigger}`,
+  ]
     .filter(Boolean)
-    .join(" · ") || "N/A";
+    .join(" / ") || "N/A";
 
   return (
     <button
@@ -484,9 +561,25 @@ function TruthSignalCard({
 
       <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-slate-800 pt-3 text-[10px] text-slate-500">
         <span>
-          Confirmation matches: {signal.confirmationCount} · Strategies: {signal.matchedStrategies.length ? signal.matchedStrategies.join(", ") : signal.strategyName}
+          Confirmation matches: {signal.confirmationCount} / Strategies: {signal.matchedStrategies.length ? signal.matchedStrategies.join(", ") : signal.strategyName}
         </span>
-        <span>Volume: {ticker ? formatCompact(numberValue(ticker.volume24h)) : "N/A"}</span>
+        <div className="flex flex-wrap items-center gap-2">
+          <span>Volume: {ticker ? formatCompact(numberValue(ticker.volume24h)) : "N/A"}</span>
+          {canExecute && (
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                onExecute();
+              }}
+              disabled={executing}
+              className="inline-flex items-center gap-2 rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 py-1.5 text-[10px] font-semibold text-emerald-300 transition-colors hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <Play className="h-3.5 w-3.5" />
+              {executing ? "EXECUTING..." : "EXECUTE TRADE"}
+            </button>
+          )}
+        </div>
       </div>
 
       {signal.rejectionReason && (
