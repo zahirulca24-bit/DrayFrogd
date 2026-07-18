@@ -37,7 +37,6 @@ class EntryAuthorityRuntimeEndpointTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(body["detail"], "Unauthorized")
 
     def _payload(self) -> dict:
-        now = datetime(2026, 7, 18, 12, 0, tzinfo=UTC)
         return {
             "symbol": "ZECUSDT",
             "strategy_name": "compression_expansion_v1",
@@ -47,7 +46,7 @@ class EntryAuthorityRuntimeEndpointTests(unittest.IsolatedAsyncioTestCase):
             "stop_loss": 49.7,
             "take_profit": 50.6,
             "risk_reward": 2.0,
-            "detected_at": now.isoformat(),
+            "detected_at": datetime.now(UTC).isoformat(),
             "status": "active",
             "allowed_entry_min": 50.0,
             "allowed_entry_max": 50.08,
