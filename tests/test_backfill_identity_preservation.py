@@ -43,6 +43,7 @@ class BackfillIdentityPreservationTests(unittest.TestCase):
         metadata = merged["exchange_metadata"]
 
         self.assertEqual(merged["strategy_name"], "breakout_retest")
+        self.assertEqual(metadata["source"], "authoritative_execution")
         self.assertEqual(metadata["order_link_id"], "df-entry-link")
         self.assertEqual(metadata["fill_confirmation"]["exec_id"], "entry-exec-1")
         self.assertEqual(metadata["management"]["tp1_order_id"], "tp1-order-1")
@@ -112,6 +113,31 @@ class BackfillIdentityPreservationTests(unittest.TestCase):
         fill = merged["exchange_metadata"]["fill_confirmation"]
         self.assertEqual(fill["exec_id"], "exec-1")
         self.assertEqual(fill["exec_ids"], ["exec-1", "exec-2"])
+
+    def test_malformed_nested_identity_does_not_delete_existing_evidence(self) -> None:
+        merged = merge_backfill_updates(
+            {
+                "strategy_name": "breakout_retest",
+                "exchange_metadata": {
+                    "fill_confirmation": {
+                        "exec_id": "exec-1",
+                        "order_id": "order-1",
+                    },
+                    "management": {"tp1_order_id": "tp1-order-1"},
+                },
+            },
+            {
+                "strategy_name": "exchange_backfill",
+                "exchange_metadata": {
+                    "fill_confirmation": None,
+                    "management": "invalid",
+                },
+            },
+        )
+
+        metadata = merged["exchange_metadata"]
+        self.assertEqual(metadata["fill_confirmation"]["exec_id"], "exec-1")
+        self.assertEqual(metadata["management"]["tp1_order_id"], "tp1-order-1")
 
     def test_exchange_backfill_strategy_is_used_when_original_is_unknown(self) -> None:
         merged = merge_backfill_updates(
