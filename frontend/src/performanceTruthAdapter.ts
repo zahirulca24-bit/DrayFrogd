@@ -4,7 +4,10 @@ const originalGetJournalTrades = api.getJournalTrades.bind(api);
 
 function performancePageIsActive(): boolean {
   const nav = document.getElementById("nav-performance-strategy");
-  return Boolean(nav?.className.includes("bg-rose-500/10"));
+  return Boolean(
+    nav?.className.includes("bg-rose-500/10") ||
+    document.title.includes("Performance & Strategy"),
+  );
 }
 
 api.getJournalTrades = async (token: string) => {
