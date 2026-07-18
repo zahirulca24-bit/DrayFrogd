@@ -15,6 +15,7 @@ from app.scalping_entry_authority import (
     EntryAuthorityConfig,
     detect_abnormal_spike,
     evaluate_entry_authority,
+    evaluate_entry_authority_from_client,
 )
 
 
@@ -108,6 +109,20 @@ class ScalpingEntryAuthorityTests(unittest.TestCase):
         self.assertEqual(result["reason_code"], REASON_RR_DEGRADED)
         self.assertLess(result["evidence"]["net_rr"], self.config.min_net_rr)
 
+    def test_client_wrapper_uses_existing_orderbook_market_data_path(self) -> None:
+        client = FakeReadOnlyMarketClient(now=self.now)
+        result = evaluate_entry_authority_from_client(
+            client,
+            self._signal(allowed_entry_max=50.08),
+            now=self.now,
+            config=self.config,
+        )
+
+        self.assertEqual(result["decision"], APPROVE)
+        self.assertEqual(result["quote"]["source"], "orderbook")
+        self.assertEqual(client.calls, ["safe_fetch_orderbook", "safe_fetch_recent_candles"])
+        self.assertEqual(client.trade_attempts, 0)
+
     def _signal(
         self,
         *,
@@ -146,6 +161,21 @@ class ScalpingEntryAuthorityTests(unittest.TestCase):
                 "lastPrice": str((bid + ask) / 2.0),
             },
         }
+
+
+class FakeReadOnlyMarketClient:
+    def __init__(self, *, now: datetime) -> None:
+        self.now = now
+        self.calls: list[str] = []
+        self.trade_attempts = 0
+
+    def safe_fetch_orderbook(self, symbol: str, limit: int = 1):
+        self.calls.append("safe_fetch_orderbook")
+        return True, {"bids": [{"price": "50.02", "size": "100"}], "asks": [{"price": "50.03", "size": "100"}]}, None
+
+    def safe_fetch_recent_candles(self, symbol: str, interval: str, limit: int = 35):
+        self.calls.append("safe_fetch_recent_candles")
+        return True, [{"high": 50.05, "low": 49.95} for _ in range(35)], None
 
 
 if __name__ == "__main__":
