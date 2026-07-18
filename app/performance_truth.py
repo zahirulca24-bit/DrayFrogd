@@ -19,6 +19,14 @@ REJECTED_CLOSE_REASONS = {
     "order_not_accepted",
 }
 
+PENDING_FINANCIAL_STATUSES = {
+    "close_requested",
+    "close_uncertain",
+    "close_pending_sync",
+    "reconciliation_pending",
+    "execution_uncertain",
+}
+
 
 def annotate_trade_truth(trade: dict[str, Any]) -> dict[str, Any]:
     """Attach the single counting/performance decision used by every surface."""
@@ -43,7 +51,7 @@ def annotate_trade_truth(trade: dict[str, Any]) -> dict[str, Any]:
             "reconciled"
             if decision["eligible"]
             else "pending"
-            if status in {"close_requested", "close_uncertain", "close_pending_sync", "reconciliation_pending"}
+            if status in PENDING_FINANCIAL_STATUSES
             else "excluded"
         ),
         "financial_truth_source": decision.get("source"),
@@ -96,7 +104,6 @@ def _has_close_identity(close_sync: dict[str, Any], records: list[Any]) -> bool:
         "matched_close_order_ids",
         "matched_close_order_link_ids",
         "close_exec_ids",
-        "record_keys",
     ):
         values = close_sync.get(key)
         if isinstance(values, (list, tuple, set)) and any(str(value or "").strip() for value in values):
@@ -114,7 +121,6 @@ def _has_close_identity(close_sync: dict[str, Any], records: list[Any]) -> bool:
             "exec_id",
             "transactionId",
             "transaction_id",
-            "record_key",
             "id",
         ):
             if str(record.get(key) or "").strip():
