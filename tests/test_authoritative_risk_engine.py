@@ -100,7 +100,7 @@ class AuthoritativeRiskEngineTests(unittest.TestCase):
         self.assertEqual(replay["error"], "RISK_APPROVAL_ALREADY_USED")
 
     def test_stale_signal_is_rejected_before_portfolio_checks(self) -> None:
-        stale = signal(detected_at=(NOW - timedelta(seconds=181)).isoformat())
+        stale = signal(detected_at=(NOW - timedelta(seconds=421)).isoformat())
         approval = issue_execution_approval(
             FakeClient(),
             {**stale, "auto_triggered": True},
