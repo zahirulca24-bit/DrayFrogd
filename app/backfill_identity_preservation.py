@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from typing import Any, Callable
 
@@ -7,13 +8,22 @@ _INSTALLED = False
 _ORIGINAL_UPDATE_TRADE_ENTRY: Callable[..., dict[str, Any] | None] | None = None
 
 _FALLBACK_STRATEGIES = {"", "unknown", "exchange_backfill"}
+_NESTED_IDENTITY_KEYS = {
+    "fill_confirmation",
+    "order_response",
+    "management",
+    "native_profit_orders",
+    "manual_close",
+    "exchange_identity",
+    "position_snapshot",
+}
 
 
 def install() -> None:
     """Preserve existing Journal identity when exchange lifecycle backfill closes a row.
 
     ``exchange_journal_backfill`` reconstructs authoritative close evidence from the
-    Bybit transaction log.  When it matches an existing Journal reservation, the
+    Bybit transaction log. When it matches an existing Journal reservation, the
     recovered close payload must enrich that row rather than replacing the original
     strategy and accepted-order/fill identity metadata.
     """
@@ -36,6 +46,10 @@ def install() -> None:
         updates: dict[str, Any],
     ) -> dict[str, Any] | None:
         existing = _find_existing_row(backfill, journal_id)
+        if existing is None:
+            # Backfill updates only target rows already matched from Journal history.
+            # If that row cannot be re-read, fail closed instead of risking identity loss.
+            return None
         return original(journal_id, merge_backfill_updates(existing, updates))
 
     backfill.update_trade_entry = _update_trade_entry_preserving_identity
@@ -66,6 +80,14 @@ def merge_backfill_updates(
     if existing_metadata or incoming_metadata:
         combined_metadata = {**existing_metadata, **incoming_metadata}
 
+        for key in _NESTED_IDENTITY_KEYS:
+            existing_value = existing_metadata.get(key)
+            incoming_value = incoming_metadata.get(key)
+            if isinstance(existing_value, dict) and isinstance(incoming_value, dict):
+                combined_metadata[key] = _merge_evidence_dict(existing_value, incoming_value)
+            elif key in existing_metadata and key not in incoming_metadata:
+                combined_metadata[key] = existing_value
+
         existing_close_sync = (
             existing_metadata.get("close_sync")
             if isinstance(existing_metadata.get("close_sync"), dict)
@@ -77,10 +99,10 @@ def merge_backfill_updates(
             else {}
         )
         if existing_close_sync or incoming_close_sync:
-            combined_metadata["close_sync"] = {
-                **existing_close_sync,
-                **incoming_close_sync,
-            }
+            combined_metadata["close_sync"] = _merge_close_sync(
+                existing_close_sync,
+                incoming_close_sync,
+            )
 
         original_source = existing_metadata.get("source")
         backfill_source = incoming_metadata.get("source")
@@ -105,6 +127,51 @@ def merge_backfill_updates(
         merged["strategy_name"] = existing_strategy
 
     return merged
+
+
+def _merge_close_sync(
+    existing: dict[str, Any],
+    incoming: dict[str, Any],
+) -> dict[str, Any]:
+    merged = _merge_evidence_dict(existing, incoming)
+    if str(existing.get("identity_match") or "").lower() == "exact":
+        merged["identity_match"] = "exact"
+    return merged
+
+
+def _merge_evidence_dict(
+    existing: dict[str, Any],
+    incoming: dict[str, Any],
+) -> dict[str, Any]:
+    merged = dict(existing)
+    for key, incoming_value in incoming.items():
+        existing_value = merged.get(key)
+        if isinstance(existing_value, dict) and isinstance(incoming_value, dict):
+            merged[key] = _merge_evidence_dict(existing_value, incoming_value)
+        elif isinstance(existing_value, list) and isinstance(incoming_value, list):
+            merged[key] = _merge_lists(existing_value, incoming_value)
+        else:
+            merged[key] = incoming_value
+    return merged
+
+
+def _merge_lists(existing: list[Any], incoming: list[Any]) -> list[Any]:
+    merged: list[Any] = []
+    seen: set[str] = set()
+    for item in [*existing, *incoming]:
+        key = _stable_item_key(item)
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(item)
+    return merged
+
+
+def _stable_item_key(value: Any) -> str:
+    try:
+        return json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
+    except (TypeError, ValueError):
+        return repr(value)
 
 
 def _find_existing_row(backfill: Any, journal_id: str) -> dict[str, Any] | None:
