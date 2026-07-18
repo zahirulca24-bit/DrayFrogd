@@ -45,16 +45,25 @@ def install() -> None:
         journal_id: str,
         updates: dict[str, Any],
     ) -> dict[str, Any] | None:
-        existing = _find_existing_row(backfill, journal_id)
-        if existing is None:
-            # Backfill updates only target rows already matched from Journal history.
-            # If that row cannot be re-read, fail closed instead of risking identity loss.
-            return None
-        return original(journal_id, merge_backfill_updates(existing, updates))
+        return _preserving_update(backfill, original, journal_id, updates)
 
     backfill.update_trade_entry = _update_trade_entry_preserving_identity
     backfill._P0_1E_IDENTITY_PRESERVATION_INSTALLED = True
     _INSTALLED = True
+
+
+def _preserving_update(
+    backfill: Any,
+    original: Callable[[str, dict[str, Any]], dict[str, Any] | None],
+    journal_id: str,
+    updates: dict[str, Any],
+) -> dict[str, Any] | None:
+    existing = _find_existing_row(backfill, journal_id)
+    if existing is None:
+        # Backfill updates only target rows already matched from Journal history.
+        # If that row cannot be re-read, fail closed instead of risking identity loss.
+        return None
+    return original(journal_id, merge_backfill_updates(existing, updates))
 
 
 def merge_backfill_updates(
@@ -141,6 +150,13 @@ def _merge_close_sync(
     merged = _merge_evidence_dict(existing, incoming)
     if str(existing.get("identity_match") or "").lower() == "exact":
         merged["identity_match"] = "exact"
+
+    records = merged.get("records")
+    record_keys = merged.get("record_keys")
+    if isinstance(records, list):
+        merged["record_count"] = len(records)
+    elif isinstance(record_keys, list):
+        merged["record_count"] = len(record_keys)
     return merged
 
 
@@ -173,6 +189,18 @@ def _merge_lists(existing: list[Any], incoming: list[Any]) -> list[Any]:
 
 
 def _stable_item_key(value: Any) -> str:
+    if isinstance(value, dict):
+        for field in (
+            "record_key",
+            "exec_id",
+            "execId",
+            "transaction_id",
+            "transactionId",
+            "id",
+        ):
+            identity = str(value.get(field) or "").strip()
+            if identity:
+                return f"{field}:{identity}"
     try:
         return json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
     except (TypeError, ValueError):
