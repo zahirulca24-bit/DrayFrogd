@@ -6,6 +6,7 @@ from app.backfill_identity_preservation import install as _install_backfill_iden
 from app.performance_truth_install import install as _install_performance_truth
 from app.batch1_execution_safety import install as _install_batch1_execution_safety
 from app.batch1_execution_contract import install as _install_batch1_execution_contract
+from app.batch2_cache_isolation import install as _install_batch2_cache_isolation
 from app.batch2_authority import install as _install_batch2_authority
 from app.batch2_runtime_bindings import install as _install_batch2_runtime_bindings
 
@@ -15,5 +16,6 @@ _install_backfill_identity_preservation()
 _install_performance_truth()
 _install_batch1_execution_safety()
 _install_batch1_execution_contract()
+_install_batch2_cache_isolation()
 _install_batch2_authority()
 _install_batch2_runtime_bindings()
