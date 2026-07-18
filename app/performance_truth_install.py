@@ -92,23 +92,37 @@ def _merge_closed_truth(
     """Prefer durable Journal evidence and add only non-duplicate memory rows."""
 
     merged: list[dict[str, Any]] = []
-    seen: set[str] = set()
+    seen_tokens: set[str] = set()
     for trade in [*durable_rows, *memory_rows]:
         if not isinstance(trade, dict):
             continue
-        key = _trade_identity_key(trade)
-        if key in seen:
+        tokens = _trade_identity_tokens(trade)
+        if tokens.intersection(seen_tokens):
             continue
-        seen.add(key)
+        seen_tokens.update(tokens)
         merged.append(dict(trade))
     return merged
 
 
+def _trade_identity_tokens(trade: dict[str, Any]) -> set[str]:
+    tokens = {
+        f"{field}:{value}"
+        for field in ("journal_id", "execution_key", "order_id")
+        if (value := str(trade.get(field) or "").strip())
+    }
+    if tokens:
+        return tokens
+    return {_fallback_identity(trade)}
+
+
 def _trade_identity_key(trade: dict[str, Any]) -> str:
-    for field in ("journal_id", "execution_key", "order_id"):
-        value = str(trade.get(field) or "").strip()
-        if value:
-            return f"{field}:{value}"
+    """Compatibility helper returning one stable key for focused tests/callers."""
+
+    tokens = sorted(_trade_identity_tokens(trade))
+    return tokens[0]
+
+
+def _fallback_identity(trade: dict[str, Any]) -> str:
     return "fallback:" + "|".join(
         [
             str(trade.get("symbol") or "").upper(),
