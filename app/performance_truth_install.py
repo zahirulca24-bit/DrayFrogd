@@ -118,8 +118,11 @@ def _trade_identity_tokens(trade: dict[str, Any]) -> set[str]:
 def _trade_identity_key(trade: dict[str, Any]) -> str:
     """Compatibility helper returning one stable key for focused tests/callers."""
 
-    tokens = sorted(_trade_identity_tokens(trade))
-    return tokens[0]
+    for field in ("journal_id", "execution_key", "order_id"):
+        value = str(trade.get(field) or "").strip()
+        if value:
+            return f"{field}:{value}"
+    return _fallback_identity(trade)
 
 
 def _fallback_identity(trade: dict[str, Any]) -> str:
