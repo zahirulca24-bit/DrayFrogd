@@ -56,11 +56,9 @@ function formatBdt(value?: string | null) {
   return Number.isNaN(date.getTime()) ? "N/A" : BDT_DATE_TIME.format(date);
 }
 
-function resultFromPnl(value: unknown) {
-  const pnl = Number(value);
-  if (!Number.isFinite(pnl)) return "UNKNOWN";
-  if (pnl > 0) return "PROFIT";
-  if (pnl < 0) return "LOSS";
+function resultFromPnl(value: number) {
+  if (value > 0) return "PROFIT";
+  if (value < 0) return "LOSS";
   return "FLAT";
 }
 
@@ -92,8 +90,7 @@ export default function PerformanceStrategy({ authToken, history: _history, metr
     if (!authToken) return;
     let cancelled = false;
     const refresh = async () => {
-      if (cancelled) return;
-      await load();
+      if (!cancelled) await load();
     };
     void refresh();
     const interval = setInterval(refresh, 10_000);
@@ -114,29 +111,25 @@ export default function PerformanceStrategy({ authToken, history: _history, metr
 
   const wins = eligible.filter((trade) => numberValue(trade.realized_pnl) > 0).length;
   const losses = eligible.filter((trade) => numberValue(trade.realized_pnl) < 0).length;
-  const flats = eligible.filter((trade) => numberValue(trade.realized_pnl) === 0).length;
   const netPnl = eligible.reduce((sum, trade) => sum + numberValue(trade.realized_pnl), 0);
   const totalFees = eligible.reduce((sum, trade) => sum + Math.abs(numberValue(trade.fees)), 0);
   const winRate = wins + losses > 0 ? wins / (wins + losses) : null;
-  const auditSummary = strategyAudit?.ok ? strategyAudit.summary : null;
 
   const strategyRows = useMemo(() => {
-    if (strategyAudit?.ok) return strategyAudit.strategies;
-    const buckets = new Map<string, { strategy: string; trade_count: number; wins: number; losses: number; flats: number; net_pnl: number; win_rate: number | null }>();
+    const buckets = new Map<string, { strategy: string; tradeCount: number; wins: number; losses: number; netPnl: number; winRate: number | null }>();
     eligible.forEach((trade) => {
       const strategy = String(trade.strategy_name || trade.strategy || "unknown");
-      const bucket = buckets.get(strategy) || { strategy, trade_count: 0, wins: 0, losses: 0, flats: 0, net_pnl: 0, win_rate: null };
+      const bucket = buckets.get(strategy) || { strategy, tradeCount: 0, wins: 0, losses: 0, netPnl: 0, winRate: null };
       const pnl = numberValue(trade.realized_pnl);
-      bucket.trade_count += 1;
-      bucket.net_pnl += pnl;
+      bucket.tradeCount += 1;
+      bucket.netPnl += pnl;
       if (pnl > 0) bucket.wins += 1;
-      else if (pnl < 0) bucket.losses += 1;
-      else bucket.flats += 1;
-      bucket.win_rate = bucket.wins + bucket.losses > 0 ? bucket.wins / (bucket.wins + bucket.losses) : null;
+      if (pnl < 0) bucket.losses += 1;
+      bucket.winRate = bucket.wins + bucket.losses > 0 ? bucket.wins / (bucket.wins + bucket.losses) : null;
       buckets.set(strategy, bucket);
     });
-    return Array.from(buckets.values());
-  }, [eligible, strategyAudit]);
+    return Array.from(buckets.values()).sort((left, right) => right.tradeCount - left.tradeCount);
+  }, [eligible]);
 
   return (
     <div className="space-y-4" id="performance-strategy-section">
@@ -166,20 +159,20 @@ export default function PerformanceStrategy({ authToken, history: _history, metr
       </section>
 
       <section className="grid grid-cols-2 gap-3 xl:grid-cols-6">
-        <Kpi label="Eligible Trades" value={String(auditSummary?.trade_count ?? eligible.length)} icon={<ShieldCheck className="h-4 w-4" />} />
-        <Kpi label="Wins" value={String(auditSummary?.wins ?? wins)} icon={<TrendingUp className="h-4 w-4" />} tone="good" />
-        <Kpi label="Losses" value={String(auditSummary?.losses ?? losses)} icon={<Target className="h-4 w-4" />} tone="bad" />
-        <Kpi label="Win Rate" value={formatPercent(auditSummary?.win_rate ?? winRate)} icon={<BarChart3 className="h-4 w-4" />} />
-        <Kpi label="Net PnL" value={formatMoney(auditSummary?.net_pnl ?? netPnl)} icon={<TrendingUp className="h-4 w-4" />} tone={(auditSummary?.net_pnl ?? netPnl) >= 0 ? "good" : "bad"} />
+        <Kpi label="Eligible Trades" value={String(eligible.length)} icon={<ShieldCheck className="h-4 w-4" />} />
+        <Kpi label="Wins" value={String(wins)} icon={<TrendingUp className="h-4 w-4" />} tone="good" />
+        <Kpi label="Losses" value={String(losses)} icon={<Target className="h-4 w-4" />} tone="bad" />
+        <Kpi label="Win Rate" value={formatPercent(winRate)} icon={<BarChart3 className="h-4 w-4" />} />
+        <Kpi label="Net PnL" value={formatMoney(netPnl)} icon={<TrendingUp className="h-4 w-4" />} tone={netPnl >= 0 ? "good" : "bad"} />
         <Kpi label="Excluded Rows" value={String(excluded.length)} icon={<AlertTriangle className="h-4 w-4" />} tone="warn" />
       </section>
 
-      <section className="grid gap-4 xl:grid-cols-[1fr_1fr]">
+      <section className="grid gap-4 xl:grid-cols-2">
         <div className="rounded-2xl border border-slate-800 bg-bento-card p-4 shadow-md">
           <div className="mb-4 flex items-center justify-between">
             <div>
               <h2 className="font-semibold text-white">Strategy truth</h2>
-              <p className="mt-1 text-[10px] text-slate-500">Bybit identity-matched closes only</p>
+              <p className="mt-1 text-[10px] text-slate-500">Backend-approved eligible closes only</p>
             </div>
             <span className="text-[10px] font-mono text-slate-500">Fees {formatMoney(totalFees)}</span>
           </div>
@@ -188,14 +181,14 @@ export default function PerformanceStrategy({ authToken, history: _history, metr
               <div key={row.strategy} className="grid grid-cols-[1fr_auto_auto] items-center gap-3 rounded-xl border border-slate-800 bg-[#0A0B0E] p-3 text-xs">
                 <div>
                   <div className="font-semibold text-white">{row.strategy}</div>
-                  <div className="mt-1 text-[10px] text-slate-500">{row.trade_count} reconciled trade{row.trade_count === 1 ? "" : "s"}</div>
+                  <div className="mt-1 text-[10px] text-slate-500">{row.tradeCount} reconciled trade{row.tradeCount === 1 ? "" : "s"}</div>
                 </div>
                 <div className="text-right">
                   <div className="text-slate-400">Win rate</div>
-                  <div className="font-mono text-white">{formatPercent(row.win_rate)}</div>
+                  <div className="font-mono text-white">{formatPercent(row.winRate)}</div>
                 </div>
-                <div className={`text-right font-mono ${Number(row.net_pnl || 0) < 0 ? "text-rose-300" : "text-emerald-300"}`}>
-                  {formatMoney(row.net_pnl)}
+                <div className={`text-right font-mono ${row.netPnl < 0 ? "text-rose-300" : "text-emerald-300"}`}>
+                  {formatMoney(row.netPnl)}
                 </div>
               </div>
             ))}
@@ -206,16 +199,12 @@ export default function PerformanceStrategy({ authToken, history: _history, metr
         <div className="overflow-hidden rounded-2xl border border-slate-800 bg-bento-card shadow-md">
           <div className="border-b border-slate-800 p-4">
             <h2 className="font-semibold text-white">Eligible close ledger</h2>
-            <p className="mt-1 text-[10px] text-slate-500">Journal rows excluded from Performance remain visible only on the Journal page.</p>
+            <p className="mt-1 text-[10px] text-slate-500">Excluded lifecycle rows remain visible on the Journal page.</p>
           </div>
           <div className="max-h-[520px] overflow-auto">
             <table className="min-w-full text-left text-xs">
               <thead className="sticky top-0 bg-[#0A0B0E] text-[10px] uppercase tracking-wider text-slate-500">
-                <tr>
-                  <th className="px-4 py-3">Trade</th>
-                  <th className="px-4 py-3">Result</th>
-                  <th className="px-4 py-3 text-right">PnL / Fees</th>
-                </tr>
+                <tr><th className="px-4 py-3">Trade</th><th className="px-4 py-3">Result</th><th className="px-4 py-3 text-right">PnL / Fees</th></tr>
               </thead>
               <tbody className="divide-y divide-slate-800/70">
                 {eligible.map((trade) => {
@@ -226,11 +215,7 @@ export default function PerformanceStrategy({ authToken, history: _history, metr
                         <div className="font-semibold text-white">{trade.symbol} · {String(trade.direction).toUpperCase()}</div>
                         <div className="mt-1 text-[10px] text-slate-500">{trade.strategy_name || trade.strategy || "unknown"} · {formatBdt(trade.closed_at)}</div>
                       </td>
-                      <td className="px-4 py-3">
-                        <span className={`rounded-full border px-2 py-1 text-[10px] ${pnl > 0 ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-300" : pnl < 0 ? "border-rose-500/20 bg-rose-500/10 text-rose-300" : "border-slate-700 text-slate-300"}`}>
-                          {resultFromPnl(pnl)}
-                        </span>
-                      </td>
+                      <td className="px-4 py-3"><span className="rounded-full border border-slate-700 px-2 py-1 text-[10px] text-slate-300">{resultFromPnl(pnl)}</span></td>
                       <td className="px-4 py-3 text-right font-mono">
                         <div className={pnl < 0 ? "text-rose-300" : "text-emerald-300"}>{formatMoney(pnl)}</div>
                         <div className="mt-1 text-[10px] text-slate-500">fee {formatMoney(trade.fees)}</div>
@@ -246,10 +231,11 @@ export default function PerformanceStrategy({ authToken, history: _history, metr
       </section>
 
       <section className="rounded-2xl border border-slate-800 bg-bento-card p-4 text-xs text-slate-400 shadow-md">
-        <div className="grid gap-2 md:grid-cols-3">
+        <div className="grid gap-2 md:grid-cols-4">
           <TruthLine label="Dashboard daily source" value={metrics.today_financial_source} />
           <TruthLine label="Dashboard account net" value={formatMoney(metrics.today_account_net_pnl)} />
           <TruthLine label="Journal reconciliation gap" value={metrics.reconciliation_gap === null ? "N/A" : formatMoney(metrics.reconciliation_gap)} />
+          <TruthLine label="Audit ledger matches" value={String(strategyAudit?.summary.ledger_matched_trades ?? 0)} />
         </div>
       </section>
     </div>
@@ -257,25 +243,10 @@ export default function PerformanceStrategy({ authToken, history: _history, metr
 }
 
 function Kpi({ label, value, icon, tone = "neutral" }: { label: string; value: string; icon: ReactNode; tone?: "neutral" | "good" | "warn" | "bad" }) {
-  const tones = {
-    neutral: "text-slate-300",
-    good: "text-emerald-300",
-    warn: "text-amber-300",
-    bad: "text-rose-300",
-  };
-  return (
-    <div className="rounded-2xl border border-slate-800 bg-bento-card p-4 shadow-md">
-      <div className={`flex items-center gap-2 ${tones[tone]}`}>{icon}<span className="text-[10px] uppercase tracking-wider">{label}</span></div>
-      <div className="mt-3 text-xl font-bold text-white">{value}</div>
-    </div>
-  );
+  const tones = { neutral: "text-slate-300", good: "text-emerald-300", warn: "text-amber-300", bad: "text-rose-300" };
+  return <div className="rounded-2xl border border-slate-800 bg-bento-card p-4 shadow-md"><div className={`flex items-center gap-2 ${tones[tone]}`}>{icon}<span className="text-[10px] uppercase tracking-wider">{label}</span></div><div className="mt-3 text-xl font-bold text-white">{value}</div></div>;
 }
 
 function TruthLine({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-xl border border-slate-800 bg-[#0A0B0E] p-3">
-      <div className="text-[10px] uppercase tracking-wider text-slate-500">{label}</div>
-      <div className="mt-1 font-mono text-slate-200">{value}</div>
-    </div>
-  );
+  return <div className="rounded-xl border border-slate-800 bg-[#0A0B0E] p-3"><div className="text-[10px] uppercase tracking-wider text-slate-500">{label}</div><div className="mt-1 font-mono text-slate-200">{value}</div></div>;
 }
