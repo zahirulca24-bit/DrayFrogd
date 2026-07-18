@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import unittest
 
-from app.performance_truth import annotate_trade_truth, filter_performance_trades, performance_decision
+from app.performance_truth import (
+    annotate_trade_truth,
+    filter_performance_trades,
+    journal_daily_financial_eligible,
+    performance_decision,
+)
 
 
 class PerformanceTruthTests(unittest.TestCase):
@@ -33,19 +38,19 @@ class PerformanceTruthTests(unittest.TestCase):
         self.assertEqual(annotated["trade_count_reason"], "exchange_active")
 
     def test_rejected_order_is_excluded_from_every_financial_count(self) -> None:
-        annotated = annotate_trade_truth(
-            {
-                "status": "closed",
-                "result": "execution_failed",
-                "close_reason": "ORDER_NOT_ACCEPTED",
-                "exit_price": None,
-                "realized_pnl": None,
-                "fees": None,
-                "exchange_metadata": {},
-            }
-        )
+        trade = {
+            "status": "closed",
+            "result": "execution_failed",
+            "close_reason": "ORDER_NOT_ACCEPTED",
+            "exit_price": None,
+            "realized_pnl": None,
+            "fees": None,
+            "exchange_metadata": {},
+        }
+        annotated = annotate_trade_truth(trade)
         self.assertFalse(annotated["counts_as_trade"])
         self.assertFalse(annotated["performance_eligible"])
+        self.assertFalse(journal_daily_financial_eligible(trade))
         self.assertEqual(annotated["performance_exclusion_reason"], "order_rejected_or_not_accepted")
 
     def test_sync_pending_trade_is_not_performance_eligible(self) -> None:
@@ -59,7 +64,19 @@ class PerformanceTruthTests(unittest.TestCase):
         trade["fees"] = None
         decision = performance_decision(trade)
         self.assertFalse(decision["eligible"])
+        self.assertFalse(journal_daily_financial_eligible(trade))
         self.assertEqual(decision["reason"], "missing_fees")
+
+    def test_complete_legacy_closed_row_can_be_explicit_daily_fallback_only(self) -> None:
+        trade = {
+            "status": "closed",
+            "closed_at": "2026-07-18T01:00:00+00:00",
+            "realized_pnl": 5.25,
+            "fees": 0.75,
+            "exchange_metadata": {},
+        }
+        self.assertTrue(journal_daily_financial_eligible(trade))
+        self.assertFalse(performance_decision(trade)["eligible"])
 
     def test_exact_authoritative_close_is_eligible(self) -> None:
         annotated = annotate_trade_truth(self.authoritative_closed_trade())
