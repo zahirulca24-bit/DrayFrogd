@@ -4,6 +4,7 @@ from starlette.responses import JSONResponse
 
 from app.auth import verify_session_token
 from app.database import SessionLocal
+from app.entry_authority_runtime import ENTRY_AUTHORITY_DRY_RUN_PATH, handle_entry_authority_dry_run
 from app.models import UserSession
 
 
@@ -11,6 +12,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
     protected_paths = {
         "/session/verify",
         "/account",
+        ENTRY_AUTHORITY_DRY_RUN_PATH,
     }
 
     async def dispatch(self, request: Request, call_next):
@@ -42,6 +44,9 @@ class AuthMiddleware(BaseHTTPMiddleware):
                     request.state.session = payload
             except (RuntimeError, ValueError):
                 request.state.session = None
+
+        if request.url.path == ENTRY_AUTHORITY_DRY_RUN_PATH:
+            return await handle_entry_authority_dry_run(request)
 
         if request.url.path in self.protected_paths and request.state.session is None:
             return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
