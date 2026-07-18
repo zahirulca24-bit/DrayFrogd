@@ -89,7 +89,9 @@ export default function ActiveTrades({ authToken, trades, tradeHistory, account,
 
   const todayClosedTrades = useMemo(() => tradeHistory.filter((trade) => isTodayInBdt(trade.closedAt)), [tradeHistory]);
   const liveTrades = trades as LiveTrade[];
-  const todaysOpen = useMemo(() => liveTrades.filter((trade) => isTodayInBdt(trade.timestamp)).length, [liveTrades]);
+  const activeOpenedToday = useMemo(() => liveTrades.filter((trade) => isTodayInBdt(trade.timestamp)), [liveTrades]);
+  const todaysOpened = todayClosedTrades.length + activeOpenedToday.length;
+  const activeNow = liveTrades.length;
   const todaysClosed = todayClosedTrades.length;
   const todaysSlHit = todayClosedTrades.filter((trade) => trade.result === "LOSS").length;
   const todaysTpHit = todayClosedTrades.filter((trade) => trade.result === "PROFIT").length;
@@ -180,7 +182,7 @@ export default function ActiveTrades({ authToken, trades, tradeHistory, account,
           </div>
           <div className="text-right text-[10px] font-mono text-slate-400">
             <div>BDT {formatBdtDateTime(new Date())}</div>
-            <div className="mt-1">Live metrics: {liveMetricCount}/{liveTrades.length}</div>
+            <div className="mt-1">Live metrics: {liveMetricCount}/{activeNow}</div>
           </div>
         </div>
 
@@ -188,11 +190,11 @@ export default function ActiveTrades({ authToken, trades, tradeHistory, account,
         {actionError && <div className="mt-4 rounded-lg border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-xs text-rose-300">{actionError}</div>}
 
         <div className="grid grid-cols-2 xl:grid-cols-7 gap-3 mt-5">
-          <SummaryCard label="Today's Open" value={String(todaysOpen)} tone="neutral" />
-          <SummaryCard label="Active" value={String(liveTrades.length)} tone="neutral" />
-          <SummaryCard label="Closed" value={String(todaysClosed)} tone="neutral" />
-          <SummaryCard label="SL Hit" value={String(todaysSlHit)} tone="bad" />
-          <SummaryCard label="TP Hit" value={String(todaysTpHit)} tone="good" />
+          <SummaryCard label="Opened Today" value={String(todaysOpened)} tone="neutral" />
+          <SummaryCard label="Active Now" value={String(activeNow)} tone="neutral" />
+          <SummaryCard label="Closed Today" value={String(todaysClosed)} tone="neutral" />
+          <SummaryCard label="SL Today" value={String(todaysSlHit)} tone="bad" />
+          <SummaryCard label="TP Today" value={String(todaysTpHit)} tone="good" />
           <SummaryCard label="Realized PnL" value={formatMoney(todaysRealized)} tone={todaysRealized >= 0 ? "good" : "bad"} />
           <SummaryCard label="Unrealized PnL" value={formatMoney(todaysUnrealized)} tone={todaysUnrealized >= 0 ? "good" : "bad"} />
         </div>
