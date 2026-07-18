@@ -8,12 +8,12 @@ _ORIGINAL_AUTHORITATIVE_EXECUTE: Callable[..., dict[str, Any]] | None = None
 
 
 def install() -> None:
-    """Move the daily-loss gate to the authoritative order-entry boundary.
+    """Place the daily-loss gate on the public production order-entry boundary.
 
-    The first Batch-1 hook wrapped the public execution API too early, before the
-    public spread gate and before existing test seams. This installer restores the
-    public API contract while keeping the Bybit daily-loss authority immediately
-    before the authoritative execution service can reserve/place an order.
+    The public API keeps its existing spread gate and test seam. The underlying
+    execution_service function remains directly testable without exchange-ledger
+    preflight; production callers use app.execution, whose authoritative delegate
+    is guarded immediately before reservation/order placement.
     """
 
     global _INSTALLED, _ORIGINAL_AUTHORITATIVE_EXECUTE
@@ -75,11 +75,12 @@ def install() -> None:
             original_authoritative(client, signal, auto_triggered)
         )
 
-    execution_service.execute_signal = guarded_authoritative_execute
+    # Do not replace execution_service.execute_signal itself: it is the internal
+    # service seam. Only the public execution module's delegate is production-gated.
     execution._execute_signal_authoritatively = guarded_authoritative_execute
 
-    # Restore the existing public execution function so spread validation and the
-    # established patch/test seam remain outside the authoritative order boundary.
+    # Restore the existing public execution function so spread validation remains
+    # outside the authoritative daily-loss/order boundary.
     if safety._ORIGINAL_EXECUTE_SIGNAL is not None:
         execution.execute_signal = safety._ORIGINAL_EXECUTE_SIGNAL
 
