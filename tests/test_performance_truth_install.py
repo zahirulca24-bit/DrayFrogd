@@ -2,10 +2,19 @@ from __future__ import annotations
 
 import unittest
 
-from app.performance_truth_install import _merge_closed_truth, _trade_identity_key
+from app.performance_truth_install import (
+    AuthoritativeTradeHistory,
+    _merge_closed_truth,
+    _trade_identity_key,
+)
 
 
 class PerformanceTruthInstallTests(unittest.TestCase):
+    def test_empty_authoritative_history_is_truthy_to_block_legacy_fallback(self) -> None:
+        history = AuthoritativeTradeHistory()
+        self.assertEqual(list(history), [])
+        self.assertTrue(history)
+
     def test_durable_row_wins_over_duplicate_memory_row(self) -> None:
         durable = {
             "journal_id": "journal-1",
