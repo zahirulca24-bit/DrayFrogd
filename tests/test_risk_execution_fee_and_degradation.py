@@ -99,29 +99,32 @@ class RiskExecutionFeeAndDegradationTests(unittest.TestCase):
             "actual_fill": {},
         }
         with (
-            patch("app.risk_execution._with_profile_runner_target", side_effect=lambda value: dict(value)),
+            patch("app.execution._with_profile_runner_target", side_effect=lambda value: dict(value)),
             patch("app.risk_execution._fee_budget_preflight", return_value={"allowed": True}),
-            patch("app.risk_execution._execution_spread_gate", return_value={"allowed": True}),
+            patch("app.execution._execution_spread_gate", return_value={"allowed": True}),
             patch("app.risk_execution._execute_signal_authoritatively", return_value=result),
-            patch("app.risk_execution._validate_actual_fill_costs", return_value={"allowed": True}),
+            patch("app.execution._validate_actual_fill_costs", return_value={"allowed": True}),
+            patch("app.execution._apply_management_profile", return_value={"ok": True, "trade": dict(TRADE)}),
             patch(
-                "app.risk_execution.install_native_profit_orders",
+                "app.execution.install_native_profit_orders",
                 return_value={"ok": False, "error": "partial TP below minimum notional"},
             ),
-            patch("app.risk_execution.update_trade_entry", return_value=dict(TRADE)),
-            patch("app.risk_execution.update_active_trade") as update_active,
-            patch("app.risk_execution.append_trade_event"),
-            patch("app.risk_execution._emergency_close_pending_sync") as emergency_close,
+            patch("app.execution.cancel_native_profit_orders") as cancel_orders,
+            patch("app.execution.update_trade_entry", return_value=dict(TRADE)),
+            patch("app.execution.update_active_trade") as update_active,
+            patch("app.execution.append_trade_event"),
+            patch("app.execution._emergency_close_pending_sync") as emergency_close,
         ):
             outcome = risk_execution.execute_signal(FakeClient(), SIGNAL, True)
 
-        self.assertTrue(outcome["ok"])
+        self.assertTrue(outcome["ok"], outcome)
         self.assertTrue(outcome["degraded"])
         self.assertEqual(outcome["trade"]["status"], "active")
         self.assertEqual(
             outcome["trade"]["management"]["fallback_mode"],
             "verified_full_position_sl_tp",
         )
+        cancel_orders.assert_called_once()
         emergency_close.assert_not_called()
         update_active.assert_called_once()
 
@@ -139,28 +142,29 @@ class RiskExecutionFeeAndDegradationTests(unittest.TestCase):
             "native_orders": {"tp1": {}, "tp2": {}},
         }
         with (
-            patch("app.risk_execution._with_profile_runner_target", side_effect=lambda value: dict(value)),
+            patch("app.execution._with_profile_runner_target", side_effect=lambda value: dict(value)),
             patch("app.risk_execution._fee_budget_preflight", return_value={"allowed": True}),
-            patch("app.risk_execution._execution_spread_gate", return_value={"allowed": True}),
+            patch("app.execution._execution_spread_gate", return_value={"allowed": True}),
             patch("app.risk_execution._execute_signal_authoritatively", return_value=result),
-            patch("app.risk_execution._validate_actual_fill_costs", return_value={"allowed": True}),
+            patch("app.execution._validate_actual_fill_costs", return_value={"allowed": True}),
+            patch("app.execution._apply_management_profile", return_value={"ok": True, "trade": dict(TRADE)}),
             patch(
-                "app.risk_execution.install_native_profit_orders",
+                "app.execution.install_native_profit_orders",
                 return_value={
                     "ok": True,
                     "management": management,
                     "orders": {"tp1": {"order_id": "1"}, "tp2": {"order_id": "2"}},
                 },
             ),
-            patch("app.risk_execution.update_trade_entry", return_value=None),
-            patch("app.risk_execution.cancel_native_profit_orders") as cancel_orders,
-            patch("app.risk_execution.update_active_trade"),
-            patch("app.risk_execution.append_trade_event"),
-            patch("app.risk_execution._emergency_close_pending_sync") as emergency_close,
+            patch("app.execution.update_trade_entry", return_value=None),
+            patch("app.execution.cancel_native_profit_orders") as cancel_orders,
+            patch("app.execution.update_active_trade"),
+            patch("app.execution.append_trade_event"),
+            patch("app.execution._emergency_close_pending_sync") as emergency_close,
         ):
             outcome = risk_execution.execute_signal(FakeClient(), SIGNAL, True)
 
-        self.assertTrue(outcome["ok"])
+        self.assertTrue(outcome["ok"], outcome)
         self.assertTrue(outcome["degraded"])
         self.assertEqual(outcome["trade"]["status"], "active")
         cancel_orders.assert_called_once()
