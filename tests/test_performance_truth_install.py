@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import unittest
 
+from app import execution, metrics
 from app.performance_truth_install import (
     AuthoritativeTradeHistory,
     _merge_closed_truth,
@@ -14,6 +16,10 @@ class PerformanceTruthInstallTests(unittest.TestCase):
         history = AuthoritativeTradeHistory()
         self.assertEqual(list(history), [])
         self.assertTrue(history)
+        self.assertEqual(json.dumps(history), "[]")
+
+    def test_operational_and_metrics_history_use_same_filtered_authority(self) -> None:
+        self.assertIs(execution.get_closed_trades, metrics.get_closed_trades)
 
     def test_durable_row_wins_over_duplicate_memory_row(self) -> None:
         durable = {
