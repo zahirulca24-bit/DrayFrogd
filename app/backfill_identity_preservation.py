@@ -178,13 +178,17 @@ def _merge_evidence_dict(
 
 def _merge_lists(existing: list[Any], incoming: list[Any]) -> list[Any]:
     merged: list[Any] = []
-    seen: set[str] = set()
+    positions: dict[str, int] = {}
     for item in [*existing, *incoming]:
         key = _stable_item_key(item)
-        if key in seen:
+        index = positions.get(key)
+        if index is None:
+            positions[key] = len(merged)
+            merged.append(item)
             continue
-        seen.add(key)
-        merged.append(item)
+        current = merged[index]
+        if isinstance(current, dict) and isinstance(item, dict):
+            merged[index] = _merge_evidence_dict(current, item)
     return merged
 
 
