@@ -85,7 +85,9 @@ def merge_backfill_updates(
             incoming_value = incoming_metadata.get(key)
             if isinstance(existing_value, dict) and isinstance(incoming_value, dict):
                 combined_metadata[key] = _merge_evidence_dict(existing_value, incoming_value)
-            elif key in existing_metadata and key not in incoming_metadata:
+            elif key in existing_metadata and not isinstance(incoming_value, dict):
+                # Identity containers are dictionaries. Ignore malformed/null incoming
+                # values instead of deleting accepted-order or execution evidence.
                 combined_metadata[key] = existing_value
 
         existing_close_sync = (
@@ -106,9 +108,12 @@ def merge_backfill_updates(
 
         original_source = existing_metadata.get("source")
         backfill_source = incoming_metadata.get("source")
+        if original_source:
+            combined_metadata["source"] = original_source
+        if backfill_source and backfill_source != original_source:
+            combined_metadata["backfill_source"] = backfill_source
         if original_source and backfill_source and original_source != backfill_source:
             combined_metadata["original_source"] = original_source
-            combined_metadata["backfill_source"] = backfill_source
 
         combined_metadata["backfill_identity_preservation"] = {
             "preserved": bool(existing_metadata),
