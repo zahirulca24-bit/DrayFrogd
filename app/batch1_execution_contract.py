@@ -12,8 +12,9 @@ def install() -> None:
 
     The public API keeps its existing spread gate and test seam. The underlying
     execution_service function remains directly testable without exchange-ledger
-    preflight; production callers use app.execution, whose authoritative delegate
-    is guarded immediately before reservation/order placement.
+    preflight; production callers use the installed public executor, whose
+    authoritative delegate is guarded immediately before reservation/order
+    placement.
     """
 
     global _INSTALLED, _ORIGINAL_AUTHORITATIVE_EXECUTE
@@ -75,23 +76,16 @@ def install() -> None:
             original_authoritative(client, signal, auto_triggered)
         )
 
-    # Do not replace execution_service.execute_signal itself: it is the internal
-    # service seam. Only the public execution module's delegate is production-gated.
+    # The authoritative internal delegate remains protected by the existing
+    # daily-loss authority. The installed public executor adds fee-budget and
+    # protected-position degradation rules around this guarded delegate.
     execution._execute_signal_authoritatively = guarded_authoritative_execute
 
-    # Restore the existing public execution function so spread validation remains
-    # outside the authoritative daily-loss/order boundary.
-    if safety._ORIGINAL_EXECUTE_SIGNAL is not None:
-        execution.execute_signal = safety._ORIGINAL_EXECUTE_SIGNAL
+    import app.risk_execution as risk_execution
 
-    # These modules imported the temporary outer wrapper during Batch-1 install.
-    # Rebind them to the restored public API; it now calls the guarded inner path.
-    try:
-        import app.risk_execution as risk_execution
+    execution.execute_signal = risk_execution.execute_signal
 
-        risk_execution.execute_signal = execution.execute_signal
-    except Exception:
-        pass
+    # Long-lived imports must share the exact same installed executor.
     try:
         import app.background_worker as background_worker
 
