@@ -13,9 +13,6 @@ from app.exchange_journal_backfill import backfill_exchange_journal_lifecycle
 from app.intraday_protection_guard import enforce_intraday_protection
 from app.journal import log_bot_event
 from app.native_profit_reconcile import reconcile_native_profit_orders
-from app.native_profit_orders import (
-    install_native_profit_orders,
-)
 from app.risk import extract_account_equity, refresh_risk_state
 from app.risk_cooldown_sync import sync_loss_cooldowns
 from app.risk_execution import execute_signal
