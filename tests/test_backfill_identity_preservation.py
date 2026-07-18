@@ -92,7 +92,7 @@ class BackfillIdentityPreservationTests(unittest.TestCase):
         self.assertEqual(close_sync["record_count"], 2)
         self.assertEqual(close_sync["realized_pnl"], -4.0)
 
-    def test_same_record_key_deduplicates_richer_backfill_record(self) -> None:
+    def test_same_record_key_deduplicates_and_enriches_backfill_record(self) -> None:
         merged = merge_backfill_updates(
             {
                 "strategy_name": "ema_rejection",
@@ -121,6 +121,7 @@ class BackfillIdentityPreservationTests(unittest.TestCase):
         records = merged["exchange_metadata"]["close_sync"]["records"]
         self.assertEqual(len(records), 1)
         self.assertEqual(records[0]["record_key"], "record-1")
+        self.assertEqual(records[0]["fee"], 0.25)
 
     def test_nested_identity_lists_are_unioned(self) -> None:
         merged = merge_backfill_updates(
