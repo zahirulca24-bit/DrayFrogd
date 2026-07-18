@@ -55,8 +55,9 @@ def evaluate_entry_authority(
 ) -> dict[str, Any]:
     """Dry-run entry authority for scalping signals.
 
-    This worker never submits an order. It converts one candidate signal plus one
-    executable quote into an audit decision: APPROVE, MISSED, or REJECT.
+    This worker never submits an exchange trade. It converts one candidate
+    signal plus one executable quote into an audit decision: APPROVE, MISSED,
+    or REJECT.
     """
 
     cfg = config or EntryAuthorityConfig()
@@ -180,7 +181,7 @@ def evaluate_entry_authority_from_client(
 ) -> dict[str, Any]:
     """Fetch live evidence and run the dry-run entry authority.
 
-    No exchange order endpoint is called here.
+    This function uses read-only market-data methods only.
     """
 
     symbol = str(signal.get("symbol") or "").upper().strip()
@@ -231,15 +232,59 @@ def detect_abnormal_spike(candles: list[dict[str, Any]], multiple: float = DEFAU
 
 
 def _fetch_quote(client: Any, symbol: str) -> dict[str, Any]:
-    method = getattr(client, "safe_fetch_ticker", None)
     fetched_at = datetime.now(UTC).isoformat()
-    if callable(method):
-        ok, ticker, error = method(symbol=symbol)
-        if not ok or not ticker:
-            return {"ok": False, "error": error or "Ticker unavailable", "symbol": symbol, "fetched_at": fetched_at}
-        return {"ok": True, "symbol": symbol, "ticker": ticker, "fetched_at": fetched_at}
 
-    return {"ok": False, "error": "safe_fetch_ticker unavailable", "symbol": symbol, "fetched_at": fetched_at}
+    orderbook_method = getattr(client, "safe_fetch_orderbook", None)
+    if callable(orderbook_method):
+        ok, orderbook, error = orderbook_method(symbol=symbol, limit=1)
+        if ok and isinstance(orderbook, dict):
+            bid = _first_book_price(orderbook.get("bids"))
+            ask = _first_book_price(orderbook.get("asks"))
+            if bid is not None or ask is not None:
+                return {
+                    "ok": True,
+                    "symbol": symbol,
+                    "fetched_at": fetched_at,
+                    "source": "orderbook",
+                    "ticker": {
+                        "bid1Price": bid,
+                        "ask1Price": ask,
+                        "markPrice": None,
+                        "lastPrice": None,
+                    },
+                }
+        if error and not hasattr(client, "safe_fetch_market_tickers"):
+            return {"ok": False, "error": error, "symbol": symbol, "fetched_at": fetched_at, "source": "orderbook"}
+
+    ticker_method = getattr(client, "safe_fetch_ticker", None)
+    if callable(ticker_method):
+        ok, ticker, error = ticker_method(symbol=symbol)
+        if ok and ticker:
+            return {"ok": True, "symbol": symbol, "ticker": ticker, "fetched_at": fetched_at, "source": "ticker"}
+        if error and not hasattr(client, "safe_fetch_market_tickers"):
+            return {"ok": False, "error": error, "symbol": symbol, "fetched_at": fetched_at, "source": "ticker"}
+
+    market_tickers_method = getattr(client, "safe_fetch_market_tickers", None)
+    if callable(market_tickers_method):
+        ok, tickers, error = market_tickers_method()
+        if ok and isinstance(tickers, list):
+            for item in tickers:
+                if str(item.get("symbol") or "").upper() == symbol:
+                    return {"ok": True, "symbol": symbol, "ticker": item, "fetched_at": fetched_at, "source": "market_tickers"}
+        return {"ok": False, "error": error or "Symbol ticker unavailable", "symbol": symbol, "fetched_at": fetched_at, "source": "market_tickers"}
+
+    return {"ok": False, "error": "No supported market data method available", "symbol": symbol, "fetched_at": fetched_at}
+
+
+def _first_book_price(levels: Any) -> float | None:
+    if not isinstance(levels, list) or not levels:
+        return None
+    first = levels[0]
+    if isinstance(first, dict):
+        return _positive_float(first.get("price") or first.get("p"))
+    if isinstance(first, (list, tuple)) and first:
+        return _positive_float(first[0])
+    return None
 
 
 def _normalize_signal(signal: dict[str, Any]) -> dict[str, Any] | None:
@@ -273,8 +318,8 @@ def _normalize_quote(quote: dict[str, Any], direction: str, now: datetime) -> di
     if not quote.get("ok", True):
         return None
     ticker = quote.get("ticker") if isinstance(quote.get("ticker"), dict) else quote
-    bid = _positive_float(ticker.get("bid1Price") or ticker.get("bid"))
-    ask = _positive_float(ticker.get("ask1Price") or ticker.get("ask"))
+    bid = _positive_float(ticker.get("bid1Price") or ticker.get("bid") or ticker.get("bidPrice"))
+    ask = _positive_float(ticker.get("ask1Price") or ticker.get("ask") or ticker.get("askPrice"))
     fallback = _positive_float(ticker.get("markPrice") or ticker.get("lastPrice") or ticker.get("price"))
     executable = ask if direction == "long" else bid
     if executable is None:
