@@ -67,9 +67,7 @@ def performance_decision(trade: dict[str, Any]) -> dict[str, Any]:
     close_sync = metadata.get("close_sync") if isinstance(metadata.get("close_sync"), dict) else {}
     source = str(close_sync.get("source") or "").strip().lower()
 
-    result = str(trade.get("result") or "").strip().lower()
-    close_reason = str(trade.get("close_reason") or "").strip().lower()
-    if (result in REJECTED_RESULTS or close_reason in REJECTED_CLOSE_REASONS) and source not in AUTHORITATIVE_CLOSE_SOURCES:
+    if _is_rejected(trade) and source not in AUTHORITATIVE_CLOSE_SOURCES:
         return _decision(False, "order_rejected_or_not_accepted", source)
 
     missing_fields = [
@@ -94,8 +92,24 @@ def performance_decision(trade: dict[str, Any]) -> dict[str, Any]:
     return _decision(True, "financially_reconciled", source)
 
 
+def journal_daily_financial_eligible(trade: dict[str, Any]) -> bool:
+    """Allow complete legacy Journal fallback without admitting rejected/incomplete rows."""
+
+    if normalize_status(trade.get("status")) != "closed":
+        return True
+    if _is_rejected(trade):
+        return False
+    return _number(trade.get("realized_pnl")) is not None and _number(trade.get("fees")) is not None
+
+
 def filter_performance_trades(trades: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [annotated for trade in trades if (annotated := annotate_trade_truth(trade))["performance_eligible"]]
+
+
+def _is_rejected(trade: dict[str, Any]) -> bool:
+    result = str(trade.get("result") or "").strip().lower()
+    close_reason = str(trade.get("close_reason") or "").strip().lower()
+    return result in REJECTED_RESULTS or close_reason in REJECTED_CLOSE_REASONS
 
 
 def _has_close_identity(close_sync: dict[str, Any], records: list[Any]) -> bool:
