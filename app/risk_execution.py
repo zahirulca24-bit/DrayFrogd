@@ -1,50 +1,60 @@
 """Automatic execution boundary with fee-budget and post-fill degradation guards.
 
-The authoritative order/fill/protection path remains in ``execution_service``.
-This module adds two controls used by the background worker:
+This module becomes the installed public executor after the existing Batch-1
+safety contract has wrapped ``app.execution._execute_signal_authoritatively``.
+It therefore preserves the daily-loss authority and all authoritative risk,
+reservation, sizing, fill, and protection checks while adding two controls:
 
-1. Reject high-notional entries when estimated round-trip taker fees consume too
+1. Reject automatic entries when estimated round-trip taker fees consume too
    much of the fixed risk budget.
-2. Keep an already protected position active when optional native partial-TP
-   installation or persistence fails, instead of immediately paying a second
-   market-order fee to close it.
+2. Do not immediately market-close a position merely because optional partial
+   take-profit automation failed, provided full-position SL/TP protection was
+   already verified from the exchange.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
+import app.execution as public_execution
 from app.config import settings
-from app.execution import (
-    _execution_spread_gate,
-    _validate_actual_fill_costs,
-    _with_profile_runner_target,
-)
-from app.execution_core import get_active_trades, update_active_trade
-from app.execution_service import (
-    _emergency_close_pending_sync,
-    execute_signal as _execute_signal_authoritatively,
-)
-from app.journal import append_trade_event, update_trade_entry
-from app.native_profit_orders import cancel_native_profit_orders, install_native_profit_orders
+from app.execution_core import get_active_trades
 from app.position_sizing import calculate_position_size
 from app.risk import extract_account_equity, validate_trade
 
 
+def _execute_signal_authoritatively(
+    client: Any,
+    signal: dict[str, Any],
+    auto_triggered: bool = False,
+) -> dict[str, Any]:
+    """Use the currently installed guarded authoritative delegate."""
+
+    return public_execution._execute_signal_authoritatively(client, signal, auto_triggered)
+
+
 def execute_signal(client: Any, signal: dict[str, Any], auto_triggered: bool = False) -> dict[str, Any]:
-    """Execute an automatic signal without fee-bleed or optional-setup panic closes."""
+    """Execute without high-fee entries or optional-setup panic closes."""
 
-    profiled_signal = _with_profile_runner_target(signal)
-    fee_gate = _fee_budget_preflight(client, profiled_signal)
-    if not fee_gate.get("allowed"):
-        return {
-            "ok": False,
-            "error": fee_gate.get("error") or "FEE_BUDGET_EXCEEDED",
-            "detail": fee_gate.get("reason"),
-            "fee_budget": fee_gate,
-        }
+    profiled_signal = public_execution._with_profile_runner_target(signal)
+    fee_gate: dict[str, Any] = {
+        "allowed": True,
+        "status": "NOT_REQUIRED_FOR_MANUAL_EXECUTION",
+    }
+    if auto_triggered:
+        fee_gate = _fee_budget_preflight(client, profiled_signal)
+        if not fee_gate.get("allowed"):
+            return {
+                "ok": False,
+                "error": fee_gate.get("error") or "FEE_BUDGET_EXCEEDED",
+                "detail": fee_gate.get("reason"),
+                "fee_budget": fee_gate,
+            }
 
-    spread_gate = _execution_spread_gate(client, str(profiled_signal.get("symbol") or "").upper())
+    spread_gate = public_execution._execution_spread_gate(
+        client,
+        str(profiled_signal.get("symbol") or "").upper(),
+    )
     if not spread_gate.get("allowed"):
         return {
             "ok": False,
@@ -78,7 +88,7 @@ def execute_signal(client: Any, signal: dict[str, Any], auto_triggered: bool = F
     if not trade:
         return {"ok": False, "error": "ACTIVE_TRADE_PAYLOAD_UNAVAILABLE", **result}
 
-    actual_fill_costs = _validate_actual_fill_costs(result, trade)
+    actual_fill_costs = public_execution._validate_actual_fill_costs(result, trade)
     metadata = trade.get("exchange_metadata") if isinstance(trade.get("exchange_metadata"), dict) else {}
     trade = {
         **trade,
@@ -106,14 +116,71 @@ def execute_signal(client: Any, signal: dict[str, Any], auto_triggered: bool = F
     if actual_fill_costs.get("warning"):
         result["execution_economics_warning"] = actual_fill_costs["warning"]
 
-    native_setup = install_native_profit_orders(client, trade)
-    if not native_setup.get("ok"):
-        return _keep_protected_trade_active(
-            trade=trade,
+    profiled = public_execution._apply_management_profile(client, trade, spread_gate)
+    if not profiled.get("ok"):
+        candidate = profiled.get("trade") if isinstance(profiled.get("trade"), dict) else trade
+        detail = str(profiled.get("error") or "Trade management profile could not be installed and verified.")
+        if _has_verified_full_position_protection(candidate):
+            return _keep_protected_trade_active(
+                trade=candidate,
+                result=result,
+                error="MANAGEMENT_PROFILE_INSTALLATION_FAILED",
+                detail=detail,
+                spread_gate=spread_gate,
+            )
+        return _hard_safety_close(
+            client=client,
+            trade=candidate,
+            error="MANAGEMENT_PROFILE_INSTALLATION_FAILED",
+            detail=detail,
             result=result,
+        )
+
+    trade = profiled["trade"]
+    managed_target_costs = public_execution._validate_actual_fill_costs(result, trade)
+    managed_metadata = trade.get("exchange_metadata") if isinstance(trade.get("exchange_metadata"), dict) else {}
+    trade = {
+        **trade,
+        "exchange_metadata": {
+            **managed_metadata,
+            "managed_target_cost_validation": managed_target_costs,
+            "fee_budget_preflight": fee_gate,
+        },
+    }
+    result["trade"] = trade
+    result["managed_target_cost_validation"] = managed_target_costs
+    if not managed_target_costs.get("allowed"):
+        return _hard_safety_close(
+            client=client,
+            trade=trade,
+            error="MANAGED_TARGET_COST_VIOLATION",
+            detail=str(
+                managed_target_costs.get("reason")
+                or "Final managed target failed fee-inclusive Net RR validation."
+            ),
+            result=result,
+        )
+    if managed_target_costs.get("warning"):
+        result["execution_economics_warning"] = managed_target_costs["warning"]
+
+    native_setup = public_execution.install_native_profit_orders(client, trade)
+    if not native_setup.get("ok"):
+        public_execution.cancel_native_profit_orders(client, trade)
+        detail = str(native_setup.get("error") or "Exchange-native TP1/TP2 orders could not be installed.")
+        if _has_verified_full_position_protection(trade):
+            return _keep_protected_trade_active(
+                trade=trade,
+                result=result,
+                error="NATIVE_TP_INSTALLATION_FAILED",
+                detail=detail,
+                spread_gate=spread_gate,
+            )
+        return _hard_safety_close(
+            client=client,
+            trade=trade,
             error="NATIVE_TP_INSTALLATION_FAILED",
-            detail=str(native_setup.get("error") or "Exchange-native TP1/TP2 orders could not be installed."),
-            spread_gate=spread_gate,
+            detail=detail,
+            result=result,
         )
 
     management = dict(native_setup.get("management") or {})
@@ -131,11 +198,12 @@ def execute_signal(client: Any, signal: dict[str, Any], auto_triggered: bool = F
             "management": management,
             "native_profit_orders": orders,
             "execution_spread": spread_gate,
+            "fee_budget_preflight": fee_gate,
         },
     }
     journal_id = str(updated_trade.get("journal_id") or "")
     try:
-        persisted = update_trade_entry(
+        persisted = public_execution.update_trade_entry(
             journal_id,
             {
                 "status": "active",
@@ -150,16 +218,25 @@ def execute_signal(client: Any, signal: dict[str, Any], auto_triggered: bool = F
         persist_error = "journal entry not found" if persisted is None else ""
 
     if persisted is None:
-        cancel_native_profit_orders(client, updated_trade)
-        return _keep_protected_trade_active(
+        public_execution.cancel_native_profit_orders(client, updated_trade)
+        detail = persist_error or "Native TP state could not be persisted."
+        if _has_verified_full_position_protection(updated_trade):
+            return _keep_protected_trade_active(
+                trade=updated_trade,
+                result=result,
+                error="NATIVE_TP_STATE_PERSIST_FAILED",
+                detail=detail,
+                spread_gate=spread_gate,
+            )
+        return _hard_safety_close(
+            client=client,
             trade=updated_trade,
-            result=result,
             error="NATIVE_TP_STATE_PERSIST_FAILED",
-            detail=persist_error or "Native TP state could not be persisted.",
-            spread_gate=spread_gate,
+            detail=detail,
+            result=result,
         )
 
-    update_active_trade(
+    public_execution.update_active_trade(
         journal_id,
         {
             "status": "active",
@@ -269,7 +346,7 @@ def _hard_safety_close(
     detail: str,
     result: dict[str, Any],
 ) -> dict[str, Any]:
-    safe_result = _emergency_close_pending_sync(
+    safe_result = public_execution._emergency_close_pending_sync(
         client=client,
         trade=trade,
         error=error,
@@ -278,7 +355,7 @@ def _hard_safety_close(
     )
     updated_trade = safe_result.get("trade") if isinstance(safe_result.get("trade"), dict) else None
     if updated_trade and updated_trade.get("journal_id"):
-        update_active_trade(
+        public_execution.update_active_trade(
             str(updated_trade["journal_id"]),
             {
                 "status": updated_trade.get("status"),
@@ -290,6 +367,16 @@ def _hard_safety_close(
     return safe_result
 
 
+def _has_verified_full_position_protection(trade: dict[str, Any]) -> bool:
+    metadata = trade.get("exchange_metadata") if isinstance(trade.get("exchange_metadata"), dict) else {}
+    management = trade.get("management") or metadata.get("management") or {}
+    return bool(
+        metadata.get("protection_verified")
+        or metadata.get("profile_protection_verified")
+        or management.get("profile_protection_verified")
+    )
+
+
 def _keep_protected_trade_active(
     *,
     trade: dict[str, Any],
@@ -298,7 +385,16 @@ def _keep_protected_trade_active(
     detail: str,
     spread_gate: dict[str, Any],
 ) -> dict[str, Any]:
-    """Degrade optional partial-TP automation without closing a protected position."""
+    """Degrade optional automation only when exchange SL/TP is proven."""
+
+    if not _has_verified_full_position_protection(trade):
+        return {
+            **result,
+            "ok": False,
+            "error": "PROTECTION_EVIDENCE_UNAVAILABLE",
+            "detail": detail,
+            "trade": trade,
+        }
 
     metadata = trade.get("exchange_metadata") if isinstance(trade.get("exchange_metadata"), dict) else {}
     management = trade.get("management") or metadata.get("management") or {}
@@ -328,7 +424,7 @@ def _keep_protected_trade_active(
     journal_id = str(degraded.get("journal_id") or "")
     persist_warning = None
     try:
-        persisted = update_trade_entry(
+        persisted = public_execution.update_trade_entry(
             journal_id,
             {
                 "status": "active",
@@ -342,7 +438,7 @@ def _keep_protected_trade_active(
         persist_warning = str(exc)
 
     if journal_id:
-        update_active_trade(
+        public_execution.update_active_trade(
             journal_id,
             {
                 "status": "active",
@@ -387,7 +483,7 @@ def _safe_trade_event(
     if not journal_id:
         return
     try:
-        append_trade_event(journal_id, event_type, message, metadata)
+        public_execution.append_trade_event(journal_id, event_type, message, metadata)
     except Exception:
         pass
 
