@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
+import app.execution as execution
 from app.batch1_execution_safety import (
     enrich_readiness_with_ws,
     get_daily_loss_authority,
@@ -38,6 +39,12 @@ class FakeLedgerClient:
             ],
             None,
         )
+
+
+class FakeWalletClient:
+    @staticmethod
+    def safe_fetch_wallet_balance():
+        return True, {"totalEquity": "1000"}, None
 
 
 class FakeSocket:
@@ -115,6 +122,43 @@ class Batch1ExecutionSafetyTests(unittest.TestCase):
         self.assertAlmostEqual(authority["account_net"], -8.5)
         self.assertAlmostEqual(authority["fees"], 3.5)
         self.assertEqual(authority["trade_count"], 2)
+
+    def test_public_order_boundary_fails_closed_when_daily_authority_is_unavailable(self) -> None:
+        with patch(
+            "app.batch1_execution_safety.get_daily_loss_authority",
+            return_value={
+                "ok": False,
+                "source": "bybit_account_transaction_log",
+                "error": "ledger unavailable",
+            },
+        ):
+            result = execution._execute_signal_authoritatively(object(), {"symbol": "BTCUSDT"})
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"], "DAILY_LOSS_AUTHORITY_UNAVAILABLE")
+        self.assertEqual(result["detail"], "ledger unavailable")
+
+    def test_public_order_boundary_blocks_before_order_when_daily_breaker_is_active(self) -> None:
+        with (
+            patch(
+                "app.batch1_execution_safety.get_daily_loss_authority",
+                return_value={
+                    "ok": True,
+                    "source": "bybit_account_transaction_log",
+                    "trade_net": -55.0,
+                },
+            ),
+            patch(
+                "app.risk.refresh_risk_state",
+                return_value={
+                    "circuit_breaker_active": True,
+                    "circuit_breaker_reason": "Authoritative Bybit daily trade net loss limit reached",
+                },
+            ),
+        ):
+            result = execution._execute_signal_authoritatively(FakeWalletClient(), {"symbol": "BTCUSDT"})
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"], "DAILY_LOSS_CIRCUIT_BREAKER")
+        self.assertIn("Authoritative Bybit", result["detail"])
 
     def test_private_execution_callback_routes_records_to_persistence(self) -> None:
         service = BybitWebSocketService()
