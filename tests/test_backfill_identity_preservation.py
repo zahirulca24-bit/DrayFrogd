@@ -51,7 +51,7 @@ class BackfillIdentityPreservationTests(unittest.TestCase):
         self.assertEqual(metadata["backfill_source"], "exchange_transaction_log_backfill")
         self.assertTrue(metadata["backfill_identity_preservation"]["preserved"])
 
-    def test_existing_close_sync_fields_are_enriched_not_deleted(self) -> None:
+    def test_existing_close_sync_evidence_is_unioned_not_deleted(self) -> None:
         existing = {
             "strategy_name": "ema_rejection",
             "exchange_metadata": {
@@ -59,6 +59,7 @@ class BackfillIdentityPreservationTests(unittest.TestCase):
                     "identity_match": "exact",
                     "matched_close_order_ids": ["close-1"],
                     "record_keys": ["old-record"],
+                    "records": [{"record_key": "old-record", "exec_id": "exec-1"}],
                 }
             },
         }
@@ -66,7 +67,10 @@ class BackfillIdentityPreservationTests(unittest.TestCase):
             "strategy_name": "exchange_backfill",
             "exchange_metadata": {
                 "close_sync": {
+                    "identity_match": "legacy_single_trade",
+                    "matched_close_order_ids": ["close-2"],
                     "record_keys": ["new-record"],
+                    "records": [{"record_key": "new-record", "exec_id": "exec-2"}],
                     "realized_pnl": -4.0,
                 }
             },
@@ -76,9 +80,38 @@ class BackfillIdentityPreservationTests(unittest.TestCase):
         close_sync = merged["exchange_metadata"]["close_sync"]
 
         self.assertEqual(close_sync["identity_match"], "exact")
-        self.assertEqual(close_sync["matched_close_order_ids"], ["close-1"])
-        self.assertEqual(close_sync["record_keys"], ["new-record"])
+        self.assertEqual(close_sync["matched_close_order_ids"], ["close-1", "close-2"])
+        self.assertEqual(close_sync["record_keys"], ["old-record", "new-record"])
+        self.assertEqual(
+            [record["record_key"] for record in close_sync["records"]],
+            ["old-record", "new-record"],
+        )
         self.assertEqual(close_sync["realized_pnl"], -4.0)
+
+    def test_nested_identity_lists_are_unioned(self) -> None:
+        merged = merge_backfill_updates(
+            {
+                "strategy_name": "liquidity_sweep",
+                "exchange_metadata": {
+                    "fill_confirmation": {
+                        "exec_id": "exec-1",
+                        "exec_ids": ["exec-1"],
+                    }
+                },
+            },
+            {
+                "strategy_name": "exchange_backfill",
+                "exchange_metadata": {
+                    "fill_confirmation": {
+                        "exec_ids": ["exec-1", "exec-2"],
+                    }
+                },
+            },
+        )
+
+        fill = merged["exchange_metadata"]["fill_confirmation"]
+        self.assertEqual(fill["exec_id"], "exec-1")
+        self.assertEqual(fill["exec_ids"], ["exec-1", "exec-2"])
 
     def test_exchange_backfill_strategy_is_used_when_original_is_unknown(self) -> None:
         merged = merge_backfill_updates(
