@@ -13,6 +13,9 @@ from app.exchange_journal_backfill import backfill_exchange_journal_lifecycle
 from app.intraday_protection_guard import enforce_intraday_protection
 from app.journal import log_bot_event
 from app.native_profit_reconcile import reconcile_native_profit_orders
+from app.native_profit_orders import (
+    install_native_profit_orders,
+)
 from app.risk import extract_account_equity, refresh_risk_state
 from app.risk_cooldown_sync import sync_loss_cooldowns
 from app.risk_execution import execute_signal
@@ -20,7 +23,7 @@ from app.risk_sync import sync_partial_realized_pnl
 from app.runtime_integration import install_runtime_integration
 from app.runtime_watchdog import run_watchdog_cycle
 from app.scalping_profit_lock_guard import enforce_scalping_tp2_profit_locks
-from app.scanner import get_active_signals, run_scan
+from app.scanner import run_scan
 from app.trade_management import manage_open_trades
 
 
@@ -190,7 +193,10 @@ async def auto_trading_loop() -> None:
                     await asyncio.sleep(settings.bot_scan_interval_seconds)
                     continue
 
-                active_signals = result.get("signals") or get_active_signals()
+                # Only execute signals produced by this scan cycle. Do not fall back
+                # to cached in-memory signals, because cached signals can age past
+                # the Risk Engine freshness window after deploys, restarts or cooldowns.
+                active_signals = list(result.get("signals") or [])
                 for signal in active_signals:
                     try:
                         outcome = await asyncio.to_thread(execute_signal, client, signal, True)
