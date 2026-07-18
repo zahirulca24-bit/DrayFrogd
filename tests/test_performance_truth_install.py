@@ -9,6 +9,7 @@ class PerformanceTruthInstallTests(unittest.TestCase):
     def test_durable_row_wins_over_duplicate_memory_row(self) -> None:
         durable = {
             "journal_id": "journal-1",
+            "order_id": "order-1",
             "status": "closed",
             "realized_pnl": 5.0,
             "fees": 0.5,
@@ -16,6 +17,7 @@ class PerformanceTruthInstallTests(unittest.TestCase):
         }
         stale_memory = {
             "journal_id": "journal-1",
+            "order_id": "order-1",
             "status": "closed",
             "realized_pnl": None,
             "fees": None,
@@ -26,6 +28,23 @@ class PerformanceTruthInstallTests(unittest.TestCase):
         self.assertEqual(len(merged), 1)
         self.assertEqual(merged[0]["realized_pnl"], 5.0)
         self.assertEqual(merged[0]["fees"], 0.5)
+
+    def test_cross_field_identity_deduplicates_stale_memory_row(self) -> None:
+        durable = {
+            "journal_id": "journal-1",
+            "execution_key": "exec-1",
+            "order_id": "order-1",
+            "status": "closed",
+        }
+        memory = {
+            "order_id": "order-1",
+            "status": "closed",
+        }
+
+        merged = _merge_closed_truth([durable], [memory])
+
+        self.assertEqual(len(merged), 1)
+        self.assertEqual(merged[0]["journal_id"], "journal-1")
 
     def test_non_duplicate_memory_row_is_retained(self) -> None:
         durable = {"journal_id": "journal-1", "status": "closed"}
