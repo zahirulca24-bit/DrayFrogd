@@ -46,10 +46,11 @@ class Settings:
     execution_slippage_bps: float = float(os.getenv("EXECUTION_SLIPPAGE_BPS", "2.0"))
     execution_risk_headroom_ratio: float = float(os.getenv("EXECUTION_RISK_HEADROOM_RATIO", "0.90"))
     risk_approval_ttl_seconds: int = int(os.getenv("RISK_APPROVAL_TTL_SECONDS", "20"))
-    # Auto execution must tolerate one or two scan cycles of latency, but it
-    # must not revive old signals after a restart or deploy. Keep this tighter
-    # than the broader position-sizing freshness contract.
-    risk_signal_max_age_seconds: int = int(os.getenv("RISK_SIGNAL_MAX_AGE_SECONDS", "180"))
+    # Bybit kline timestamps are candle-open timestamps. A newly closed 5m trigger
+    # candle can therefore look older than 180s even when the scan is fresh. Keep
+    # this tight enough to avoid stale restart/deploy revival, but wide enough for
+    # closed-candle confirmation plus normal scan/deploy latency.
+    risk_signal_max_age_seconds: int = int(os.getenv("RISK_SIGNAL_MAX_AGE_SECONDS", "420"))
     scanner_universe_limit: int = int(
         os.getenv(
             "SCANNER_UNIVERSE_LIMIT",
