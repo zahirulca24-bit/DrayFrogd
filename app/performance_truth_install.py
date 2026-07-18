@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Callable
+from typing import Any
 
 from app.performance_truth import annotate_trade_truth, filter_performance_trades
 
@@ -30,10 +30,15 @@ def install() -> None:
         return annotate_trade_truth(original_serialize(row))
 
     def get_closed_trade_history(limit: int = 100) -> list[dict[str, Any]]:
-        return filter_performance_trades(original_closed_history(limit=limit))
+        requested = max(int(limit), 1)
+        scan_limit = max(requested * 10, 1000)
+        eligible = filter_performance_trades(original_closed_history(limit=scan_limit))
+        return eligible[:requested]
 
     def get_closed_trades() -> list[dict[str, Any]]:
-        return filter_performance_trades(original_closed_memory())
+        durable = original_closed_history(limit=1000)
+        memory = original_closed_memory()
+        return filter_performance_trades(_merge_closed_truth(durable, memory))
 
     def today_financials(
         trades: list[dict[str, Any]],
@@ -78,3 +83,37 @@ def install() -> None:
 
     journal._P0_1F_PERFORMANCE_TRUTH_INSTALLED = True
     _INSTALLED = True
+
+
+def _merge_closed_truth(
+    durable_rows: list[dict[str, Any]],
+    memory_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Prefer durable Journal evidence and add only non-duplicate memory rows."""
+
+    merged: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for trade in [*durable_rows, *memory_rows]:
+        if not isinstance(trade, dict):
+            continue
+        key = _trade_identity_key(trade)
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(dict(trade))
+    return merged
+
+
+def _trade_identity_key(trade: dict[str, Any]) -> str:
+    for field in ("journal_id", "execution_key", "order_id"):
+        value = str(trade.get(field) or "").strip()
+        if value:
+            return f"{field}:{value}"
+    return "fallback:" + "|".join(
+        [
+            str(trade.get("symbol") or "").upper(),
+            str(trade.get("direction") or "").lower(),
+            str(trade.get("opened_at") or trade.get("detected_at") or ""),
+            str(trade.get("quantity") or ""),
+        ]
+    )
