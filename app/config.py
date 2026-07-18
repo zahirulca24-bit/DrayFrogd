@@ -45,6 +45,11 @@ class Settings:
     execution_taker_fee_bps: float = float(os.getenv("EXECUTION_TAKER_FEE_BPS", "5.5"))
     execution_slippage_bps: float = float(os.getenv("EXECUTION_SLIPPAGE_BPS", "2.0"))
     execution_risk_headroom_ratio: float = float(os.getenv("EXECUTION_RISK_HEADROOM_RATIO", "0.90"))
+    # Reject entries whose estimated entry+stop taker fees consume too much of
+    # the fixed risk budget. This prevents tight-stop, high-notional fee bleed.
+    execution_max_round_trip_fee_risk_ratio: float = float(
+        os.getenv("EXECUTION_MAX_ROUND_TRIP_FEE_RISK_RATIO", "0.10")
+    )
     risk_approval_ttl_seconds: int = int(os.getenv("RISK_APPROVAL_TTL_SECONDS", "20"))
     # Bybit kline timestamps are candle-open timestamps. A newly closed 5m trigger
     # candle can therefore look older than 180s even when the scan is fresh. Keep
