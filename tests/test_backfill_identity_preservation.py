@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from app.backfill_identity_preservation import merge_backfill_updates
+from app.backfill_identity_preservation import _preserving_update, merge_backfill_updates
 
 
 class BackfillIdentityPreservationTests(unittest.TestCase):
@@ -61,6 +61,7 @@ class BackfillIdentityPreservationTests(unittest.TestCase):
                     "matched_close_order_ids": ["close-1"],
                     "record_keys": ["old-record"],
                     "records": [{"record_key": "old-record", "exec_id": "exec-1"}],
+                    "record_count": 1,
                 }
             },
         }
@@ -72,6 +73,7 @@ class BackfillIdentityPreservationTests(unittest.TestCase):
                     "matched_close_order_ids": ["close-2"],
                     "record_keys": ["new-record"],
                     "records": [{"record_key": "new-record", "exec_id": "exec-2"}],
+                    "record_count": 1,
                     "realized_pnl": -4.0,
                 }
             },
@@ -87,7 +89,38 @@ class BackfillIdentityPreservationTests(unittest.TestCase):
             [record["record_key"] for record in close_sync["records"]],
             ["old-record", "new-record"],
         )
+        self.assertEqual(close_sync["record_count"], 2)
         self.assertEqual(close_sync["realized_pnl"], -4.0)
+
+    def test_same_record_key_deduplicates_richer_backfill_record(self) -> None:
+        merged = merge_backfill_updates(
+            {
+                "strategy_name": "ema_rejection",
+                "exchange_metadata": {
+                    "close_sync": {
+                        "records": [{"record_key": "record-1", "exec_id": "exec-1"}],
+                    }
+                },
+            },
+            {
+                "strategy_name": "exchange_backfill",
+                "exchange_metadata": {
+                    "close_sync": {
+                        "records": [
+                            {
+                                "record_key": "record-1",
+                                "exec_id": "exec-1",
+                                "fee": 0.25,
+                            }
+                        ],
+                    }
+                },
+            },
+        )
+
+        records = merged["exchange_metadata"]["close_sync"]["records"]
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["record_key"], "record-1")
 
     def test_nested_identity_lists_are_unioned(self) -> None:
         merged = merge_backfill_updates(
@@ -138,6 +171,28 @@ class BackfillIdentityPreservationTests(unittest.TestCase):
         metadata = merged["exchange_metadata"]
         self.assertEqual(metadata["fill_confirmation"]["exec_id"], "exec-1")
         self.assertEqual(metadata["management"]["tp1_order_id"], "tp1-order-1")
+
+    def test_preserving_update_fails_closed_when_existing_row_cannot_be_read(self) -> None:
+        class MissingBackfill:
+            @staticmethod
+            def get_trade_history(limit: int):
+                return []
+
+        calls: list[tuple[str, dict]] = []
+
+        def original(journal_id: str, updates: dict):
+            calls.append((journal_id, updates))
+            return {"journal_id": journal_id}
+
+        result = _preserving_update(
+            MissingBackfill(),
+            original,
+            "missing-journal",
+            {"status": "closed", "exchange_metadata": {"recovered": True}},
+        )
+
+        self.assertIsNone(result)
+        self.assertEqual(calls, [])
 
     def test_exchange_backfill_strategy_is_used_when_original_is_unknown(self) -> None:
         merged = merge_backfill_updates(
