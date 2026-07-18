@@ -11,14 +11,25 @@ from app.performance_truth import (
 _INSTALLED = False
 
 
+class AuthoritativeTradeHistory(list[dict[str, Any]]):
+    """A serializable list that remains truthy when no eligible closes exist.
+
+    Existing endpoints use ``filtered or legacy_fallback``. Returning a truthy empty
+    list prevents rejected or incomplete legacy rows from re-entering the response.
+    """
+
+    def __bool__(self) -> bool:
+        return True
+
+
 def install() -> None:
-    """Install shared UI annotations and Metrics-only performance filtering."""
+    """Install shared annotations and operational/performance truth filtering."""
 
     global _INSTALLED
     if _INSTALLED:
         return
 
-    from app import journal, metrics
+    from app import execution, journal, metrics
 
     if getattr(journal, "_P0_1F_PERFORMANCE_TRUTH_INSTALLED", False):
         _INSTALLED = True
@@ -32,32 +43,33 @@ def install() -> None:
     def serialize_trade_entry(row: Any) -> dict[str, Any]:
         return annotate_trade_truth(original_serialize(row))
 
-    def metrics_closed_trade_history(limit: int = 100) -> list[dict[str, Any]]:
+    def eligible_closed_history(limit: int = 100) -> AuthoritativeTradeHistory:
         requested = max(int(limit), 1)
         scan_limit = max(requested * 10, 1000)
         eligible = filter_performance_trades(original_closed_history(limit=scan_limit))
-        return eligible[:requested]
+        return AuthoritativeTradeHistory(eligible[:requested])
 
-    def metrics_closed_trades() -> list[dict[str, Any]]:
+    def eligible_closed_trades() -> AuthoritativeTradeHistory:
         durable = original_closed_history(limit=1000)
         memory = original_closed_memory()
-        return filter_performance_trades(_merge_closed_truth(durable, memory))
+        eligible = filter_performance_trades(_merge_closed_truth(durable, memory))
+        return AuthoritativeTradeHistory(eligible)
 
     def today_financials(
         trades: list[dict[str, Any]],
         now: Any,
     ) -> tuple[float, float, int]:
-        safe_rows = [
-            trade
-            for trade in trades
-            if journal_daily_financial_eligible(trade)
-        ]
+        safe_rows = [trade for trade in trades if journal_daily_financial_eligible(trade)]
         return original_today_financials(safe_rows, now)
 
     journal.serialize_trade_entry = serialize_trade_entry
-    metrics.get_closed_trades = metrics_closed_trades
-    metrics.get_closed_trade_history = metrics_closed_trade_history
+
+    # Metrics and the operational /trade-history endpoint must use the same closed
+    # trade authority, while execution_core lifecycle storage remains untouched.
+    metrics.get_closed_trades = eligible_closed_trades
+    metrics.get_closed_trade_history = eligible_closed_history
     metrics._today_financials = today_financials
+    execution.get_closed_trades = eligible_closed_trades
 
     journal._P0_1F_PERFORMANCE_TRUTH_INSTALLED = True
     _INSTALLED = True
