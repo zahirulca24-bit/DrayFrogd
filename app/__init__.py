@@ -5,9 +5,11 @@ from app.execution_fill_evidence import install as _install_execution_fill_evide
 from app.backfill_identity_preservation import install as _install_backfill_identity_preservation
 from app.performance_truth_install import install as _install_performance_truth
 from app.batch1_execution_safety import install as _install_batch1_execution_safety
+from app.batch1_execution_contract import install as _install_batch1_execution_contract
 
 _install_order_identity_autopersist()
 _install_execution_fill_evidence()
 _install_backfill_identity_preservation()
 _install_performance_truth()
 _install_batch1_execution_safety()
+_install_batch1_execution_contract()
