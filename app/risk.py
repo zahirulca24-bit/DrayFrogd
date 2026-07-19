@@ -84,7 +84,7 @@ def validate_trade(signal: dict[str, Any], account_equity: float | None = None) 
     if state["active_trade_count"] >= ACTIVE_TRADE_LIMIT:
         return _reject("Active trade limit reached")
 
-    new_trade_risk = profile["risk_amount"]
+    new_trade_risk = profile["risk_amount"] * state["day_start_equity"]
     if new_trade_risk > state["available_risk"] + 1e-9:
         return _reject(
             f"Dynamic risk capacity exceeded: required {new_trade_risk:.2f} USDT, "
@@ -315,7 +315,7 @@ def refresh_risk_state(
                     name: dict(profile)
                     for name, profile in RISK_PROFILES.items()
                 },
-                "risk_per_trade": RISK_PROFILES["scalping"]["risk_amount"] / (day_start_equity or 1.0),
+                "risk_per_trade": RISK_PROFILES["scalping"]["risk_amount"],
                 "leverage_cap": RISK_PROFILES["scalping"]["leverage_cap"],
                 "exposure_cap": CAPITAL_EXPOSURE_CAP,
                 "max_open_trades": ACTIVE_TRADE_LIMIT,

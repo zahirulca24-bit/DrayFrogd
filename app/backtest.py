@@ -238,10 +238,15 @@ def _resolve_backtest_parameters(
     max_hold_candles: int | None,
 ) -> dict[str, Any]:
     default_risk = float(profile["default_risk_amount"])
+    if default_risk <= 1.0:
+        default_risk_usdt = default_risk * 1000.0
+    else:
+        default_risk_usdt = default_risk
+
     default_rr = float(profile["default_min_risk_reward"])
     default_hold = int(profile["max_hold_candles"])
 
-    selected_risk = default_risk if risk_amount is None else max(float(risk_amount), 1.0)
+    selected_risk = default_risk_usdt if risk_amount is None else max(float(risk_amount), 1.0)
     requested_rr = default_rr if min_risk_reward is None else max(float(min_risk_reward), 0.0)
     selected_rr = max(default_rr, requested_rr)
     requested_hold = default_hold if max_hold_candles is None else max(5, int(max_hold_candles))
