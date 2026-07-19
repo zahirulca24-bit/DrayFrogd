@@ -23,6 +23,7 @@ import {
   TradeHistoryEntry,
   WatchdogSnapshot,
 } from "./types";
+import { normalizeTrade, normalizeTradeHistoryEntry } from "./tradeTruth";
 
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
@@ -160,19 +161,6 @@ type RiskPayload = {
 };
 
 
-function finiteNumber(value: unknown, fallback = 0) {
-  const numeric = Number(value);
-  return Number.isFinite(numeric) ? numeric : fallback;
-}
-
-
-function nullableNumber(value: unknown): number | null {
-  if (value === null || value === undefined || value === "") {
-    return null;
-  }
-  const numeric = Number(value);
-  return Number.isFinite(numeric) ? numeric : null;
-}
 
 
 function toUiSignal(item: BackendSignal, index: number): ExecutableSignal {
@@ -216,94 +204,13 @@ function toUiSignal(item: BackendSignal, index: number): ExecutableSignal {
 }
 
 
-function toUiTrade(item: BackendTrade, index: number): FinancialTrade {
-  const entryPrice = finiteNumber(item.entry);
-  const stopLoss = finiteNumber(item.stop_loss);
-  const takeProfit = finiteNumber(item.take_profit);
-  const size = finiteNumber(item.quantity);
-  const direction = item.direction?.toUpperCase() === "SHORT" ? "SHORT" : "LONG";
-  const rawResult = String(item.result || "").toUpperCase();
-  const exchangeMetadata = (item.exchange_metadata || {}) as Record<string, any>;
-  const management = (exchangeMetadata.management || {}) as Record<string, any>;
-  const exitPrice = nullableNumber(item.exit_price) || 0;
-  const markPrice = nullableNumber(item.mark_price ?? exchangeMetadata.mark_price ?? exchangeMetadata.markPrice);
-  const realizedPnl = nullableNumber(item.realized_pnl);
-  const fees = nullableNumber(item.fees);
-  const margin = nullableNumber(item.position_margin);
-  const leverage = nullableNumber(item.leverage);
-  const unrealizedPnl = nullableNumber(item.unrealized_pnl);
-  const pnlPercent = nullableNumber(item.pnl_percent);
-  const positionValue = nullableNumber(item.position_value);
-  const liquidationPrice = nullableNumber(item.liquidation_price);
-  const positionSynced = Boolean(item.position_synced);
-  const liveMetricsAvailable = Boolean(item.live_metrics_available);
-  const closeAllowed = item.close_allowed === true;
-
-  return {
-    id: item.order_id || item.journal_id || `${item.symbol}-${index}`,
-    pair: item.symbol,
-    strategy: String(item.strategy_name || item.strategy || exchangeMetadata.strategy_name || exchangeMetadata.strategy || "unknown"),
-    direction,
-    entryPrice,
-    currentPrice: item.status === "closed" && exitPrice > 0 ? exitPrice : markPrice || entryPrice,
-    stopLoss,
-    takeProfit,
-    size,
-    margin: margin || 0,
-    leverage: leverage || 0,
-    unrealizedPnl: unrealizedPnl || 0,
-    pnlPercent: pnlPercent || 0,
-    status: item.status === "closed" ? "CLOSED" : "OPEN",
-    timestamp: item.opened_at || item.detected_at || item.closed_at || new Date().toISOString(),
-    orderConfirmed: Boolean(item.order_id),
-    slVerified: item.status !== "protection_pending",
-    tpVerified: item.status !== "protection_pending",
-    positionSynced,
-    isUnsafe: !closeAllowed,
-    orderId: item.order_id,
-    rawStatus: item.status,
-    journalId: item.journal_id,
-    executionMode: item.execution_mode || "demo",
-    result: rawResult === "TP" ? "TP" : rawResult === "SL" ? "SL" : "UNKNOWN",
-    closedAt: item.closed_at || undefined,
-    slHitReason: item.sl_hit_reason ?? null,
-    exitPrice,
-    realizedPnl,
-    fees,
-    closeReason: item.close_reason ?? null,
-    managementTp1: Number(management.tp1 || 0) || undefined,
-    managementTp2: Number(management.tp2 || 0) || undefined,
-    managementRunner: Number(management.runner_target || 0) || undefined,
-    breakEvenSet: Boolean(management.break_even_set),
-    tp1Done: Boolean(management.tp1_done),
-    tp2Done: Boolean(management.tp2_done),
-    liveMetricsAvailable,
-    closeAllowed,
-    closeBlockedReason: item.close_blocked_reason ?? null,
-    liquidationPrice,
-    positionValue,
-  };
+function toUiTrade(item: BackendTrade, index: number): Trade {
+  return normalizeTrade(item, index);
 }
 
 
-function toTradeHistoryEntry(trade: FinancialTrade): TradeHistoryEntry {
-  const exitPrice = Number(trade.exitPrice || 0);
-  const pnlValue = trade.realizedPnl !== null && Number.isFinite(trade.realizedPnl) ? trade.realizedPnl : 0;
-  const outcome =
-    pnlValue > 0 || trade.result === "TP"
-      ? "PROFIT"
-      : pnlValue < 0 || trade.result === "SL"
-      ? "LOSS"
-      : "UNKNOWN";
-
-  return {
-    ...trade,
-    exitPrice,
-    pnl: pnlValue,
-    result: outcome as TradeHistoryEntry["result"],
-    reason: trade.closeReason || trade.slHitReason || "n/a",
-    closedAt: trade.closedAt || trade.timestamp,
-  };
+function toTradeHistoryEntry(trade: Trade): TradeHistoryEntry {
+  return normalizeTradeHistoryEntry(trade);
 }
 
 

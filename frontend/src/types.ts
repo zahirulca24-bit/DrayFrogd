@@ -17,12 +17,12 @@ export interface Trade {
   stopLoss: number;
   takeProfit: number;
   size: number;
-  margin: number;
-  leverage: number;
-  unrealizedPnl: number;
-  pnlPercent: number;
-  status: 'OPEN' | 'CLOSED';
-  timestamp: string;
+  margin: number | null;
+  leverage: number | null;
+  unrealizedPnl: number | null;
+  pnlPercent: number | null;
+  status: 'OPEN' | 'CLOSED' | 'PENDING' | 'ATTENTION' | 'UNKNOWN';
+  timestamp: string | null;
   orderConfirmed?: boolean;
   slVerified?: boolean;
   tpVerified?: boolean;
@@ -31,25 +31,33 @@ export interface Trade {
   orderId?: string;
   rawStatus?: string;
   journalId?: string;
-  executionMode?: 'demo' | 'live';
+  executionMode?: 'demo' | 'live' | null;
   result?: 'TP' | 'SL' | 'UNKNOWN';
-  closedAt?: string;
+  closedAt?: string | null;
   slHitReason?: string | null;
-  exitPrice?: number;
+  exitPrice?: number | null;
+  closeReason?: string | null;
+  realizedPnl?: number | null;
+  fees?: number | null;
+  positionValue?: number | null;
+  liquidationPrice?: number | null;
   managementTp1?: number;
   managementTp2?: number;
   managementRunner?: number;
   breakEvenSet?: boolean;
   tp1Done?: boolean;
   tp2Done?: boolean;
+  liveMetricsAvailable?: boolean;
+  closeAllowed?: boolean;
+  closeBlockedReason?: string | null;
 }
 
 export interface TradeHistoryEntry extends Omit<Trade, 'result' | 'closedAt' | 'exitPrice'> {
-  exitPrice: number;
-  pnl: number;
+  exitPrice: number | null;
+  pnl: number | null;
   result: 'PROFIT' | 'LOSS' | 'FLAT' | 'UNKNOWN';
   reason: string;
-  closedAt: string;
+  closedAt: string | null;
 }
 
 export interface PortfolioMetrics {

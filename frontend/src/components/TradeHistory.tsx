@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import { api } from "../api";
 import { JournalTradeEntry, LedgerAuditResponse, TradeHistoryEntry } from "../types";
+import { normalizeTrade, normalizeTradeHistoryEntry } from "../tradeTruth";
 
 interface TradeHistoryProps {
   authToken: string | null;
@@ -195,7 +196,7 @@ function nestedRecord(value: unknown): Record<string, any> {
 }
 
 function auditStatus(rawValue?: string | null): AuditStatus {
-  const value = String(rawValue || "").toLowerCase();
+  const value = String(rawValue || "").toLowerCase().trim();
   if (value === "closed") return "CLOSED";
   if (value === "close_pending_sync") return "SYNC PENDING";
   if (value === "close_requested") return "CLOSE REQUESTED";
@@ -208,28 +209,14 @@ function auditStatus(rawValue?: string | null): AuditStatus {
   return "UNKNOWN";
 }
 
-function deriveOutcome(
-  realizedPnl: number | null,
-  rawResult?: string | null,
-  isClosed = false,
-): AuditOutcome {
-  if (realizedPnl !== null) {
-    if (realizedPnl > 0) return "PROFIT";
-    if (realizedPnl < 0) return "LOSS";
-    return isClosed ? "FLAT" : "UNKNOWN";
-  }
-  const normalized = String(rawResult || "").toLowerCase();
-  if (normalized === "tp" || normalized === "profit") return "PROFIT";
-  if (normalized === "sl" || normalized === "loss") return "LOSS";
-  if (normalized === "flat" || normalized === "breakeven") return "FLAT";
-  return "UNKNOWN";
-}
-
 function isPendingSyncStatus(status: AuditStatus) {
   return status === "SYNC PENDING" || status === "CLOSE REQUESTED" || status === "UNCERTAIN";
 }
 
 function journalToRow(item: JournalTradeEntry, index: number): JournalRow {
+  const normTrade = normalizeTrade(item, index);
+  const historyEntry = normalizeTradeHistoryEntry(normTrade);
+
   const financial = item as FinancialJournalTrade;
   const metadata = nestedRecord(item.exchange_metadata);
   const manualClose = nestedRecord(metadata.manual_close);
@@ -237,19 +224,15 @@ function journalToRow(item: JournalTradeEntry, index: number): JournalRow {
   const orderResponse = nestedRecord(metadata.order_response);
   const positionSnapshot = nestedRecord(metadata.position_snapshot);
 
-  const entryPrice = numberValue(item.entry);
-  const stopLoss = numberValue(item.stop_loss);
-  const takeProfit = numberValue(item.take_profit);
-  const status = auditStatus(item.status);
-  const isClosed = status === "CLOSED";
-  const pnlValue = nullableNumber(financial.realized_pnl);
-  const exitValue = nullableNumber(financial.exit_price);
-  const feesValue = nullableNumber(financial.fees);
-  const quantityValue = nullableNumber(item.quantity);
-  const outcome = deriveOutcome(pnlValue, item.result, isClosed);
-  const rawStrategy = String(financial.strategy_name || financial.strategy || metadata.strategy_name || metadata.strategy || "unknown");
-  const leverage = nullableNumber(metadata.leverage ?? orderResponse.leverage ?? positionSnapshot.leverage);
-  const executionKey = String(financial.execution_key || metadata.execution_key || "").trim() || null;
+  const isClosed = normTrade.status === "CLOSED";
+  const pnlValue = normTrade.realizedPnl;
+  const exitValue = normTrade.exitPrice;
+  const feesValue = normTrade.fees;
+  const quantityValue = normTrade.size;
+  const outcome = historyEntry.result;
+  const strategy = normTrade.strategy;
+
+  const executionKey = String(metadata.execution_key || "").trim() || null;
   const syncSource = String(closeSync.source || metadata.close_sync_source || "").trim() || null;
   const isExchangeBackfill =
     metadata.source === "exchange_transaction_log_backfill" ||
@@ -257,20 +240,15 @@ function journalToRow(item: JournalTradeEntry, index: number): JournalRow {
     String(financial.close_reason || "").toUpperCase() === "EXCHANGE_TRANSACTION_LOG_BACKFILL" ||
     String(item.journal_id || "").startsWith("exchange-ledger-") ||
     Boolean(executionKey?.startsWith("ledger-"));
-  const strategy = rawStrategy.toLowerCase() === "unknown" && isExchangeBackfill ? "exchange_backfill" : rawStrategy;
+
   const protectionAttachedAt = String(metadata.protection_attached_at || "").trim() || null;
-  const protectionAttached =
-    metadata.protection_attached === true || protectionAttachedAt
-      ? true
-      : item.status === "protection_pending"
-        ? false
-        : null;
-  const closeReason = financial.close_reason || item.sl_hit_reason || (isClosed ? "unknown" : "open");
+  const protectionAttached = normTrade.slVerified === true && normTrade.tpVerified === true;
+  const closeReason = normTrade.closeReason || normTrade.slHitReason || (isClosed ? "unknown" : "open");
   const detectedAt = item.detected_at || null;
   const openedAt = item.opened_at || null;
   const closeRequestedAt = String(manualClose.requested_at || "").trim() || null;
   const closeSyncedAt = String(closeSync.synced_at || "").trim() || null;
-  const closedAt = item.closed_at || null;
+  const closedAt = normTrade.closedAt || null;
   const adoptedPosition = metadata.source === "exchange_position_only";
   const executionFailedBeforeOrder =
     String(item.result || "").toLowerCase() === "execution_failed" &&
@@ -285,9 +263,11 @@ function journalToRow(item: JournalTradeEntry, index: number): JournalRow {
     pnlValue !== null &&
     feesValue !== null &&
     Boolean(syncSource);
+
+  const computedAuditStatus = auditStatus(item.status);
   const needsAttention =
     !executionFailedBeforeOrder && (
-    ["FAILED", "UNCERTAIN", "UNKNOWN"].includes(status) ||
+    ["FAILED", "UNCERTAIN", "UNKNOWN"].includes(computedAuditStatus) ||
     (isClosed && outcome === "UNKNOWN") ||
     missingClosedEvidence ||
     (!isExchangeBackfill && strategy.toLowerCase() === "unknown") ||
@@ -319,31 +299,31 @@ function journalToRow(item: JournalTradeEntry, index: number): JournalRow {
     {
       label: "Protection attached",
       value: protectionAttachedAt,
-      state: protectionAttached === true ? "done" : protectionAttached === false ? "warning" : "missing",
+      state: protectionAttached === true ? "done" : normTrade.slVerified === false ? "warning" : "missing",
       detail:
         protectionAttached === true
           ? "Stop-loss and take-profit attachment was recorded."
-          : protectionAttached === false
+          : normTrade.slVerified === false
             ? "Protection attachment is pending."
             : "Protection evidence was not recorded for this row.",
     },
     {
       label: "Close requested",
       value: closeRequestedAt,
-      state: closeRequestedAt ? "done" : isPendingSyncStatus(status) ? "pending" : "missing",
+      state: closeRequestedAt ? "done" : isPendingSyncStatus(computedAuditStatus) ? "pending" : "missing",
       detail: closeRequestedAt
         ? `Close request ${manualClose.request_id || "recorded"}.`
-        : isPendingSyncStatus(status)
+        : isPendingSyncStatus(computedAuditStatus)
           ? "Close workflow is active; request timestamp is unavailable."
           : "No manual close request recorded.",
     },
     {
       label: "Exact PnL synchronized",
       value: closeSyncedAt,
-      state: closeSyncedAt ? "done" : status === "SYNC PENDING" ? "pending" : isClosed && pnlValue === null ? "warning" : "missing",
+      state: closeSyncedAt ? "done" : computedAuditStatus === "SYNC PENDING" ? "pending" : isClosed && pnlValue === null ? "warning" : "missing",
       detail: closeSyncedAt
         ? `Source: ${syncSource || "Bybit closed PnL"}.`
-        : status === "SYNC PENDING"
+        : computedAuditStatus === "SYNC PENDING"
           ? "Awaiting authoritative exchange close records."
           : isClosed && pnlValue === null
             ? "Closed row has no authoritative realized PnL."
@@ -369,11 +349,11 @@ function journalToRow(item: JournalTradeEntry, index: number): JournalRow {
         ? "Original order ID unavailable because this exchange position was adopted."
         : "Exchange order ID unavailable.",
     executionKey ? `Execution key: ${executionKey}` : "Execution key unavailable.",
-    `Execution mode: ${(item.execution_mode || "demo").toUpperCase()}`,
-    `Current status: ${status}`,
+    `Execution mode: ${(normTrade.executionMode || "unknown").toUpperCase()}`,
+    `Current status: ${computedAuditStatus}`,
     protectionAttached === true
       ? "Protection evidence: attached"
-      : protectionAttached === false
+      : normTrade.slVerified === false
         ? "Protection evidence: pending"
         : "Protection evidence: not recorded",
     syncSource ? `Close PnL source: ${syncSource}` : "Close PnL source unavailable.",
@@ -385,40 +365,42 @@ function journalToRow(item: JournalTradeEntry, index: number): JournalRow {
   ];
 
   return {
-    id: item.order_id || item.journal_id || `${item.symbol}-${index}`,
-    pair: item.symbol,
+    ...historyEntry,
+    id: normTrade.id,
+    pair: normTrade.pair,
     strategy,
-    direction: normalizeDirection(item.direction),
-    entryPrice,
-    currentPrice: exitValue ?? entryPrice,
-    stopLoss,
-    takeProfit,
-    size: quantityValue ?? 0,
-    margin: 0,
-    leverage: leverage ?? 0,
-    unrealizedPnl: 0,
-    pnlPercent: 0,
-    status: isClosed ? "CLOSED" : "OPEN",
-    timestamp: openedAt || detectedAt || closedAt || new Date().toISOString(),
-    orderConfirmed: Boolean(item.order_id),
-    slVerified: protectionAttached === true,
-    tpVerified: protectionAttached === true,
-    positionSynced: Boolean(positionSnapshot.symbol || closeSync.source),
-    orderId: item.order_id || undefined,
-    rawStatus: item.status,
-    journalId: item.journal_id,
-    executionMode: item.execution_mode || "demo",
-    closedAt: closedAt || undefined,
-    slHitReason: item.sl_hit_reason ?? null,
-    exitPrice: exitValue ?? 0,
-    pnl: pnlValue ?? 0,
-    result: outcome as TradeHistoryEntry["result"],
-    reason: closeReason,
-    side: normalizeDirection(item.direction),
-    leverageText: leverage === null ? "N/A" : `${leverage}x`,
-    rrValue: protectionAttached === true ? calcRr(entryPrice, stopLoss, takeProfit) : null,
-    durationText: durationBetween(openedAt || detectedAt, closedAt),
-    auditStatus: status,
+    direction: normTrade.direction,
+    entryPrice: normTrade.entryPrice,
+    currentPrice: normTrade.currentPrice,
+    stopLoss: normTrade.stopLoss,
+    takeProfit: normTrade.takeProfit,
+    size: normTrade.size,
+    margin: normTrade.margin,
+    leverage: normTrade.leverage,
+    unrealizedPnl: normTrade.unrealizedPnl,
+    pnlPercent: normTrade.pnlPercent,
+    status: normTrade.status,
+    timestamp: normTrade.timestamp,
+    orderConfirmed: normTrade.orderConfirmed,
+    slVerified: normTrade.slVerified,
+    tpVerified: normTrade.tpVerified,
+    positionSynced: normTrade.positionSynced,
+    isUnsafe: normTrade.isUnsafe,
+    orderId: normTrade.orderId,
+    rawStatus: normTrade.rawStatus,
+    journalId: normTrade.journalId,
+    executionMode: normTrade.executionMode,
+    closedAt: normTrade.closedAt,
+    slHitReason: normTrade.slHitReason,
+    exitPrice: normTrade.exitPrice,
+    pnl: normTrade.realizedPnl,
+    result: historyEntry.result,
+    reason: historyEntry.reason,
+    side: normTrade.direction,
+    leverageText: normTrade.leverage === null ? "N/A" : `${normTrade.leverage}x`,
+    rrValue: protectionAttached === true ? calcRr(normTrade.entryPrice, normTrade.stopLoss, normTrade.takeProfit) : null,
+    durationText: durationBetween(normTrade.timestamp, normTrade.closedAt),
+    auditStatus: computedAuditStatus,
     outcome,
     pnlValue,
     exitValue,
@@ -427,7 +409,7 @@ function journalToRow(item: JournalTradeEntry, index: number): JournalRow {
     closeReason,
     executionKey,
     syncSource,
-    protectionAttached,
+    protectionAttached: protectionAttached ? true : (normTrade.slVerified === false ? false : null),
     needsAttention,
     countsAsTrade: !executionFailedBeforeOrder,
     isClosed,
@@ -438,49 +420,53 @@ function journalToRow(item: JournalTradeEntry, index: number): JournalRow {
 }
 
 function fallbackToRow(trade: TradeHistoryEntry, index: number): JournalRow {
-  const rawOutcome = String(trade.result || "UNKNOWN").toUpperCase() as AuditOutcome;
-  const pnlValue = trade.pnl !== 0 || rawOutcome === "PROFIT" || rawOutcome === "LOSS" ? trade.pnl : null;
-  const exitValue = trade.exitPrice > 0 ? trade.exitPrice : null;
-  const isClosed = trade.status === "CLOSED";
-  const status: AuditStatus = isClosed ? "CLOSED" : "OPEN";
-  const strategy = trade.strategy || "unknown";
+  const normTrade = normalizeTrade(trade, index);
+  const historyEntry = normalizeTradeHistoryEntry(normTrade);
+
+  const pnlValue = historyEntry.pnl;
+  const exitValue = historyEntry.exitPrice;
+  const isClosed = historyEntry.status === "CLOSED";
+  const status = historyEntry.status;
+  const strategy = historyEntry.strategy || "unknown";
   const needsAttention = strategy.toLowerCase() === "unknown" || (isClosed && (pnlValue === null || exitValue === null));
 
+  const computedAuditStatus = isClosed ? "CLOSED" : "OPEN" as AuditStatus;
+
   return {
-    ...trade,
-    id: trade.id || `${trade.pair}-${index}`,
-    side: normalizeDirection(trade.direction),
+    ...historyEntry,
+    id: historyEntry.id || `${historyEntry.pair}-${index}`,
+    side: historyEntry.direction,
     strategy,
-    leverageText: trade.leverage ? `${trade.leverage}x` : "N/A",
-    rrValue: calcRr(trade.entryPrice, trade.stopLoss, trade.takeProfit),
-    durationText: durationBetween(trade.timestamp, trade.closedAt),
-    executionMode: trade.executionMode || "demo",
-    auditStatus: status,
-    outcome: ["PROFIT", "LOSS", "FLAT"].includes(rawOutcome) ? rawOutcome : "UNKNOWN",
+    leverageText: historyEntry.leverage ? `${historyEntry.leverage}x` : "N/A",
+    rrValue: calcRr(historyEntry.entryPrice, historyEntry.stopLoss, historyEntry.takeProfit),
+    durationText: durationBetween(historyEntry.timestamp, historyEntry.closedAt),
+    executionMode: historyEntry.executionMode || null,
+    auditStatus: computedAuditStatus,
+    outcome: historyEntry.result,
     pnlValue,
     exitValue,
-    feesValue: null,
-    quantityValue: trade.size || null,
-    closeReason: trade.reason || "unknown",
+    feesValue: historyEntry.fees,
+    quantityValue: historyEntry.size,
+    closeReason: historyEntry.reason || "unknown",
     executionKey: null,
     syncSource: null,
-    protectionAttached: trade.slVerified && trade.tpVerified ? true : null,
+    protectionAttached: historyEntry.slVerified && historyEntry.tpVerified ? true : null,
     needsAttention,
     countsAsTrade: true,
     isClosed,
     metadata: {},
     timeline: [
       { label: "Signal detected", value: null, state: "missing", detail: "Detected timestamp unavailable in fallback history." },
-      { label: "Journal reserved", value: trade.timestamp, state: "done", detail: "Fallback history row loaded." },
-      { label: "Order confirmed", value: trade.timestamp, state: trade.orderId ? "done" : "missing", detail: trade.orderId ? `Exchange order ${trade.orderId}` : "Exchange order ID unavailable." },
-      { label: "Protection attached", value: null, state: trade.slVerified && trade.tpVerified ? "done" : "missing", detail: trade.slVerified && trade.tpVerified ? "Protection flags recorded." : "Protection evidence unavailable." },
+      { label: "Journal reserved", value: historyEntry.timestamp, state: "done", detail: "Fallback history row loaded." },
+      { label: "Order confirmed", value: historyEntry.timestamp, state: historyEntry.orderId ? "done" : "missing", detail: historyEntry.orderId ? `Exchange order ${historyEntry.orderId}` : "Exchange order ID unavailable." },
+      { label: "Protection attached", value: null, state: historyEntry.slVerified && historyEntry.tpVerified ? "done" : "missing", detail: historyEntry.slVerified && historyEntry.tpVerified ? "Protection flags recorded." : "Protection evidence unavailable." },
       { label: "Close requested", value: null, state: "missing", detail: "Close request metadata unavailable." },
-      { label: "Exact PnL synchronized", value: trade.closedAt || null, state: pnlValue !== null ? "done" : "missing", detail: pnlValue !== null ? "Realized PnL available in fallback history." : "Realized PnL unavailable." },
-      { label: "Trade closed", value: trade.closedAt || null, state: isClosed ? "done" : "pending", detail: isClosed ? `Close reason: ${readable(trade.reason)}.` : "Trade remains open." },
+      { label: "Exact PnL synchronized", value: historyEntry.closedAt || null, state: pnlValue !== null ? "done" : "missing", detail: pnlValue !== null ? "Realized PnL available in fallback history." : "Realized PnL unavailable." },
+      { label: "Trade closed", value: historyEntry.closedAt || null, state: isClosed ? "done" : "pending", detail: isClosed ? `Close reason: ${readable(historyEntry.reason)}.` : "Trade remains open." },
     ],
     executionLog: [
-      trade.orderId ? `Exchange order ID: ${trade.orderId}` : "Exchange order ID unavailable.",
-      `Execution mode: ${(trade.executionMode || "demo").toUpperCase()}`,
+      historyEntry.orderId ? `Exchange order ID: ${historyEntry.orderId}` : "Exchange order ID unavailable.",
+      `Execution mode: ${(historyEntry.executionMode || "unknown").toUpperCase()}`,
       pnlValue === null ? "Authoritative realized PnL unavailable." : `Realized PnL: ${formatMoney(pnlValue)}`,
     ],
   };

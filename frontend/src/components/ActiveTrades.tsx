@@ -43,7 +43,8 @@ function hasNumber(value: unknown) {
   return value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value));
 }
 
-function formatMoney(value: number) {
+function formatMoney(value: number | null) {
+  if (value === null) return "N/A";
   return `$${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })}`;
 }
 
@@ -95,13 +96,22 @@ export default function ActiveTrades({ authToken, trades, tradeHistory, account,
   const todaysClosed = todayClosedTrades.length;
   const todaysSlHit = todayClosedTrades.filter((trade) => trade.result === "LOSS").length;
   const todaysTpHit = todayClosedTrades.filter((trade) => trade.result === "PROFIT").length;
-  const closedOnlyRealized = todayClosedTrades.reduce((sum, trade) => sum + numberValue(trade.pnl), 0);
+  const closedOnlyRealized = todayClosedTrades.length > 0
+    ? todayClosedTrades.reduce((sum, trade) => sum + (trade.pnl ?? 0), 0)
+    : null;
   const todaysRealized = reportedRealized ?? closedOnlyRealized;
-  const todaysUnrealized = liveTrades.reduce((sum, trade) => sum + numberValue(trade.unrealizedPnl), 0);
-  const totalExposure = liveTrades.reduce(
-    (sum, trade) => sum + (hasNumber(trade.positionValue) ? Math.abs(Number(trade.positionValue)) : 0),
-    0,
-  );
+
+  const validUnrealized = liveTrades.filter((t) => t.unrealizedPnl !== null);
+  const todaysUnrealized = validUnrealized.length > 0
+    ? validUnrealized.reduce((sum, trade) => sum + (trade.unrealizedPnl ?? 0), 0)
+    : null;
+
+  const totalExposure = liveTrades.length > 0
+    ? liveTrades.reduce(
+        (sum, trade) => sum + (hasNumber(trade.positionValue) ? Math.abs(Number(trade.positionValue)) : 0),
+        0,
+      )
+    : null;
   const liveMetricCount = liveTrades.filter((trade) => trade.liveMetricsAvailable).length;
 
   useEffect(() => {
@@ -195,8 +205,8 @@ export default function ActiveTrades({ authToken, trades, tradeHistory, account,
           <SummaryCard label="Closed Today" value={String(todaysClosed)} tone="neutral" />
           <SummaryCard label="SL Today" value={String(todaysSlHit)} tone="bad" />
           <SummaryCard label="TP Today" value={String(todaysTpHit)} tone="good" />
-          <SummaryCard label="Realized PnL" value={formatMoney(todaysRealized)} tone={todaysRealized >= 0 ? "good" : "bad"} />
-          <SummaryCard label="Unrealized PnL" value={formatMoney(todaysUnrealized)} tone={todaysUnrealized >= 0 ? "good" : "bad"} />
+          <SummaryCard label="Realized PnL" value={formatMoney(todaysRealized)} tone={todaysRealized === null ? "neutral" : (todaysRealized >= 0 ? "good" : "bad")} />
+          <SummaryCard label="Unrealized PnL" value={formatMoney(todaysUnrealized)} tone={todaysUnrealized === null ? "neutral" : (todaysUnrealized >= 0 ? "good" : "bad")} />
         </div>
       </div>
 
@@ -207,7 +217,7 @@ export default function ActiveTrades({ authToken, trades, tradeHistory, account,
             <span className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-2 py-1 text-[10px] font-mono text-emerald-300">Exchange Synced</span>
           </div>
           <div className="text-right text-[10px] font-mono text-slate-400">
-            <div>Total Exposure: <span className="text-white">{totalExposure > 0 ? formatMoney(totalExposure) : "N/A"}</span></div>
+            <div>Total Exposure: <span className="text-white">{totalExposure !== null && totalExposure > 0 ? formatMoney(totalExposure) : "N/A"}</span></div>
           </div>
         </div>
 
@@ -256,13 +266,13 @@ export default function ActiveTrades({ authToken, trades, tradeHistory, account,
                         <div className="mt-1 text-amber-300">Liq: {formatOptionalMoney(trade.liquidationPrice)}</div>
                       </td>
                       <td className="px-4 py-4 text-center font-mono">
-                        {trade.liveMetricsAvailable ? (
+                        {trade.liveMetricsAvailable && trade.unrealizedPnl !== null && trade.pnlPercent !== null ? (
                           <>
-                            <div className={numberValue(trade.unrealizedPnl) >= 0 ? "text-emerald-400" : "text-rose-400"}>
-                              {numberValue(trade.unrealizedPnl) >= 0 ? "+" : ""}{formatMoney(numberValue(trade.unrealizedPnl))}
+                            <div className={trade.unrealizedPnl >= 0 ? "text-emerald-400" : "text-rose-400"}>
+                              {trade.unrealizedPnl >= 0 ? "+" : ""}{formatMoney(trade.unrealizedPnl)}
                             </div>
-                            <div className={`mt-1 ${numberValue(trade.pnlPercent) >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
-                              ({numberValue(trade.pnlPercent) >= 0 ? "+" : ""}{formatPercent(numberValue(trade.pnlPercent))})
+                            <div className={`mt-1 ${trade.pnlPercent >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
+                              ({trade.pnlPercent >= 0 ? "+" : ""}{formatPercent(trade.pnlPercent)})
                             </div>
                           </>
                         ) : <span className="text-slate-500">N/A</span>}
