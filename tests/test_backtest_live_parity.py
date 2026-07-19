@@ -74,7 +74,7 @@ class BacktestLiveParityTests(unittest.TestCase):
             min_risk_reward=1.0,
             max_hold_candles=240,
         )
-        self.assertEqual(resolved["risk_amount"], 20.0)
+        self.assertEqual(resolved["risk_amount"], 10.0)
         self.assertEqual(resolved["min_risk_reward"], 1.5)
         self.assertEqual(resolved["max_hold_candles"], 30)
         self.assertTrue(resolved["hold_limit_capped_to_profile"])
@@ -166,7 +166,7 @@ class BacktestLiveParityTests(unittest.TestCase):
 
         self.assertTrue(result["ok"])
         self.assertEqual([call[1] for call in client.calls], ["1", "5", "15"])
-        self.assertEqual(result["risk_amount"], 20.0)
+        self.assertEqual(result["risk_amount"], 10.0)
         self.assertEqual(result["min_risk_reward"], 1.5)
         self.assertEqual(result["max_hold_candles"], 30)
         self.assertTrue(result["live_pipeline_parity"]["trend_gate"])

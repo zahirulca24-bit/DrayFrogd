@@ -26,8 +26,8 @@ class EngineSeparationTests(unittest.TestCase):
             "trigger": "5m",
             "open_candle_confirmation": False,
         })
-        self.assertEqual(SCALPING_PROFILE.risk_amount, 20.0)
-        self.assertEqual(INTRADAY_PROFILE.risk_amount, 50.0)
+        self.assertEqual(SCALPING_PROFILE.risk_amount, 0.01)
+        self.assertEqual(INTRADAY_PROFILE.risk_amount, 0.01)
         self.assertEqual(SCALPING_PROFILE.min_risk_reward, 1.5)
         self.assertEqual(INTRADAY_PROFILE.min_risk_reward, 2.0)
 

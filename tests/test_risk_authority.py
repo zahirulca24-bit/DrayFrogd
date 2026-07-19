@@ -135,7 +135,7 @@ class RiskAuthorityTests(unittest.TestCase):
             result = validate_trade(signal, account_equity=1000.0)
         self.assertTrue(result["allowed"])
         self.assertEqual(result["trade_type"], "scalping")
-        self.assertEqual(result["risk_amount"], 20.0)
+        self.assertEqual(result["risk_amount"], 10.0)
         self.assertEqual(result["leverage_cap"], 20.0)
         self.assertEqual(result["exposure_cap"], 0.50)
         self.assertEqual(result["max_active_trades"], 5)
