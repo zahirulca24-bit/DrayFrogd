@@ -41,12 +41,17 @@ class Batch3StrategyIntegrityTests(unittest.TestCase):
             INTRADAY_PROFILE,
         )
 
-        self.assertEqual(long_result["take_profit"], 102.0)
-        self.assertEqual(short_result["take_profit"], 98.0)
-        self.assertEqual(long_result["risk_reward"], 2.0)
-        self.assertEqual(short_result["risk_reward"], 2.0)
-        self.assertEqual(long_result["raw_take_profit"], 101.5)
-        self.assertEqual(short_result["raw_take_profit"], 98.5)
+        self.assertEqual(long_result["status"], "rejected")
+        self.assertEqual(long_result["rejection_reason"], "risk_reward_below_trade_type_minimum")
+        self.assertEqual(long_result["take_profit"], 101.5)
+        self.assertEqual(long_result["risk_reward"], 1.5)
+        self.assertFalse(long_result["profile_adjusted_target"])
+
+        self.assertEqual(short_result["status"], "rejected")
+        self.assertEqual(short_result["rejection_reason"], "risk_reward_below_trade_type_minimum")
+        self.assertEqual(short_result["take_profit"], 98.5)
+        self.assertEqual(short_result["risk_reward"], 1.5)
+        self.assertFalse(short_result["profile_adjusted_target"])
 
     def test_scalping_profile_remains_one_point_five_r(self) -> None:
         result = apply_strategy_profile(
