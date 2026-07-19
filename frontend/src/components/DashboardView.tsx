@@ -116,7 +116,7 @@ function resolveUnrealizedPnl(
   );
   if (positionUnrealized !== 0) return positionUnrealized;
 
-  return activeTrades.reduce((sum, trade) => sum + numberValue(trade.unrealizedPnl), 0);
+  return activeTrades.reduce((sum, trade) => sum + (trade.unrealizedPnl ?? 0), 0);
 }
 
 function resolveExposure(account: AccountResponse, activeTrades: Trade[]) {
@@ -129,7 +129,7 @@ function resolveExposure(account: AccountResponse, activeTrades: Trade[]) {
   if (positionExposure !== 0) return positionExposure;
 
   return activeTrades.reduce((sum, trade) => {
-    const liveNotional = numberValue(trade.size) * numberValue(trade.currentPrice || trade.entryPrice);
+    const liveNotional = (trade.size ?? 0) * (trade.currentPrice !== null ? trade.currentPrice : trade.entryPrice);
     return sum + Math.abs(liveNotional);
   }, 0);
 }
@@ -229,7 +229,7 @@ export default function DashboardView({
 
   const running = botStatus.status === "running";
   const ready = readiness.ready_for_execution;
-  const mode = (botStatus.execution_mode || readiness.mode || "demo").toUpperCase();
+  const mode = (botStatus.execution_mode || readiness.mode || null)?.toUpperCase() || "N/A";
   const syncTime = overview.server_time || lastSync || undefined;
 
   return (

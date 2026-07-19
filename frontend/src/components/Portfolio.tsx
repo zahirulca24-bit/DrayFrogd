@@ -72,7 +72,7 @@ export default function Portfolio({
         </div>
 
         <div className="mb-6 grid grid-cols-1 md:grid-cols-3 gap-3">
-          <SummaryPill label="Mode" valueText={(portfolio.execution_mode || account.mode || "demo").toUpperCase()} />
+          <SummaryPill label="Mode" valueText={(portfolio.execution_mode || account.mode || null)?.toUpperCase() || "N/A"} />
           <SummaryPill label="SL Losses With Reason" value={tradeHistory.filter((trade) => trade.result === "LOSS" && trade.reason).length} />
           <SummaryPill label="History Entries" value={tradeHistory.length} />
         </div>

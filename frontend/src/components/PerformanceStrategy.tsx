@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Activity, BarChart3, LineChart, ShieldAlert, Target } from "lucide-react";
 import { api } from "../api";
 import { JournalTradeEntry, MetricsResponse, StrategyAuditResponse, TradeHistoryEntry } from "../types";
+import { normalizeTrade, normalizeTradeHistoryEntry } from "../tradeTruth";
 
 interface PerformanceStrategyProps {
   authToken: string | null;
@@ -99,8 +100,9 @@ function getSession(value?: string | null): "Asia" | "Europe" | "US" | "Late" {
 }
 
 function computeProfitFactor(rows: PerformanceRow[]) {
-  const gains = rows.filter((row) => numberValue(row.pnl) > 0).reduce((sum, row) => sum + numberValue(row.pnl), 0);
-  const losses = Math.abs(rows.filter((row) => numberValue(row.pnl) < 0).reduce((sum, row) => sum + numberValue(row.pnl), 0));
+  const validPnlRows = rows.filter((row) => row.pnl !== null);
+  const gains = validPnlRows.filter((row) => (row.pnl ?? 0) > 0).reduce((sum, row) => sum + (row.pnl ?? 0), 0);
+  const losses = Math.abs(validPnlRows.filter((row) => (row.pnl ?? 0) < 0).reduce((sum, row) => sum + (row.pnl ?? 0), 0));
   if (losses === 0) {
     return gains > 0 ? Infinity : null;
   }
@@ -108,11 +110,12 @@ function computeProfitFactor(rows: PerformanceRow[]) {
 }
 
 function computeMaxDrawdown(rows: PerformanceRow[]) {
+  const validPnlRows = rows.filter((row) => row.pnl !== null);
   let equity = 0;
   let peak = 0;
   let maxDrawdown = 0;
-  rows.forEach((row) => {
-    equity += numberValue(row.pnl);
+  validPnlRows.forEach((row) => {
+    equity += row.pnl ?? 0;
     peak = Math.max(peak, equity);
     maxDrawdown = Math.max(maxDrawdown, peak - equity);
   });
@@ -159,47 +162,46 @@ function deriveLossReason(item: JournalTradeEntry, outcome: "PROFIT" | "LOSS" | 
 }
 
 function journalToPerformanceRow(item: JournalTradeEntry, index: number): PerformanceRow {
-  const financial = item as FinancialJournalTrade;
-  const entryPrice = numberValue(item.entry);
-  const stopLoss = numberValue(item.stop_loss);
-  const takeProfit = numberValue(item.take_profit);
-  const isClosed = String(item.status || "").toLowerCase() === "closed";
+  const normTrade = normalizeTrade(item, index);
+  const historyEntry = normalizeTradeHistoryEntry(normTrade);
+
+  const isClosed = normTrade.status === "CLOSED";
+  const pnlKnown = isClosed && normTrade.realizedPnl !== null;
+  const closedAt = normTrade.closedAt || normTrade.timestamp || new Date().toISOString();
   const rawResult = String(item.result || "").toLowerCase();
-  const realizedPnl = nullableNumber(financial.realized_pnl);
-  const outcome = classifyOutcome(realizedPnl, rawResult);
-  const pnlKnown = isClosed && realizedPnl !== null;
-  const closedAt = item.closed_at || item.opened_at || item.detected_at || new Date().toISOString();
+  const outcome = classifyOutcome(normTrade.realizedPnl, rawResult);
   const lossReason = deriveLossReason(item, outcome);
 
   return {
-    id: item.order_id || item.journal_id || `${item.symbol}-${index}`,
-    pair: item.symbol,
-    strategy: String(financial.strategy_name || financial.strategy || "unknown"),
-    direction: String(item.direction || "").toUpperCase() === "SHORT" ? "SHORT" : "LONG",
-    entryPrice,
-    currentPrice: isClosed ? numberValue(financial.exit_price) || entryPrice : entryPrice,
-    stopLoss,
-    takeProfit,
-    size: numberValue(item.quantity),
-    margin: 0,
-    leverage: 1,
-    unrealizedPnl: 0,
-    pnlPercent: 0,
-    status: isClosed ? "CLOSED" : "OPEN",
-    timestamp: item.opened_at || item.detected_at || closedAt,
-    orderConfirmed: Boolean(item.order_id),
-    rawStatus: item.status,
-    journalId: item.journal_id,
-    executionMode: item.execution_mode || "demo",
-    exitPrice: isClosed ? numberValue(financial.exit_price) : 0,
-    pnl: pnlKnown ? realizedPnl : 0,
+    ...historyEntry,
+    id: normTrade.id,
+    pair: normTrade.pair,
+    strategy: normTrade.strategy,
+    direction: normTrade.direction,
+    entryPrice: normTrade.entryPrice,
+    currentPrice: normTrade.currentPrice,
+    stopLoss: normTrade.stopLoss,
+    takeProfit: normTrade.takeProfit,
+    size: normTrade.size,
+    margin: normTrade.margin,
+    leverage: normTrade.leverage,
+    unrealizedPnl: normTrade.unrealizedPnl,
+    pnlPercent: normTrade.pnlPercent,
+    status: normTrade.status,
+    timestamp: normTrade.timestamp,
+    orderConfirmed: normTrade.orderConfirmed,
+    rawStatus: normTrade.rawStatus,
+    journalId: normTrade.journalId,
+    executionMode: normTrade.executionMode,
+    exitPrice: normTrade.exitPrice,
+    pnl: historyEntry.pnl,
     result: outcome as TradeHistoryEntry["result"],
-    reason: lossReason || financial.close_reason || item.sl_hit_reason || (isClosed ? "unknown" : "open"),
+    reason: lossReason || normTrade.closeReason || normTrade.slHitReason || (isClosed ? "unknown" : "open"),
     closedAt,
-    tradeStatus: item.status || (isClosed ? "closed" : "active"),
-    symbol: item.symbol,
+    tradeStatus: normTrade.rawStatus || (isClosed ? "closed" : "active"),
+    symbol: normTrade.pair,
     session: getSession(closedAt),
-    rrValue: calcRr(entryPrice, stopLoss, takeProfit),
+    rrValue: calcRr(normTrade.entryPrice, normTrade.stopLoss, normTrade.takeProfit),
     pnlKnown,
   };
 }
@@ -254,44 +256,59 @@ export default function PerformanceStrategy({ authToken, history, metrics }: Per
       return journalTrades.map(journalToPerformanceRow);
     }
 
-    return history.map((trade) => ({
-      ...trade,
-      tradeStatus: trade.rawStatus || trade.status,
-      strategy: trade.strategy || "unknown",
-      symbol: trade.pair,
-      session: getSession(trade.closedAt),
-      rrValue: calcRr(trade.entryPrice, trade.stopLoss, trade.takeProfit),
-      pnlKnown: trade.result === "PROFIT" || trade.result === "LOSS" || numberValue(trade.pnl) !== 0,
-    }));
+    return history.map((trade, index) => {
+      const normTrade = normalizeTrade(trade, index);
+      const historyEntry = normalizeTradeHistoryEntry(normTrade);
+      const isClosed = normTrade.status === "CLOSED";
+      const pnlKnown = isClosed && normTrade.realizedPnl !== null;
+      return {
+        ...historyEntry,
+        tradeStatus: normTrade.rawStatus || (isClosed ? "closed" : "active"),
+        strategy: normTrade.strategy || "unknown",
+        symbol: normTrade.pair,
+        session: getSession(normTrade.closedAt),
+        rrValue: calcRr(normTrade.entryPrice, normTrade.stopLoss, normTrade.takeProfit),
+        pnlKnown,
+      };
+    });
   }, [history, journalTrades]);
 
   const closedRows = rows.filter((row) => String(row.tradeStatus || row.status).toLowerCase() === "closed" || row.status === "CLOSED");
   const knownClosedRows = closedRows.filter((row) => row.result === "PROFIT" || row.result === "LOSS");
-  const knownPnlClosedRows = closedRows.filter((row) => row.pnlKnown);
+  const knownPnlClosedRows = closedRows.filter((row) => row.pnl !== null);
   const openRows = rows.filter((row) => !closedRows.includes(row));
 
   const totalTrades = rows.length;
   const winTrades = knownClosedRows.filter((row) => row.result === "PROFIT").length;
   const lossTrades = knownClosedRows.filter((row) => row.result === "LOSS").length;
   const winRate = knownClosedRows.length > 0 ? winTrades / knownClosedRows.length : null;
-  const netPnl = knownPnlClosedRows.length > 0 ? knownPnlClosedRows.reduce((sum, row) => sum + numberValue(row.pnl), 0) : null;
+  const netPnl = knownPnlClosedRows.length > 0 ? knownPnlClosedRows.reduce((sum, row) => sum + (row.pnl ?? 0), 0) : null;
   const profitFactor = knownClosedRows.length > 0 ? computeProfitFactor(knownClosedRows) : null;
   const rrValues = rows.map((row) => row.rrValue).filter((value): value is number => value !== null);
   const avgRr = rrValues.length > 0 ? rrValues.reduce((sum, value) => sum + value, 0) / rrValues.length : null;
-  const avgWin = winTrades > 0 ? knownClosedRows.filter((row) => row.result === "PROFIT").reduce((sum, row) => sum + numberValue(row.pnl), 0) / winTrades : null;
-  const avgLoss = lossTrades > 0 ? knownClosedRows.filter((row) => row.result === "LOSS").reduce((sum, row) => sum + numberValue(row.pnl), 0) / lossTrades : null;
+
+  const winTradesWithPnl = knownClosedRows.filter((row) => row.result === "PROFIT" && row.pnl !== null);
+  const avgWin = winTradesWithPnl.length > 0 ? winTradesWithPnl.reduce((sum, row) => sum + (row.pnl ?? 0), 0) / winTradesWithPnl.length : null;
+
+  const lossTradesWithPnl = knownClosedRows.filter((row) => row.result === "LOSS" && row.pnl !== null);
+  const avgLoss = lossTradesWithPnl.length > 0 ? lossTradesWithPnl.reduce((sum, row) => sum + (row.pnl ?? 0), 0) / lossTradesWithPnl.length : null;
+
   const maxDrawdown = knownPnlClosedRows.length > 0 ? computeMaxDrawdown(knownPnlClosedRows) : null;
+
+  const totalClosed = closedRows.length;
+  const coveredClosed = knownPnlClosedRows.length;
+  const pnlCoverage = totalClosed > 0 ? (coveredClosed / totalClosed) * 100 : 100;
 
   const equityCurve = knownPnlClosedRows.reduce<Array<{ x: string; y: number }>>((acc, row) => {
     const previous = acc[acc.length - 1]?.y || 0;
-    acc.push({ x: toBdtDate(row.closedAt), y: previous + numberValue(row.pnl) });
+    acc.push({ x: toBdtDate(row.closedAt), y: previous + (row.pnl ?? 0) });
     return acc;
   }, []);
 
   const dailyPnl = Array.from(
     knownPnlClosedRows.reduce((map, row) => {
       const key = toBdtDate(row.closedAt);
-      map.set(key, (map.get(key) || 0) + numberValue(row.pnl));
+      map.set(key, (map.get(key) || 0) + (row.pnl ?? 0));
       return map;
     }, new Map<string, number>()),
   ).map(([date, pnl]) => ({ date, pnl }));
@@ -300,8 +317,8 @@ export default function PerformanceStrategy({ authToken, history, metrics }: Per
     rows.reduce((map, row) => {
       const current = map.get(row.strategy) || { trades: 0, pnl: 0, wins: 0, knownPnl: 0 };
       current.trades += 1;
-      if (row.pnlKnown) {
-        current.pnl += numberValue(row.pnl);
+      if (row.pnl !== null) {
+        current.pnl += row.pnl;
         current.knownPnl += 1;
       }
       current.wins += row.result === "PROFIT" ? 1 : 0;
@@ -314,8 +331,8 @@ export default function PerformanceStrategy({ authToken, history, metrics }: Per
     rows.reduce((map, row) => {
       const current = map.get(row.symbol) || { trades: 0, pnl: 0, knownPnl: 0 };
       current.trades += 1;
-      if (row.pnlKnown) {
-        current.pnl += numberValue(row.pnl);
+      if (row.pnl !== null) {
+        current.pnl += row.pnl;
         current.knownPnl += 1;
       }
       map.set(row.symbol, current);
@@ -327,8 +344,8 @@ export default function PerformanceStrategy({ authToken, history, metrics }: Per
     rows.reduce((map, row) => {
       const current = map.get(row.session) || { trades: 0, pnl: 0, wins: 0, knownPnl: 0 };
       current.trades += 1;
-      if (row.pnlKnown) {
-        current.pnl += numberValue(row.pnl);
+      if (row.pnl !== null) {
+        current.pnl += row.pnl;
         current.knownPnl += 1;
       }
       current.wins += row.result === "PROFIT" ? 1 : 0;
@@ -376,6 +393,18 @@ export default function PerformanceStrategy({ authToken, history, metrics }: Per
 
   return (
     <div className="space-y-6">
+      {pnlCoverage < 100 && (
+        <div className="bg-amber-500/10 border border-amber-500/20 rounded-2xl p-4 flex items-start gap-3 text-amber-300">
+          <ShieldAlert className="w-5 h-5 shrink-0 mt-0.5" />
+          <div>
+            <h4 className="text-sm font-semibold text-amber-200">Incomplete Financial Data ({pnlCoverage.toFixed(0)}% Coverage)</h4>
+            <p className="text-xs text-amber-400/80 mt-1">
+              Some closed trades are missing authoritative exchange realized PnL. Incomplete records have been excluded from calculations and win rate/drawdown metrics instead of counting them as zero.
+            </p>
+          </div>
+        </div>
+      )}
+
       <div className="bg-bento-card border border-slate-800 rounded-2xl p-6 shadow-md">
         <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-4">
           <div>
