@@ -110,11 +110,14 @@ class BacktestLiveParityTests(unittest.TestCase):
             )
 
         self.assertEqual(len(results), 1)
-        self.assertIsNotNone(signal)
-        self.assertEqual(signal["signal_state"], "ACTIVE")
-        self.assertEqual(signal["risk_reward"], 2.0)
-        self.assertEqual(signal["take_profit"], 102.0)
-        self.assertTrue(signal["profile_adjusted_target"])
+        self.assertIsNone(signal)  # Should be rejected (None) because it's below minimum risk/reward
+
+        rejected_signal = results[0]
+        self.assertEqual(rejected_signal["signal_state"], "INVALID")
+        self.assertEqual(rejected_signal["rejection_reason"], "risk_reward_below_trade_type_minimum")
+        self.assertEqual(rejected_signal["risk_reward"], 1.5)
+        self.assertEqual(rejected_signal["take_profit"], 101.5)
+        self.assertFalse(rejected_signal["profile_adjusted_target"])
 
     def test_canonical_trend_gate_rejects_opposite_direction(self) -> None:
         def evaluator(symbol, setup, trigger, now=None):

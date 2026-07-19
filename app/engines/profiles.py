@@ -169,17 +169,14 @@ def apply_strategy_profile(result: dict[str, Any], profile: EngineProfile) -> di
     if risk_distance <= 0 or reward_distance <= 0:
         return profiled
     actual_risk_reward = reward_distance / risk_distance
-    target_r = profile.strategy_target_r_multiple
-    if actual_risk_reward + 1e-9 >= target_r:
+    min_rr = profile.min_risk_reward
+    if actual_risk_reward + 1e-9 >= min_rr:
         profiled["risk_reward"] = round(actual_risk_reward, 4)
         return profiled
 
-    adjusted_target = entry + (risk_distance * target_r) if direction == "long" else entry - (risk_distance * target_r)
-    profiled["raw_take_profit"] = profiled.get("take_profit")
-    profiled["raw_risk_reward"] = profiled.get("risk_reward")
-    profiled["take_profit"] = round(adjusted_target, 8)
-    profiled["risk_reward"] = round(target_r, 4)
-    profiled["profile_adjusted_target"] = True
+    profiled["status"] = "rejected"
+    profiled["rejection_reason"] = "risk_reward_below_trade_type_minimum"
+    profiled["risk_reward"] = round(actual_risk_reward, 4)
     return profiled
 
 

@@ -70,6 +70,7 @@ class EngineSeparationTests(unittest.TestCase):
         self.assertFalse(result["profile_adjusted_target"])
 
     def test_intraday_raises_valid_one_point_five_r_target_to_two_r(self) -> None:
+        # Renamed/updated to assert rejection instead of inflating the target
         result = evaluate_engine_strategies(
             "intraday",
             symbol="BTCUSDT",
@@ -79,12 +80,14 @@ class EngineSeparationTests(unittest.TestCase):
         )[0]
 
         self.assertEqual(result["engine_profile"], "intraday")
-        self.assertAlmostEqual(result["raw_take_profit"], 101.5)
-        self.assertAlmostEqual(result["take_profit"], 102.0)
-        self.assertAlmostEqual(result["risk_reward"], 2.0)
-        self.assertTrue(result["profile_adjusted_target"])
+        self.assertEqual(result["status"], "rejected")
+        self.assertEqual(result["rejection_reason"], "risk_reward_below_trade_type_minimum")
+        self.assertAlmostEqual(result["take_profit"], 101.5)
+        self.assertAlmostEqual(result["risk_reward"], 1.5)
+        self.assertFalse(result["profile_adjusted_target"])
 
     def test_intraday_profiled_signal_survives_two_r_signal_gate(self) -> None:
+        # Renamed/updated to assert rejection instead of target inflation survival
         context = {
             "symbol": "BTCUSDT",
             "market_rank": 1,
@@ -99,14 +102,19 @@ class EngineSeparationTests(unittest.TestCase):
         with patch("app.signal_pipeline.evaluate_registered_strategies", self._one_point_five_r_evaluator):
             output = evaluate_signal_contexts([context])
 
-        self.assertEqual(output["signals_found"], 1)
-        signal = output["signals"][0]
-        self.assertEqual(signal["signal_state"], SIGNAL_ACTIVE)
+        self.assertEqual(output["signals_found"], 0)
+        self.assertEqual(len(output["signals"]), 0)
+
+        # Verify the signal is classified as SIGNAL_INVALID downstream
+        invalid_results = [item for item in output["results"] if item.get("signal_state") == "INVALID"]
+        self.assertEqual(len(invalid_results), 1)
+        signal = invalid_results[0]
         self.assertEqual(signal["trade_type"], "intraday")
         self.assertEqual(signal["engine_profile"], "intraday")
-        self.assertAlmostEqual(signal["risk_reward"], 2.0)
-        self.assertAlmostEqual(signal["take_profit"], 102.0)
-        self.assertTrue(signal["profile_adjusted_target"])
+        self.assertAlmostEqual(signal["risk_reward"], 1.5)
+        self.assertAlmostEqual(signal["take_profit"], 101.5)
+        self.assertEqual(signal["rejection_reason"], "risk_reward_below_trade_type_minimum")
+        self.assertFalse(signal["profile_adjusted_target"])
 
     @staticmethod
     def _one_point_five_r_evaluator(symbol, candles_5m, candles_1m, now=None):

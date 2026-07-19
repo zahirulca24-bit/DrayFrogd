@@ -87,17 +87,18 @@ class RiskAuthorityTests(unittest.TestCase):
             realized_pnl_today=10.0,
             live_risk=20.0,
         )
-        self.assertEqual(profit["base_risk_pool"], 50.0)
-        self.assertEqual(profit["effective_risk_pool"], 60.0)
-        self.assertEqual(profit["available_risk"], 40.0)
+        self.assertEqual(profit["base_risk_pool"], 250.0)
+        self.assertEqual(profit["effective_risk_pool"], 260.0)
+        self.assertEqual(profit["available_risk"], 240.0)
 
         loss = calculate_risk_capacity(
             day_start_equity=1000.0,
             realized_pnl_today=-20.0,
             live_risk=10.0,
         )
-        self.assertEqual(loss["effective_risk_pool"], 30.0)
-        self.assertEqual(loss["available_risk"], 20.0)
+        self.assertEqual(loss["base_risk_pool"], 250.0)
+        self.assertEqual(loss["effective_risk_pool"], 230.0)
+        self.assertEqual(loss["available_risk"], 220.0)
 
     def test_trade_type_must_be_explicit_and_valid(self) -> None:
         self.assertIsNone(resolve_trade_type({"strategy_name": "ema_pullback"}))

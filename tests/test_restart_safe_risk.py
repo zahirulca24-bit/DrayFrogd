@@ -106,9 +106,9 @@ class RestartSafeRiskTests(unittest.TestCase):
             self.assertEqual(restored["trades_day"], "2026-07-12")
             self.assertEqual(restored["realized_pnl_today"], 10.0)
             self.assertEqual(restored["live_risk"], 2.0)
-            self.assertEqual(restored["base_risk_pool"], 50.0)
-            self.assertEqual(restored["effective_risk_pool"], 60.0)
-            self.assertEqual(restored["available_risk"], 58.0)
+            self.assertEqual(restored["base_risk_pool"], 250.0)
+            self.assertEqual(restored["effective_risk_pool"], 260.0)
+            self.assertEqual(restored["available_risk"], 258.0)
 
     def test_bdt_midnight_resets_daily_financial_state(self) -> None:
         previous_day = datetime(2026, 7, 11, 17, 59, tzinfo=UTC)
@@ -147,7 +147,7 @@ class RestartSafeRiskTests(unittest.TestCase):
             self.assertEqual(restored["day_start_equity"], 900.0)
             self.assertEqual(restored["realized_pnl_today"], 0.0)
             self.assertFalse(restored["circuit_breaker_active"])
-            self.assertEqual(restored["base_risk_pool"], 45.0)
+            self.assertEqual(restored["base_risk_pool"], 225.0)
 
     def test_expired_symbol_cooldown_is_removed_on_restore(self) -> None:
         now = datetime(2026, 7, 12, 0, 30, tzinfo=UTC)

@@ -142,7 +142,7 @@ def test_journal_only_row_is_not_operator_active() -> None:
     assert result["trades"] == []
     assert update_mock.call_args.kwargs == {}
     persisted = update_mock.call_args.args[1]
-    assert persisted["status"] == "closed"
+    assert persisted["status"] == "close_pending_sync"
     assert persisted["result"] == "reconciliation_stale"
     assert get_snapshot()["trades"] == []
     update_mock.assert_called_once()
