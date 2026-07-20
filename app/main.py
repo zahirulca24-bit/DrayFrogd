@@ -16,7 +16,7 @@ from app.auth import (
     record_login_failure,
 )
 from app.backtest import run_strategy_backtest
-from app.background_worker import auto_trading_loop
+from app.background_worker import auto_trading_loop, auto_scanner_loop
 from app.close_fill_sync import repair_incomplete_journal_closes
 from app.bot_controls import (
     activate_emergency_stop,
@@ -74,6 +74,7 @@ from app.runtime_watchdog import (
 
 app = FastAPI(title=settings.app_name)
 _background_task: asyncio.Task | None = None
+_scanner_task: asyncio.Task | None = None
 
 app.add_middleware(AuthMiddleware)
 app.add_middleware(
@@ -91,7 +92,7 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def on_startup() -> None:
-    global _background_task
+    global _background_task, _scanner_task
     Base.metadata.create_all(bind=engine)
     ensure_runtime_config()
     ensure_watchdog_state()
@@ -99,11 +100,20 @@ async def on_startup() -> None:
         replace_active_trades(get_active_trade_history())
     if _background_task is None or _background_task.done():
         _background_task = asyncio.create_task(auto_trading_loop())
+    if _scanner_task is None or _scanner_task.done():
+        _scanner_task = asyncio.create_task(auto_scanner_loop())
 
 
 @app.on_event("shutdown")
 async def on_shutdown() -> None:
-    global _background_task
+    global _background_task, _scanner_task
+    if _scanner_task is not None:
+        _scanner_task.cancel()
+        try:
+            await _scanner_task
+        except asyncio.CancelledError:
+            pass
+        _scanner_task = None
     if _background_task is not None:
         _background_task.cancel()
         try:

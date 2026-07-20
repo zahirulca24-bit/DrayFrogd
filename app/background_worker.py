@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time as pytime
+from datetime import datetime, UTC, timedelta
 
 from app.authoritative_reconciliation import reconcile_state
 from app.bot_controls import can_execute, get_execution_mode
@@ -20,8 +22,7 @@ from app.risk_sync import sync_partial_realized_pnl
 from app.runtime_integration import install_runtime_integration
 from app.runtime_watchdog import run_watchdog_cycle
 from app.scalping_profit_lock_guard import enforce_scalping_tp2_profit_locks
-from app.scanner import run_scan
-from app.trade_management import manage_open_trades
+from app.scanner import execute_backend_scan
 
 
 logger = logging.getLogger(__name__)
@@ -33,6 +34,8 @@ EXPECTED_EXECUTION_BLOCKS = {
     "DYNAMIC_RISK_CAPACITY_EXCEEDED",
     "SYMBOL_REENTRY_COOLDOWN",
 }
+
+_scan_results_queue = asyncio.Queue()
 
 
 def _safe_log_bot_event(event_type: str, message: str, *, level: str = "info", metadata: dict | None = None) -> None:
@@ -79,6 +82,77 @@ async def native_profit_monitor_loop() -> None:
                 },
             )
         await asyncio.sleep(NATIVE_TP_MONITOR_SECONDS)
+
+
+async def auto_scanner_loop() -> None:
+    """Dedicated scanner background loop that runs on a monotonic fixed-rate schedule."""
+    import app.scanner as scanner_mod
+
+    interval = settings.bot_scan_interval_seconds
+    next_target_monotonic = pytime.monotonic()
+
+    while True:
+        try:
+            if not getattr(scanner_mod, "_scanner_enabled", True):
+                logger.info("Scanner is explicitly disabled. Stopping automatic scanner loop.")
+                break
+
+            emergency_stop = False
+            try:
+                from app.bot_controls import get_bot_status
+                bot_status_info = get_bot_status()
+                emergency_stop = bot_status_info.get("emergency_stop", False)
+            except Exception:
+                # If bot status lookup fails, let scanner continue (fail-safe)
+                pass
+
+            if emergency_stop:
+                logger.info("Emergency stop is active. Stopping automatic scanner loop.")
+                break
+
+            if not getattr(scanner_mod, "_public_market_authority_available", True):
+                logger.error("Public-market data authority is unavailable. Stopping automatic scanner loop.")
+                break
+
+            client = get_exchange_client(get_execution_mode())
+
+            now_utc = datetime.now(UTC)
+            scanner_mod._last_scheduled_scan_time = now_utc
+            scanner_mod._actual_scan_start_time = now_utc
+
+            drift_sec = pytime.monotonic() - next_target_monotonic
+            scanner_mod._schedule_drift_milliseconds = max(0.0, drift_sec * 1000.0)
+
+            result = await asyncio.to_thread(execute_backend_scan, client, "automatic")
+
+            complete_utc = datetime.now(UTC)
+            scanner_mod._actual_completion_time = complete_utc
+            duration_sec = (complete_utc - now_utc).total_seconds()
+            scanner_mod._scan_duration_milliseconds = duration_sec * 1000.0
+
+            # Put result in queue for execution loop (even failed results to avoid blocking auto_trading_loop)
+            await _scan_results_queue.put(result)
+
+        except asyncio.CancelledError:
+            logger.info("Scanner loop cancelled. Stopping cleanly.")
+            break
+        except Exception as e:
+            logger.exception("Error in scanner loop: %s", e)
+
+        next_target_monotonic += interval
+        sleep_time = next_target_monotonic - pytime.monotonic()
+
+        scanner_mod._next_scheduled_scan_time = datetime.now(UTC) + timedelta(seconds=max(0.0, sleep_time))
+
+        if sleep_time > 0:
+            try:
+                await asyncio.sleep(sleep_time)
+            except asyncio.CancelledError:
+                logger.info("Scanner loop cancelled during sleep. Stopping cleanly.")
+                break
+        else:
+            if sleep_time < -interval:
+                next_target_monotonic = pytime.monotonic()
 
 
 async def auto_trading_loop() -> None:
@@ -166,18 +240,13 @@ async def auto_trading_loop() -> None:
                 if watchdog_result.get("execution_blocked"):
                     logger.warning("Runtime watchdog blocked new execution: %s", watchdog_result.get("reasons"))
 
-                from app.bot_controls import get_bot_status
-                from app.scanner import execute_backend_scan
-
-                bot_status_info = get_bot_status()
-                scanner_allowed = bot_status_info.get("status") in {"running", "idle"} and not bot_status_info.get("emergency_stop")
-
-                if not scanner_allowed:
-                    logger.debug("Automatic scanning is stopped by lifecycle status.")
-                    await asyncio.sleep(settings.bot_scan_interval_seconds)
+                # Wait for the next scan result from the queue
+                try:
+                    result = await asyncio.wait_for(_scan_results_queue.get(), timeout=5.0)
+                except asyncio.TimeoutError:
+                    # No new scan result available yet, loop back to perform maintenance
                     continue
 
-                result = await asyncio.to_thread(execute_backend_scan, client, "automatic")
                 if not result.get("ok"):
                     if result.get("code") == "ALREADY_RUNNING":
                         logger.debug("Automatic scan skipped: scan already in progress.")
@@ -194,19 +263,15 @@ async def auto_trading_loop() -> None:
                                 "retry_count": 1,
                             },
                         )
-                    await asyncio.sleep(settings.bot_scan_interval_seconds)
                     continue
 
                 allowed, reason = can_execute()
                 if not allowed:
                     if reason:
                         logger.debug("Auto trading blocked: %s", reason)
-                    await asyncio.sleep(settings.bot_scan_interval_seconds)
                     continue
 
-                # Only execute signals produced by this scan cycle. Do not fall back
-                # to cached in-memory signals, because cached signals can age past
-                # the Risk Engine freshness window after deploys, restarts or cooldowns.
+                # Only execute signals produced by this scan cycle
                 active_signals = list(result.get("signals") or [])
                 for signal in active_signals:
                     try:
@@ -280,8 +345,7 @@ async def auto_trading_loop() -> None:
                         "error": str(exc),
                     },
                 )
-
-            await asyncio.sleep(settings.bot_scan_interval_seconds)
+                await asyncio.sleep(1.0)
     finally:
         await websocket_service.stop()
         native_monitor.cancel()

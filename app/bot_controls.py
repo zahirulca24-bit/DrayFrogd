@@ -131,7 +131,10 @@ def get_risk_settings() -> dict[str, Any]:
 
 
 def can_execute() -> tuple[bool, str]:
-    row = _get_runtime_row()
+    try:
+        row = _get_runtime_row()
+    except Exception as e:
+        return False, f"Database/Bot status lookup failed: {e}"
     if row.emergency_stop:
         return False, "Emergency stop is active"
     watchdog_blocked, watchdog_reason = get_watchdog_execution_block()

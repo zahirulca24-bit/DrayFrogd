@@ -66,6 +66,31 @@ _latest_ranked_markets: list[dict[str, Any]] = []
 _latest_universe_metadata: dict[str, dict[str, Any]] = {}
 _normalize_strategy_result = normalize_strategy_result
 
+# Exception classes for snapshot restore failures
+class NoSnapshotError(RuntimeError):
+    pass
+
+class DatabaseUnavailableError(RuntimeError):
+    pass
+
+class CorruptSnapshotError(RuntimeError):
+    pass
+
+class SchemaUnavailableError(RuntimeError):
+    pass
+
+# Global status and metadata variables
+_scanner_enabled = True
+_public_market_authority_available = True
+_last_scheduled_scan_time: datetime | None = None
+_actual_scan_start_time: datetime | None = None
+_actual_completion_time: datetime | None = None
+_schedule_drift_milliseconds: float | None = None
+_scan_duration_milliseconds: float | None = None
+_next_scheduled_scan_time: datetime | None = None
+_latest_persistence_status: str | None = None
+_latest_persistence_error: str | None = None
+
 
 def run_scan(client: BybitDemoClient, now: datetime | None = None) -> dict[str, Any]:
     reference = _normalize_now(now)
@@ -280,26 +305,52 @@ def _apply_scalping_suppression(
 
 def _restore_from_latest_snapshot() -> None:
     import json
+    from sqlalchemy.exc import SQLAlchemyError, OperationalError, ProgrammingError
     from app.database import SessionLocal
     from app.models import ScannerSnapshot
 
-    db = SessionLocal()
+    db = None
     try:
-        snap = db.query(ScannerSnapshot).filter(ScannerSnapshot.status == "success").order_by(ScannerSnapshot.completed_at.desc()).first()
-        if snap:
-            try:
-                summary = json.loads(snap.summary_json)
-                global _latest_signals, _latest_scan_results, _latest_ranked_markets
-                _latest_signals.clear()
-                _latest_signals.extend(summary.get("signals", []))
-                _latest_scan_results.clear()
-                _latest_scan_results.extend(summary.get("results", []))
-                _latest_ranked_markets.clear()
-                _latest_ranked_markets.extend(summary.get("ranked_markets", []))
-            except Exception:
-                pass
+        db = SessionLocal()
+        try:
+            snap = db.query(ScannerSnapshot).filter(ScannerSnapshot.status == "success").order_by(ScannerSnapshot.completed_at.desc()).first()
+        except ProgrammingError as pe:
+            raise SchemaUnavailableError(f"Database schema is unavailable: {pe}") from pe
+        except OperationalError as oe:
+            raise DatabaseUnavailableError(f"Database is unavailable: {oe}") from oe
+        except SQLAlchemyError as se:
+            raise DatabaseUnavailableError(f"Database error during snapshot query: {se}") from se
+
+        if not snap:
+            raise NoSnapshotError("No successful scanner snapshot found in database.")
+
+        try:
+            summary = json.loads(snap.summary_json)
+        except json.JSONDecodeError as jde:
+            raise CorruptSnapshotError(f"Scanner snapshot data is corrupt and could not be parsed: {jde}") from jde
+
+        if not isinstance(summary, dict):
+            raise CorruptSnapshotError("Scanner snapshot data is corrupt: summary is not a dictionary.")
+
+        global _latest_signals, _latest_scan_results, _latest_ranked_markets
+        _latest_signals.clear()
+        _latest_signals.extend(summary.get("signals", []))
+        _latest_scan_results.clear()
+        _latest_scan_results.extend(summary.get("results", []))
+        _latest_ranked_markets.clear()
+        _latest_ranked_markets.extend(summary.get("ranked_markets", []))
+
+    except (SchemaUnavailableError, DatabaseUnavailableError, NoSnapshotError, CorruptSnapshotError) as err:
+        import logging
+        logging.getLogger(__name__).error("Snapshot recovery failed: %s", str(err))
+        raise
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).error("Unexpected snapshot recovery failure: %s", str(exc))
+        raise DatabaseUnavailableError(f"Database unavailable or unexpected error: {exc}") from exc
     finally:
-        db.close()
+        if db:
+            db.close()
 
 
 def get_latest_signals() -> list[dict[str, Any]]:
@@ -336,6 +387,7 @@ def is_scanner_running() -> bool:
 
 def execute_backend_scan(client: Any, trigger_source: str = "automatic") -> dict[str, Any]:
     global _scanner_running, _last_scan_failed, _last_scan_failure_reason
+    global _latest_persistence_status, _latest_persistence_error
 
     with _scanner_running_lock:
         if _scanner_running:
@@ -360,6 +412,8 @@ def execute_backend_scan(client: Any, trigger_source: str = "automatic") -> dict
 
         if result.get("ok"):
             db = SessionLocal()
+            persistence_ok = False
+            p_error = None
             try:
                 snapshot = ScannerSnapshot(
                     scan_id=scan_id,
@@ -376,18 +430,41 @@ def execute_backend_scan(client: Any, trigger_source: str = "automatic") -> dict
                 )
                 db.add(snapshot)
                 db.commit()
+                persistence_ok = True
             except Exception as db_exc:
                 import logging
                 logging.getLogger(__name__).exception("Failed to persist successful scanner snapshot: %s", db_exc)
+                p_error = str(db_exc)
             finally:
                 db.close()
 
             _last_scan_failed = False
             _last_scan_failure_reason = None
-            return result
+
+            if not persistence_ok:
+                _latest_persistence_status = "SCAN_COMPLETED_PERSISTENCE_FAILED"
+                _latest_persistence_error = p_error
+                return {
+                    **result,
+                    "ok": True,
+                    "persistence_ok": False,
+                    "code": "SCAN_COMPLETED_PERSISTENCE_FAILED",
+                    "error": f"Database persistence failed: {p_error}",
+                    "restart_recovery_available": False,
+                }
+            else:
+                _latest_persistence_status = "success"
+                _latest_persistence_error = None
+                return {
+                    **result,
+                    "persistence_ok": True,
+                    "restart_recovery_available": True,
+                }
         else:
             error_reason = result.get("error", "Unknown scanner error")
             db = SessionLocal()
+            persistence_ok = False
+            p_error = None
             try:
                 snapshot = ScannerSnapshot(
                     scan_id=scan_id,
@@ -405,15 +482,36 @@ def execute_backend_scan(client: Any, trigger_source: str = "automatic") -> dict
                 )
                 db.add(snapshot)
                 db.commit()
+                persistence_ok = True
             except Exception as db_exc:
                 import logging
                 logging.getLogger(__name__).exception("Failed to persist failed scanner snapshot: %s", db_exc)
+                p_error = str(db_exc)
             finally:
                 db.close()
 
             _last_scan_failed = True
             _last_scan_failure_reason = error_reason
-            return result
+
+            if not persistence_ok:
+                _latest_persistence_status = "SCAN_COMPLETED_PERSISTENCE_FAILED"
+                _latest_persistence_error = p_error
+                return {
+                    **result,
+                    "ok": False,
+                    "persistence_ok": False,
+                    "code": "SCAN_COMPLETED_PERSISTENCE_FAILED",
+                    "error": f"Scanner failed and Database persistence failed: {p_error}",
+                    "restart_recovery_available": False,
+                }
+            else:
+                _latest_persistence_status = "failed"
+                _latest_persistence_error = None
+                return {
+                    **result,
+                    "persistence_ok": True,
+                    "restart_recovery_available": False,
+                }
 
     except Exception as exc:
         completed_at = datetime.now(UTC)
@@ -421,6 +519,8 @@ def execute_backend_scan(client: Any, trigger_source: str = "automatic") -> dict
         result = {"ok": False, "error": error_reason}
 
         db = SessionLocal()
+        persistence_ok = False
+        p_error = None
         try:
             snapshot = ScannerSnapshot(
                 scan_id=scan_id,
@@ -438,15 +538,35 @@ def execute_backend_scan(client: Any, trigger_source: str = "automatic") -> dict
             )
             db.add(snapshot)
             db.commit()
+            persistence_ok = True
         except Exception as db_exc:
             import logging
             logging.getLogger(__name__).exception("Failed to persist failed scanner snapshot: %s", db_exc)
+            p_error = str(db_exc)
         finally:
             db.close()
 
         _last_scan_failed = True
         _last_scan_failure_reason = error_reason
-        return result
+
+        if not persistence_ok:
+            _latest_persistence_status = "SCAN_COMPLETED_PERSISTENCE_FAILED"
+            _latest_persistence_error = p_error
+            return {
+                "ok": False,
+                "persistence_ok": False,
+                "code": "SCAN_COMPLETED_PERSISTENCE_FAILED",
+                "error": f"Scanner exception and Database persistence failed: {error_reason}. DB: {p_error}",
+                "restart_recovery_available": False,
+            }
+        else:
+            _latest_persistence_status = "failed"
+            _latest_persistence_error = None
+            return {
+                "ok": False,
+                "persistence_ok": True,
+                "restart_recovery_available": False,
+            }
     finally:
         with _scanner_running_lock:
             _scanner_running = False
@@ -455,11 +575,14 @@ def execute_backend_scan(client: Any, trigger_source: str = "automatic") -> dict
 def get_latest_successful_snapshot() -> Any:
     from app.database import SessionLocal
     from app.models import ScannerSnapshot
+    from sqlalchemy.exc import SQLAlchemyError
     db = SessionLocal()
     try:
         return db.query(ScannerSnapshot).filter(ScannerSnapshot.status == "success").order_by(ScannerSnapshot.completed_at.desc()).first()
-    except Exception:
-        return None
+    except SQLAlchemyError as exc:
+        import logging
+        logging.getLogger(__name__).error("Failed to query latest successful snapshot: %s", exc)
+        raise RuntimeError(f"Database failure: {exc}") from exc
     finally:
         db.close()
 
@@ -467,53 +590,109 @@ def get_latest_successful_snapshot() -> Any:
 def get_latest_attempted_snapshot() -> Any:
     from app.database import SessionLocal
     from app.models import ScannerSnapshot
+    from sqlalchemy.exc import SQLAlchemyError
     db = SessionLocal()
     try:
         return db.query(ScannerSnapshot).order_by(ScannerSnapshot.completed_at.desc()).first()
-    except Exception:
-        return None
+    except SQLAlchemyError as exc:
+        import logging
+        logging.getLogger(__name__).error("Failed to query latest attempted snapshot: %s", exc)
+        raise RuntimeError(f"Database failure: {exc}") from exc
     finally:
         db.close()
 
 
 def get_scanner_runtime_state() -> dict[str, Any]:
-    if is_scanner_running():
+    from app.bot_controls import get_bot_status, can_execute
+
+    # Fetch bot status
+    try:
+        bot_status_info = get_bot_status()
+        bot_status = bot_status_info.get("status")
+        emergency_stop = bot_status_info.get("emergency_stop")
+        auto_trading_enabled = bot_status_info.get("auto_trading_enabled")
+
+        exec_allowed, _ = can_execute()
+        execution_enabled = exec_allowed
+        execution_blocked = not exec_allowed
+    except Exception as exc:
+        # If bot status cannot be read, report lifecycle state as unknown/blocked. Keep execution fail-closed.
+        bot_status = "unknown"
+        emergency_stop = None
+        auto_trading_enabled = None
+        execution_enabled = False
+        execution_blocked = True
+
+    # Determine independent states
+    scanner_enabled = _scanner_enabled
+    scanner_running = is_scanner_running()
+
+    # Scanner blocked conditions
+    scanner_blocked = (
+        not scanner_enabled
+        or emergency_stop is True
+        or not _public_market_authority_available
+    )
+
+    scanner_failed = _last_scan_failed
+
+    # Determine general status string
+    if scanner_running:
         status = "running"
+    elif scanner_blocked:
+        status = "blocked"
+    elif bot_status in {"unknown", "blocked"}:
+        status = "blocked"
+    elif scanner_failed:
+        status = "failed"
     else:
-        from app.bot_controls import get_bot_status
+        status = "idle"
 
-        try:
-            bot_status_info = get_bot_status()
-            bot_status = bot_status_info.get("status")
-            emergency_stop = bot_status_info.get("emergency_stop")
-        except Exception:
-            bot_status = "idle"
-            emergency_stop = False
-
-        if bot_status == "stopped" or emergency_stop:
-            status = "stopped"
-        elif _last_scan_failed:
-            status = "failed"
-        else:
-            status = "idle"
-
-    success_snap = get_latest_successful_snapshot()
-    last_success_time = success_snap.completed_at.isoformat() if success_snap else None
+    # Fetch snapshot times
+    last_success_time = None
+    try:
+        success_snap = get_latest_successful_snapshot()
+        if success_snap:
+            last_success_time = success_snap.completed_at.isoformat()
+    except Exception:
+        raise
 
     next_expected = None
     if status in {"idle", "running", "failed"}:
-        attempted_snap = get_latest_attempted_snapshot()
-        if attempted_snap:
-            next_expected_dt = attempted_snap.completed_at + timedelta(seconds=settings.bot_scan_interval_seconds)
-            next_expected = next_expected_dt.isoformat()
-        else:
-            next_expected = datetime.now(UTC).isoformat()
+        try:
+            attempted_snap = get_latest_attempted_snapshot()
+            if attempted_snap:
+                next_expected_dt = attempted_snap.completed_at + timedelta(seconds=settings.bot_scan_interval_seconds)
+                next_expected = next_expected_dt.isoformat()
+            else:
+                next_expected = datetime.now(UTC).isoformat()
+        except Exception:
+            raise
 
+    # Formulate state dictionary
     return {
         "status": status,
-        "running": status == "running",
+        "running": scanner_running,
         "last_successful_completion_time": last_success_time,
         "next_expected_automatic_scan_time": next_expected,
+
+        # Clear independent states:
+        "scanner_enabled": scanner_enabled,
+        "scanner_running": scanner_running,
+        "scanner_blocked": scanner_blocked,
+        "scanner_failed": scanner_failed,
+        "execution_enabled": execution_enabled,
+        "execution_blocked": execution_blocked,
+
+        # Runtime metadata:
+        "last_scheduled_scan_time": _last_scheduled_scan_time.isoformat() if _last_scheduled_scan_time else None,
+        "actual_scan_start_time": _actual_scan_start_time.isoformat() if _actual_scan_start_time else None,
+        "actual_completion_time": _actual_completion_time.isoformat() if _actual_completion_time else None,
+        "schedule_drift_milliseconds": _schedule_drift_milliseconds,
+        "scan_duration_milliseconds": _scan_duration_milliseconds,
+        "next_scheduled_scan_time": _next_scheduled_scan_time.isoformat() if _next_scheduled_scan_time else None,
+        "latest_persistence_status": _latest_persistence_status,
+        "latest_persistence_error": _latest_persistence_error,
     }
 
 
@@ -525,8 +704,15 @@ def _fetch_profile_candles(client: BybitDemoClient, symbol: str, skipped: list[d
         (SCALPING_PROFILE.trigger_label, SCALPING_TRIGGER_INTERVAL, SCALPING_TRIGGER_CANDLE_LIMIT),
     )
     fetched: dict[str, list[dict[str, Any]]] = {}
+    import time as pytime
     for label, interval, limit in specs:
-        ok, candles, error = client.safe_fetch_recent_candles(symbol=symbol, interval=interval, limit=limit)
+        ok, candles, error = False, [], None
+        for attempt in range(3):
+            ok, candles, error = client.safe_fetch_recent_candles(symbol=symbol, interval=interval, limit=limit)
+            if ok:
+                break
+            if attempt < 2:
+                pytime.sleep(0.5)  # bounded delay
         if ok:
             fetched[label] = list(candles or [])
         else:
@@ -590,12 +776,28 @@ def _approved_direction(trend: dict[str, Any]) -> str | None:
 
 
 def _resolve_scan_universe(client: BybitDemoClient) -> list[str]:
-    ok, tickers, _ = client.safe_fetch_market_tickers()
+    import time as pytime
+    retries = 3
+    delay = 1.0
+    ok, tickers, error = False, [], None
+
+    for attempt in range(retries):
+        ok, tickers, error = client.safe_fetch_market_tickers()
+        if ok and tickers:
+            break
+        if attempt < retries - 1:
+            pytime.sleep(delay)
+            delay *= 2.0
+
+    global _public_market_authority_available
     if not ok or not tickers:
+        _public_market_authority_available = False
         with _signals_lock:
             SCANNER_SYMBOLS.clear()
             _latest_universe_metadata.clear()
         return []
+
+    _public_market_authority_available = True
 
     candidates: list[tuple[float, str, dict[str, Any], dict[str, Any]]] = []
     seen_symbols: set[str] = set()
