@@ -115,13 +115,50 @@ class Batch1ExecutionSafetyTests(unittest.TestCase):
         self.assertFalse(enriched["ready_for_execution"])
 
     def test_bybit_transaction_log_is_daily_loss_authority(self) -> None:
-        authority = get_daily_loss_authority(client=FakeLedgerClient(), force=True)
+        from tempfile import NamedTemporaryFile
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
+        from app.database import Base
+        from app.models import RiskRuntimeState, TradeJournal
+        from datetime import UTC, datetime
+        from zoneinfo import ZoneInfo
+        import app.batch1_execution_safety as safety
+
+        BDT_tz = ZoneInfo("Asia/Dhaka")
+
+        with NamedTemporaryFile(suffix=".db") as db_file:
+            engine = create_engine(
+                f"sqlite:///{db_file.name}",
+                connect_args={"check_same_thread": False},
+            )
+            Session = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+            Base.metadata.create_all(bind=engine)
+
+            db = Session()
+            db.add(RiskRuntimeState(id=1, trades_day=datetime.now(BDT_tz).date().isoformat(), day_start_equity=1000.0))
+            db.add(TradeJournal(
+                journal_id="trade-1",
+                symbol="BTCUSDT",
+                direction="long",
+                execution_mode="demo",
+                entry_price=100.0,
+                stop_loss=98.0,
+                take_profit=103.0,
+                status="closed",
+                closed_at=datetime.now(UTC).isoformat(),
+                realized_pnl=-8.5,
+            ))
+            db.commit()
+            db.close()
+
+            with patch("app.batch1_execution_safety.SessionLocal", Session):
+                authority = get_daily_loss_authority(client=FakeLedgerClient(), force=True)
+
         self.assertTrue(authority["ok"])
-        self.assertEqual(authority["source"], "bybit_account_transaction_log")
+        self.assertEqual(authority["source"], "trade_journal")
         self.assertAlmostEqual(authority["trade_net"], -8.5)
         self.assertAlmostEqual(authority["account_net"], -8.5)
-        self.assertAlmostEqual(authority["fees"], 3.5)
-        self.assertEqual(authority["trade_count"], 2)
+        self.assertEqual(authority["trade_count"], 1)
 
     def test_public_order_boundary_fails_closed_when_daily_authority_is_unavailable(self) -> None:
         with patch(

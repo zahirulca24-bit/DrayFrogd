@@ -61,7 +61,7 @@ def install() -> None:
     ) -> dict[str, Any]:
         snapshot = original_risk_refresh(account_equity=account_equity, now=now)
         try:
-            authority = get_daily_loss_authority()
+            authority = get_daily_loss_authority(now=now)
             return apply_daily_loss_authority(
                 snapshot,
                 authority,
@@ -91,10 +91,11 @@ def install() -> None:
     ) -> dict[str, Any]:
         authority = get_daily_loss_authority(client=client, force=True)
         if not authority.get("ok"):
+            error_code = authority.get("error") or "DAILY_LOSS_AUTHORITY_UNAVAILABLE"
             return {
                 "ok": False,
-                "error": "DAILY_LOSS_AUTHORITY_UNAVAILABLE",
-                "detail": authority.get("error") or "Bybit daily loss authority is unavailable",
+                "error": error_code,
+                "detail": authority.get("detail") or "Daily loss authority is unavailable",
                 "daily_loss_authority": authority,
             }
 
@@ -168,10 +169,14 @@ def install() -> None:
     _INSTALLED = True
 
 
-def get_daily_loss_authority(*, client: Any | None = None, force: bool = False) -> dict[str, Any]:
+def get_daily_loss_authority(*, client: Any | None = None, force: bool = False, now: datetime | None = None) -> dict[str, Any]:
     resolved_client = client or get_exchange_client(__import__("app.bot_controls", fromlist=["get_execution_mode"]).get_execution_mode())
     mode = str(getattr(resolved_client, "mode", "demo") or "demo").lower()
-    day = datetime.now(BDT).date().isoformat()
+
+    current_time = now if now is not None else datetime.now(UTC)
+    if current_time.tzinfo is None:
+        current_time = current_time.replace(tzinfo=UTC)
+    day = current_time.astimezone(BDT).date().isoformat()
     key = f"{mode}:{day}"
     now_monotonic = time.monotonic()
 
@@ -181,30 +186,46 @@ def get_daily_loss_authority(*, client: Any | None = None, force: bool = False) 
             if cached and now_monotonic - cached[0] <= _AUTHORITY_CACHE_SECONDS:
                 return dict(cached[1])
 
-    audit = get_account_ledger_audit(resolved_client, bdt_date=day)
+    db = SessionLocal()
+    try:
+        from app.risk import calculate_daily_pnl_from_journal, RiskRuntimeState
+        row = db.query(RiskRuntimeState).filter(RiskRuntimeState.id == 1).first()
+        day_start_equity = float(row.day_start_equity) if row and row.day_start_equity is not None else None
+        audit = calculate_daily_pnl_from_journal(db, day, day_start_equity)
+    except Exception as exc:
+        audit = {
+            "ok": False,
+            "error": "DAILY_LOSS_AUTHORITY_UNAVAILABLE",
+            "detail": f"Database read failure: {exc}",
+        }
+    finally:
+        db.close()
+
     if not audit.get("ok"):
         result = {
             "ok": False,
             "date": day,
             "mode": mode,
-            "source": "bybit_account_transaction_log",
-            "error": audit.get("error") or "Bybit transaction log query failed",
+            "source": "trade_journal",
+            "error": audit.get("error") or "DAILY_LOSS_AUTHORITY_UNAVAILABLE",
+            "detail": audit.get("detail") or "Daily loss authority is unavailable",
         }
     else:
-        summary = audit.get("summary") if isinstance(audit.get("summary"), dict) else {}
+        computed_pnl = audit["computed_daily_realized_pnl"]
         result = {
             "ok": True,
             "date": day,
             "mode": mode,
-            "source": "bybit_account_transaction_log",
-            "trade_net": _number(summary.get("trade_change")) or 0.0,
-            "account_net": _number(summary.get("net_change")) or 0.0,
-            "fees": abs(_number(summary.get("fees")) or 0.0),
-            "funding": _number(summary.get("funding")) or 0.0,
-            "record_count": int(summary.get("record_count") or 0),
-            "trade_count": int(summary.get("trade_count") or 0),
+            "source": "trade_journal",
+            "trade_net": computed_pnl,
+            "account_net": computed_pnl,
+            "fees": 0.0,
+            "funding": 0.0,
+            "record_count": audit["included_record_count"],
+            "trade_count": audit["included_record_count"],
             "captured_at": datetime.now(UTC).isoformat(),
             "error": None,
+            "audit_evidence": audit,
         }
 
     with _CACHE_LOCK:
@@ -221,10 +242,24 @@ def apply_daily_loss_authority(
     enriched = dict(snapshot)
     enriched.update(
         daily_loss_authority_status="authoritative" if authority.get("ok") else "unavailable",
-        daily_loss_authority_source=authority.get("source") or "bybit_account_transaction_log",
+        daily_loss_authority_source=authority.get("source") or "trade_journal",
         daily_loss_authority_error=authority.get("error"),
     )
     if not authority.get("ok"):
+        error_code = authority.get("error") or "DAILY_LOSS_AUTHORITY_UNAVAILABLE"
+        db = SessionLocal()
+        try:
+            row = db.query(RiskRuntimeState).filter(RiskRuntimeState.id == 1).first()
+            if row is not None:
+                row.circuit_breaker_active = True
+                row.circuit_breaker_reason = error_code
+                db.commit()
+        finally:
+            db.close()
+        enriched.update(
+            circuit_breaker_active=True,
+            circuit_breaker_reason=error_code,
+        )
         return enriched
 
     trade_net = _number(authority.get("trade_net")) or 0.0
@@ -280,7 +315,7 @@ def apply_daily_loss_authority(
 
     enriched.update(
         realized_pnl_today=trade_net,
-        realized_pnl_source="bybit_account_transaction_log",
+        realized_pnl_source="trade_journal",
         authoritative_trade_net=trade_net,
         authoritative_account_net=account_net,
         authoritative_fees=_number(authority.get("fees")) or 0.0,
@@ -305,7 +340,7 @@ def apply_daily_loss_authority(
             metadata={
                 "affected_module": "risk",
                 "error_code": "DAILY_NET_LOSS_LIMIT_REACHED",
-                "authority_source": "bybit_account_transaction_log",
+                "authority_source": "trade_journal",
                 "trade_net": trade_net,
                 "account_net": account_net,
                 "fees": authority.get("fees"),

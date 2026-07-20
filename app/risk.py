@@ -189,6 +189,146 @@ def calculate_risk_capacity(
     }
 
 
+def calculate_daily_pnl_from_journal(db: Any, expected_day: str, day_start_equity: float | None) -> dict[str, Any]:
+    """Calculate daily realized PnL and audit decision from TradeJournal closed rows.
+
+    This implements strict rules to avoid stale/duplicated/incorrectly dated records
+    and fails closed on unavailability or inconsistency.
+    """
+    try:
+        journal_rows = db.query(TradeJournal).all()
+    except Exception as exc:
+        return {
+            "ok": False,
+            "error": "DAILY_LOSS_AUTHORITY_UNAVAILABLE",
+            "detail": f"Database query failed: {exc}",
+        }
+
+    seen_journal_ids = set()
+    seen_order_ids = set()
+    seen_execution_keys = set()
+
+    included_count = 0
+    excluded_count = 0
+    excluded_reasons: dict[str, int] = {}
+
+    computed_pnl = 0.0
+
+    def exclude(reason: str):
+        nonlocal excluded_count
+        excluded_count += 1
+        excluded_reasons[reason] = excluded_reasons.get(reason, 0) + 1
+
+    for row in journal_rows:
+        status = str(row.status or "").lower().strip()
+        journal_id = str(row.journal_id or "").strip()
+        order_id = str(row.order_id or "").strip()
+        execution_key = str(row.execution_key or "").strip()
+
+        # Check duplicate identity using stable identities
+        is_duplicate = False
+        if journal_id and journal_id in seen_journal_ids:
+            is_duplicate = True
+        elif order_id and order_id in seen_order_ids:
+            is_duplicate = True
+        elif execution_key and execution_key in seen_execution_keys:
+            is_duplicate = True
+
+        if is_duplicate:
+            exclude("duplicated")
+            continue
+
+        if journal_id:
+            seen_journal_ids.add(journal_id)
+        if order_id:
+            seen_order_ids.add(order_id)
+        if execution_key:
+            seen_execution_keys.add(execution_key)
+
+        # Check open / pending / unresolved
+        if status in ("active", "pending_execution"):
+            exclude("open")
+            continue
+        if status == "close_pending_sync":
+            exclude("pending")
+            continue
+        if status != "closed":
+            exclude("unresolved")
+            continue
+
+        # Check confirmed close time
+        if not row.closed_at:
+            exclude("missing confirmed close time")
+            continue
+
+        try:
+            closed_at_str = str(row.closed_at).replace("Z", "+00:00")
+            closed_at_dt = datetime.fromisoformat(closed_at_str)
+            if closed_at_dt.tzinfo is None:
+                closed_at_dt = closed_at_dt.replace(tzinfo=UTC)
+            else:
+                closed_at_dt = closed_at_dt.astimezone(UTC)
+        except Exception:
+            exclude("missing confirmed close time")
+            continue
+
+        # Check operational trading day boundary in BDT timezone
+        row_bdt_day = closed_at_dt.astimezone(BDT).date().isoformat()
+        if row_bdt_day != expected_day:
+            exclude("not attributable to the current trading day")
+            continue
+
+        # Check explicitly marked as estimated in metadata
+        metadata = {}
+        if row.exchange_metadata:
+            try:
+                metadata = json.loads(row.exchange_metadata) or {}
+            except Exception:
+                pass
+        is_estimate = bool(metadata.get("close_pnl_is_estimate") or False)
+        if is_estimate:
+            exclude("explicitly marked as estimated")
+            continue
+
+        # Check missing authoritative realized PnL
+        if row.realized_pnl is None:
+            exclude("missing authoritative realized PnL")
+            continue
+
+        try:
+            pnl_val = float(row.realized_pnl)
+        except (TypeError, ValueError):
+            exclude("missing authoritative realized PnL")
+            continue
+
+        if not isfinite(pnl_val):
+            return {
+                "ok": False,
+                "error": "DAILY_LOSS_DATA_INCONSISTENT",
+                "detail": f"Inconsistent non-finite realized PnL for row {row.journal_id}: {pnl_val}",
+            }
+
+        computed_pnl += pnl_val
+        included_count += 1
+
+    limit_ratio = float(DAILY_NET_LOSS_LIMIT_RATIO)
+    loss_limit = (day_start_equity or 0.0) * limit_ratio
+    circuit_breaker_active = bool(day_start_equity and computed_pnl <= -loss_limit + 1e-9)
+
+    return {
+        "ok": True,
+        "source": "trade_journal",
+        "operational_date": expected_day,
+        "timezone": "Asia/Dhaka",
+        "included_record_count": included_count,
+        "excluded_record_count": excluded_count,
+        "excluded_reasons": excluded_reasons,
+        "computed_daily_realized_pnl": computed_pnl,
+        "daily_loss_threshold": loss_limit,
+        "circuit_breaker_decision": circuit_breaker_active,
+    }
+
+
 def refresh_risk_state(
     account_equity: float | None = None,
     now: datetime | None = None,
@@ -211,8 +351,21 @@ def refresh_risk_state(
                 db.flush()
 
             day_changed = row.trades_day != current_day
-            previous_breaker = bool(row.circuit_breaker_active) and not day_changed
             if day_changed:
+                if bool(row.circuit_breaker_active):
+                    try:
+                        log_bot_event(
+                            "DAILY_NET_LOSS_CIRCUIT_BREAKER_RESET",
+                            f"Deterministic reset of previous day's hard stop state for a new operational day: {current_day}",
+                            level="info",
+                            metadata={
+                                "affected_module": "risk",
+                                "reset_day": current_day,
+                                "previous_day": row.trades_day,
+                            }
+                        )
+                    except Exception:
+                        pass
                 row.trades_day = current_day
                 row.trades_today = 0
                 row.day_start_equity = observed_equity
@@ -223,7 +376,10 @@ def refresh_risk_state(
                 row.available_risk = 0.0
                 row.circuit_breaker_active = False
                 row.circuit_breaker_reason = None
-            elif row.day_start_equity is None and observed_equity is not None:
+                row.audit_evidence_json = None
+
+            previous_breaker = bool(row.circuit_breaker_active) and not day_changed
+            if not day_changed and row.day_start_equity is None and observed_equity is not None:
                 row.day_start_equity = observed_equity
 
             cooldowns = _decode_cooldowns(row.symbol_cooldowns)
@@ -233,64 +389,95 @@ def refresh_risk_state(
                 if expiry > current
             }
 
-            journal_rows = db.query(TradeJournal).all()
-            active_rows = [item for item in journal_rows if is_capacity_blocking_status(item.status)]
-            active_symbols = sorted(
-                {
-                    str(item.symbol or "").upper().strip()
-                    for item in active_rows
-                    if str(item.symbol or "").strip()
-                }
-            )
-            active_trade_count = len(active_rows)
-            trades_today = sum(
-                1
-                for item in journal_rows
-                if _journal_row_consumes_daily_slot(item, current_day)
-            )
-            realized_pnl_today = sum(
-                _realized_pnl_for_day(item, current_day)
-                for item in journal_rows
-            )
-            live_risk = sum(_journal_row_live_risk(item) for item in active_rows)
+            try:
+                journal_rows = db.query(TradeJournal).all()
+                active_rows = [item for item in journal_rows if is_capacity_blocking_status(item.status)]
+                active_symbols = sorted(
+                    {
+                        str(item.symbol or "").upper().strip()
+                        for item in active_rows
+                        if str(item.symbol or "").strip()
+                    }
+                )
+                active_trade_count = len(active_rows)
+                trades_today = sum(
+                    1
+                    for item in journal_rows
+                    if _journal_row_consumes_daily_slot(item, current_day)
+                )
+                live_risk = sum(_journal_row_live_risk(item) for item in active_rows)
 
-            day_start_equity = _positive_float(row.day_start_equity)
-            capacity = calculate_risk_capacity(
-                day_start_equity=day_start_equity or 0.0,
-                realized_pnl_today=realized_pnl_today,
-                live_risk=live_risk,
-            )
-            loss_limit = (day_start_equity or 0.0) * DAILY_NET_LOSS_LIMIT_RATIO
-            realized_threshold_hit = bool(
-                day_start_equity
-                and realized_pnl_today <= -(loss_limit) + 1e-9
-            )
-            equity_drawdown_today = (
-                observed_equity - day_start_equity
-                if observed_equity is not None and day_start_equity
-                else None
-            )
-            equity_threshold_hit = bool(
-                day_start_equity
-                and equity_drawdown_today is not None
-                and equity_drawdown_today <= -(loss_limit) + 1e-9
-            )
-            threshold_hit = realized_threshold_hit or equity_threshold_hit
-            circuit_breaker_active = previous_breaker or threshold_hit
-            if equity_threshold_hit:
-                circuit_reason = (
-                    f"Daily account equity drawdown limit reached: {equity_drawdown_today:.2f} USDT "
-                    f"<= -{loss_limit:.2f} USDT"
+                day_start_equity = _positive_float(row.day_start_equity)
+
+                # Query our single authoritative daily-loss source
+                audit = calculate_daily_pnl_from_journal(db, current_day, day_start_equity)
+            except Exception as exc:
+                audit = {
+                    "ok": False,
+                    "error": "DAILY_LOSS_AUTHORITY_UNAVAILABLE",
+                    "detail": f"Database read failure: {exc}",
+                }
+                active_rows = []
+                active_symbols = []
+                active_trade_count = 0
+                trades_today = 0
+                live_risk = 0.0
+                day_start_equity = _positive_float(row.day_start_equity)
+
+            if not audit.get("ok"):
+                # Database or validation is inconsistent/unavailable, must fail closed
+                circuit_breaker_active = True
+                circuit_reason = audit.get("error") or "DAILY_LOSS_AUTHORITY_UNAVAILABLE"
+                realized_pnl_today = float(row.realized_pnl_today or 0.0)
+                loss_limit = (day_start_equity or 0.0) * DAILY_NET_LOSS_LIMIT_RATIO
+                equity_drawdown_today = None
+                capacity = calculate_risk_capacity(
+                    day_start_equity=day_start_equity or 0.0,
+                    realized_pnl_today=realized_pnl_today,
+                    live_risk=live_risk,
                 )
-            elif realized_threshold_hit:
-                circuit_reason = (
-                    f"Daily net realized loss limit reached: {realized_pnl_today:.2f} USDT "
-                    f"<= -{loss_limit:.2f} USDT"
-                )
-            elif circuit_breaker_active:
-                circuit_reason = row.circuit_breaker_reason or "Daily loss circuit breaker is active"
             else:
-                circuit_reason = None
+                realized_pnl_today = audit["computed_daily_realized_pnl"]
+                loss_limit = audit["daily_loss_threshold"]
+                realized_threshold_hit = audit["circuit_breaker_decision"]
+
+                equity_drawdown_today = (
+                    observed_equity - day_start_equity
+                    if observed_equity is not None and day_start_equity
+                    else None
+                )
+                equity_threshold_hit = bool(
+                    day_start_equity
+                    and equity_drawdown_today is not None
+                    and equity_drawdown_today <= -(loss_limit) + 1e-9
+                )
+
+                threshold_hit = realized_threshold_hit or equity_threshold_hit
+                circuit_breaker_active = previous_breaker or threshold_hit
+
+                if equity_threshold_hit:
+                    circuit_reason = (
+                        f"Daily account equity drawdown limit reached: {equity_drawdown_today:.2f} USDT "
+                        f"<= -{loss_limit:.2f} USDT"
+                    )
+                elif realized_threshold_hit:
+                    circuit_reason = (
+                        f"Daily net realized loss limit reached: {realized_pnl_today:.2f} USDT "
+                        f"<= -{loss_limit:.2f} USDT"
+                    )
+                elif circuit_breaker_active:
+                    circuit_reason = row.circuit_breaker_reason or "Daily loss circuit breaker is active"
+                else:
+                    circuit_reason = None
+
+                capacity = calculate_risk_capacity(
+                    day_start_equity=day_start_equity or 0.0,
+                    realized_pnl_today=realized_pnl_today,
+                    live_risk=live_risk,
+                )
+
+                # Store audit evidence
+                row.audit_evidence_json = json.dumps(audit, separators=(",", ":"))
 
             row.trades_day = current_day
             row.trades_today = trades_today
@@ -347,6 +534,8 @@ def refresh_risk_state(
                 "profit_recycling": "full_net_realized_pnl",
                 "circuit_breaker_active": circuit_breaker_active,
                 "circuit_breaker_reason": circuit_reason,
+                "audit_evidence": audit,
+                "audit_evidence_json": row.audit_evidence_json,
             }
         finally:
             db.close()
@@ -551,6 +740,7 @@ def _ensure_risk_runtime_columns() -> None:
         "available_risk": "FLOAT NOT NULL DEFAULT 0",
         "circuit_breaker_active": "BOOLEAN NOT NULL DEFAULT FALSE",
         "circuit_breaker_reason": "VARCHAR(255) NULL",
+        "audit_evidence_json": "TEXT NULL",
     }
     with engine.begin() as connection:
         for name, definition in column_defs.items():

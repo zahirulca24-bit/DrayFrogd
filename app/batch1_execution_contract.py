@@ -37,10 +37,13 @@ def install() -> None:
     ) -> dict[str, Any]:
         authority = safety.get_daily_loss_authority(client=client, force=True)
         if not authority.get("ok"):
+            error_code = authority.get("error")
+            if error_code not in ("DAILY_LOSS_AUTHORITY_UNAVAILABLE", "DAILY_LOSS_DATA_INCONSISTENT"):
+                error_code = "DAILY_LOSS_AUTHORITY_UNAVAILABLE"
             return {
                 "ok": False,
-                "error": "DAILY_LOSS_AUTHORITY_UNAVAILABLE",
-                "detail": authority.get("error") or "Bybit daily loss authority is unavailable",
+                "error": error_code,
+                "detail": authority.get("detail") or authority.get("error") or "Daily loss authority is unavailable",
                 "daily_loss_authority": authority,
             }
 
