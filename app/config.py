@@ -86,6 +86,9 @@ class Settings:
             "60" if os.getenv("APP_ENV", "development").strip().lower() == "production" else "250",
         )
     )
+    reconciliation_retry_window_seconds: int = int(
+        os.getenv("RECONCILIATION_RETRY_WINDOW_SECONDS", "3600")
+    )
 
 
 settings = Settings()

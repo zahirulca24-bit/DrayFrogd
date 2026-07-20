@@ -296,6 +296,7 @@ def serialize_trade_entry(row: TradeJournal) -> dict[str, Any]:
         "opened_at": row.opened_at,
         "closed_at": row.closed_at,
         "exchange_metadata": metadata,
+        "close_pnl_is_estimate": bool(metadata.get("close_pnl_is_estimate") or False),
     }
 
 

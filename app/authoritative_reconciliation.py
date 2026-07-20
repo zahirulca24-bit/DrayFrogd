@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from threading import RLock
 from typing import Any
 
+from app.config import settings
+from app.journal import log_bot_event, update_trade_entry, append_trade_event
+from app.execution_core import _calculate_realized_pnl
 from app.authoritative_state import get_snapshot, publish_snapshot
 from app.close_fill_sync import fetch_exact_close_result
 from app.execution import close_trade, get_active_trades, replace_active_trades
@@ -172,6 +176,100 @@ def _reconcile_state_locked(client: BybitClient, *, source: str = "rest_reconcil
                     "Exchange position is absent and exact Bybit close fill/PnL/fees were synchronized.",
                     exact_close,
                 )
+            continue
+
+        metadata = trade.get("exchange_metadata") if isinstance(trade.get("exchange_metadata"), dict) else {}
+        close_pending_since_str = metadata.get("close_pending_since")
+        if not close_pending_since_str:
+            events = metadata.get("trade_events") or []
+            for event in events:
+                if event.get("event_type") in {"JOURNAL_STALE_POSITION_ABSENT", "CLOSE_FILL_SYNC_PENDING"}:
+                    close_pending_since_str = event.get("created_at")
+                    break
+
+        if not close_pending_since_str:
+            close_pending_since_str = datetime.now(UTC).isoformat()
+
+        metadata = dict(metadata)
+        metadata["close_pending_since"] = close_pending_since_str
+        trade["exchange_metadata"] = metadata
+
+        try:
+            if close_pending_since_str.endswith("Z"):
+                parsed_str = close_pending_since_str[:-1] + "+00:00"
+            else:
+                parsed_str = close_pending_since_str
+            since_dt = datetime.fromisoformat(parsed_str)
+            if since_dt.tzinfo is None:
+                since_dt = since_dt.replace(tzinfo=UTC)
+        except Exception:
+            since_dt = datetime.now(UTC)
+
+        elapsed_seconds = (datetime.now(UTC) - since_dt).total_seconds()
+        retry_window = float(getattr(settings, "reconciliation_retry_window_seconds", 3600))
+
+        if elapsed_seconds >= retry_window:
+            log_bot_event(
+                "RECONCILIATION_STUCK_FALLBACK",
+                f"Trade {journal_id} for {symbol} has been stuck in close_pending_sync since {close_pending_since_str}. Falling back to best-effort close.",
+                level="warning",
+                metadata={
+                    "journal_id": journal_id,
+                    "symbol": symbol,
+                    "close_pending_since": close_pending_since_str,
+                    "elapsed_seconds": elapsed_seconds,
+                    "retry_window_seconds": retry_window,
+                }
+            )
+
+            exit_price = ticker_prices.get(symbol)
+            if exit_price is None or exit_price <= 0:
+                exit_price = float(trade.get("stop_loss") or trade.get("entry") or 0.0)
+
+            fee_bps = float(getattr(settings, "execution_taker_fee_bps", 5.5))
+            fee_factor = fee_bps / 10000.0
+            qty = float(trade.get("remaining_quantity") or trade.get("quantity") or 0.0)
+            entry_price = float(trade.get("entry") or 0.0)
+            estimated_fees = (entry_price * qty * fee_factor) + (exit_price * qty * fee_factor)
+
+            estimated_pnl = _calculate_realized_pnl(trade, exit_price=exit_price, fees=estimated_fees) or 0.0
+            estimated_result = "profit" if estimated_pnl > 0 else "loss" if estimated_pnl < 0 else "flat"
+            closed_at_str = datetime.now(UTC).isoformat()
+
+            metadata["close_pnl_is_estimate"] = True
+            metadata["estimated_at"] = closed_at_str
+
+            fallback_updates = {
+                "status": "closed",
+                "result": estimated_result,
+                "close_reason": "estimated_close",
+                "exit_price": exit_price,
+                "realized_pnl": estimated_pnl,
+                "fees": estimated_fees,
+                "closed_at": closed_at_str,
+                "exchange_metadata": metadata,
+            }
+
+            if journal_id:
+                update_trade_entry(journal_id, fallback_updates)
+                append_trade_event(
+                    journal_id,
+                    "RECONCILED_CLOSED_ESTIMATED",
+                    f"Stuck trade {journal_id} resolved to closed via best-effort estimate.",
+                    fallback_updates,
+                )
+
+            closed_trade = {**trade, **fallback_updates, "close_pnl_is_estimate": True}
+            closed_symbols.append(symbol)
+            closed_trades.append(closed_trade)
+
+            updates.append(
+                {
+                    "symbol": symbol,
+                    "status": "closed",
+                    "reason": f"Retry window expired; best-effort fallback applied.",
+                }
+            )
             continue
 
         stale = _mark_journal_stale(

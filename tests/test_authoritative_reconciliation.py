@@ -113,8 +113,50 @@ def test_matching_exchange_position_reuses_existing_journal_metadata() -> None:
 
 def test_journal_only_row_is_not_operator_active() -> None:
     reset_snapshot()
+    from datetime import UTC, datetime, timedelta
+    past_time = (datetime.now(UTC) - timedelta(hours=2)).isoformat()
     stale = {
         "journal_id": "jrnl-stale",
+        "symbol": "LABUSDT",
+        "direction": "short",
+        "execution_mode": "demo",
+        "entry": 0.44,
+        "stop_loss": 0.46,
+        "take_profit": 0.40,
+        "quantity": 100,
+        "status": "close_pending_sync",
+        "exchange_metadata": {
+            "close_pending_since": past_time
+        },
+    }
+    client = FakeClient([])
+
+    with (
+        patch("app.authoritative_reconciliation.get_active_trades", return_value=[stale]),
+        patch("app.authoritative_reconciliation._safe_open_trade_history", return_value=[stale]),
+        patch("app.authoritative_reconciliation.fetch_exact_close_result", return_value=(None, "not available yet")),
+        patch("app.authoritative_reconciliation.update_trade_entry") as update_mock,
+        patch("app.authoritative_reconciliation.append_trade_event"),
+        patch("app.authoritative_reconciliation.replace_active_trades") as replace_mock,
+    ):
+        result = reconcile_state(client)
+
+    assert result["ok"] is True
+    assert result["authoritative_trades"] == []
+    assert result["trades"] == []
+    assert update_mock.call_args.kwargs == {}
+    persisted = update_mock.call_args.args[1]
+    assert persisted["status"] == "closed"
+    assert persisted["exchange_metadata"]["close_pnl_is_estimate"] is True
+    assert get_snapshot()["trades"] == []
+    update_mock.assert_called_once()
+    replace_mock.assert_called_once()
+
+
+def test_journal_only_row_is_marked_pending_sync_within_window() -> None:
+    reset_snapshot()
+    active_stale = {
+        "journal_id": "jrnl-active-stale",
         "symbol": "LABUSDT",
         "direction": "short",
         "execution_mode": "demo",
@@ -128,8 +170,8 @@ def test_journal_only_row_is_not_operator_active() -> None:
     client = FakeClient([])
 
     with (
-        patch("app.authoritative_reconciliation.get_active_trades", return_value=[stale]),
-        patch("app.authoritative_reconciliation._safe_open_trade_history", return_value=[stale]),
+        patch("app.authoritative_reconciliation.get_active_trades", return_value=[active_stale]),
+        patch("app.authoritative_reconciliation._safe_open_trade_history", return_value=[active_stale]),
         patch("app.authoritative_reconciliation.fetch_exact_close_result", return_value=(None, "not available yet")),
         patch("app.reconciliation_persistence.update_trade_entry") as update_mock,
         patch("app.reconciliation_persistence.append_trade_event"),
@@ -144,9 +186,6 @@ def test_journal_only_row_is_not_operator_active() -> None:
     persisted = update_mock.call_args.args[1]
     assert persisted["status"] == "close_pending_sync"
     assert persisted["result"] == "reconciliation_stale"
-    assert get_snapshot()["trades"] == []
-    update_mock.assert_called_once()
-    replace_mock.assert_called_once()
 
 
 def test_opposite_side_same_symbol_is_not_merged() -> None:
