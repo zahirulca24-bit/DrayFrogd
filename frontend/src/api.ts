@@ -268,11 +268,11 @@ export const api = {
     const response = await request<{ trades: BackendTrade[] }>("/trade-history", {}, token);
     return response.trades.map((item, index) => toTradeHistoryEntry(toUiTrade(item, index)));
   },
-  getJournalTrades: (token: string) => request<{ trades: JournalTradeEntry[] }>("/journal/trades", {}, token),
-  getLedgerAudit: (token: string, date?: string) =>
-    request<LedgerAuditResponse>(`/account/ledger-audit${date ? `?date=${encodeURIComponent(date)}` : ""}`, {}, token),
-  getStrategyAudit: (token: string, date?: string) =>
-    request<StrategyAuditResponse>(`/strategy-audit${date ? `?date=${encodeURIComponent(date)}` : ""}`, {}, token),
+  getJournalTrades: (token: string, options?: RequestInit) => request<{ trades: JournalTradeEntry[] }>("/journal/trades", options, token),
+  getLedgerAudit: (token: string, date?: string, options?: RequestInit) =>
+    request<LedgerAuditResponse>(`/account/ledger-audit${date ? `?date=${encodeURIComponent(date)}` : ""}`, options, token),
+  getStrategyAudit: (token: string, date?: string, options?: RequestInit) =>
+    request<StrategyAuditResponse>(`/strategy-audit${date ? `?date=${encodeURIComponent(date)}` : ""}`, options, token),
   getBotEvents: (token: string, limit = 100) => request<{ events: BotEventEntry[] }>(`/bot/events?limit=${limit}`, {}, token),
   getWatchdogStatus: (token: string) => request<WatchdogSnapshot>("/watchdog/status", {}, token),
   getBotStatus: (token: string) => request<BotControlState>("/bot/status", {}, token),

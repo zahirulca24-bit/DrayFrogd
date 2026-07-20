@@ -19,6 +19,7 @@ import {
 import Sidebar from "./components/Sidebar";
 import LockScreen from "./components/LockScreen";
 import DashboardView from "./components/DashboardView";
+import { JournalDataProvider } from "./components/JournalDataContext";
 import ControlPanel from "./components/ControlPanel";
 import SignalEngine from "./components/SignalEngine";
 import ActiveTrades from "./components/ActiveTrades";
@@ -492,6 +493,7 @@ export default function App() {
   }
 
   return (
+    <JournalDataProvider authToken={authToken} activeTab={activeTab}>
     <div className="flex min-h-screen bg-[#0A0B0E] text-slate-300 font-sans selection:bg-rose-500 selection:text-white overflow-hidden" id="main-app-container">
       <Sidebar
         activeTab={activeTab}
@@ -581,5 +583,6 @@ export default function App() {
         </main>
       </div>
     </div>
+    </JournalDataProvider>
   );
 }
