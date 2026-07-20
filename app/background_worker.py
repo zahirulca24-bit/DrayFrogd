@@ -166,27 +166,41 @@ async def auto_trading_loop() -> None:
                 if watchdog_result.get("execution_blocked"):
                     logger.warning("Runtime watchdog blocked new execution: %s", watchdog_result.get("reasons"))
 
+                from app.bot_controls import get_bot_status
+                from app.scanner import execute_backend_scan
+
+                bot_status_info = get_bot_status()
+                scanner_allowed = bot_status_info.get("status") in {"running", "idle"} and not bot_status_info.get("emergency_stop")
+
+                if not scanner_allowed:
+                    logger.debug("Automatic scanning is stopped by lifecycle status.")
+                    await asyncio.sleep(settings.bot_scan_interval_seconds)
+                    continue
+
+                result = await asyncio.to_thread(execute_backend_scan, client, "automatic")
+                if not result.get("ok"):
+                    if result.get("code") == "ALREADY_RUNNING":
+                        logger.debug("Automatic scan skipped: scan already in progress.")
+                    else:
+                        _safe_log_bot_event(
+                            "scan_failed",
+                            result.get("error", "Scanner failed"),
+                            level="warning",
+                            metadata={
+                                **result,
+                                "endpoint": "/scanner/results",
+                                "affected_module": "scanner",
+                                "error_code": "SCAN_FAILED",
+                                "retry_count": 1,
+                            },
+                        )
+                    await asyncio.sleep(settings.bot_scan_interval_seconds)
+                    continue
+
                 allowed, reason = can_execute()
                 if not allowed:
                     if reason:
                         logger.debug("Auto trading blocked: %s", reason)
-                    await asyncio.sleep(settings.bot_scan_interval_seconds)
-                    continue
-
-                result = await asyncio.to_thread(run_scan, client)
-                if not result.get("ok"):
-                    _safe_log_bot_event(
-                        "scan_failed",
-                        result.get("error", "Scanner failed"),
-                        level="warning",
-                        metadata={
-                            **result,
-                            "endpoint": "/scanner/results",
-                            "affected_module": "scanner",
-                            "error_code": "SCAN_FAILED",
-                            "retry_count": 1,
-                        },
-                    )
                     await asyncio.sleep(settings.bot_scan_interval_seconds)
                     continue
 

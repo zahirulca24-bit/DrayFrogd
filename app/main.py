@@ -397,16 +397,97 @@ def _run_scan_cycle(mode: str, *, trigger: str) -> dict:
 
 @app.post("/scanner/run")
 async def scanner_run(_: dict = Depends(require_authenticated)) -> dict:
+    from app.scanner import execute_backend_scan
+    from fastapi.responses import JSONResponse
+
     mode = get_execution_mode()
     client = get_exchange_client(mode)
-    result = await asyncio.to_thread(run_scan, client)
+    result = await asyncio.to_thread(execute_backend_scan, client, "manual")
+    if result.get("code") == "ALREADY_RUNNING" or (not result.get("ok") and "already running" in str(result.get("error", "")).lower()):
+        return JSONResponse(
+            status_code=409,
+            content={
+                "ok": False,
+                "error": "Scanner is already running an active cycle",
+                "code": "ALREADY_RUNNING"
+            }
+        )
     log_bot_event("scanner_run", "Scanner executed manually (scan-only diagnostic)", metadata={"mode": mode, "result": result})
     return result
 
 
 @app.get("/scanner/results")
 def scanner_results(_: dict = Depends(require_authenticated)) -> dict:
-    return {"signals": get_latest_signals()}
+    import json
+    from app.scanner import (
+        get_latest_successful_snapshot,
+        get_latest_attempted_snapshot,
+        get_scanner_runtime_state,
+        get_latest_signals
+    )
+
+    success_snap = get_latest_successful_snapshot()
+    attempted_snap = get_latest_attempted_snapshot()
+    state = get_scanner_runtime_state()
+
+    response = {
+        "ok": True,
+        "status": state["status"],
+        "running": state["running"],
+        "last_successful_completion_time": state["last_successful_completion_time"],
+        "next_expected_automatic_scan_time": state["next_expected_automatic_scan_time"],
+        "signals": [],
+        "results": [],
+        "symbols_scanned": 0,
+        "rejected_markets": [],
+        "ranked_symbols": 0,
+        "strategy_checks": 0,
+    }
+
+    if success_snap:
+        try:
+            summary = json.loads(success_snap.summary_json)
+            response.update({
+                "signals": summary.get("signals", []) or summary.get("results", []),
+                "results": summary.get("results", []),
+                "symbols_scanned": summary.get("symbols_scanned", 0),
+                "rejected_markets": summary.get("rejected_markets", []),
+                "ranked_symbols": summary.get("ranked_symbols", 0),
+                "strategy_checks": summary.get("strategy_checks", 0),
+                "latest_successful_summary": {
+                    "scan_id": success_snap.scan_id,
+                    "started_at": success_snap.started_at.isoformat(),
+                    "completed_at": success_snap.completed_at.isoformat(),
+                    "trigger_source": success_snap.trigger_source,
+                    "symbols_scanned": success_snap.symbols_scanned,
+                    "signals_found": success_snap.signals_found,
+                    "rejected_count": success_snap.rejected_count,
+                    "warning_error_count": success_snap.warning_error_count,
+                    "scanner_config_version": success_snap.scanner_config_version,
+                }
+            })
+        except Exception:
+            pass
+
+    if not response["signals"]:
+        response["signals"] = get_latest_signals()
+
+    if attempted_snap and attempted_snap.status == "failed":
+        response["latest_failed_attempt"] = {
+            "scan_id": attempted_snap.scan_id,
+            "started_at": attempted_snap.started_at.isoformat(),
+            "completed_at": attempted_snap.completed_at.isoformat(),
+            "trigger_source": attempted_snap.trigger_source,
+            "failure_reason": attempted_snap.failure_reason,
+        }
+
+    return response
+
+
+@app.get("/scanner/state")
+def scanner_state_endpoint(_: dict = Depends(require_authenticated)) -> dict:
+    from app.scanner import get_scanner_runtime_state
+    return get_scanner_runtime_state()
 
 
 @app.get("/signals")

@@ -278,19 +278,249 @@ def _apply_scalping_suppression(
     return visible_signals, visible_results, suppressed_rows
 
 
+def _restore_from_latest_snapshot() -> None:
+    import json
+    from app.database import SessionLocal
+    from app.models import ScannerSnapshot
+
+    db = SessionLocal()
+    try:
+        snap = db.query(ScannerSnapshot).filter(ScannerSnapshot.status == "success").order_by(ScannerSnapshot.completed_at.desc()).first()
+        if snap:
+            try:
+                summary = json.loads(snap.summary_json)
+                global _latest_signals, _latest_scan_results, _latest_ranked_markets
+                _latest_signals.clear()
+                _latest_signals.extend(summary.get("signals", []))
+                _latest_scan_results.clear()
+                _latest_scan_results.extend(summary.get("results", []))
+                _latest_ranked_markets.clear()
+                _latest_ranked_markets.extend(summary.get("ranked_markets", []))
+            except Exception:
+                pass
+    finally:
+        db.close()
+
+
 def get_latest_signals() -> list[dict[str, Any]]:
     with _signals_lock:
+        if not _latest_scan_results and not _latest_signals:
+            _restore_from_latest_snapshot()
         return list(_latest_scan_results or _latest_signals)
 
 
 def get_active_signals() -> list[dict[str, Any]]:
     with _signals_lock:
+        if not _latest_signals:
+            _restore_from_latest_snapshot()
         return [signal for signal in _latest_signals if signal.get("status") == "active"]
 
 
 def get_ranked_markets() -> list[dict[str, Any]]:
     with _signals_lock:
+        if not _latest_ranked_markets:
+            _restore_from_latest_snapshot()
         return list(_latest_ranked_markets)
+
+
+_scanner_running = False
+_scanner_running_lock = Lock()
+_last_scan_failed = False
+_last_scan_failure_reason: str | None = None
+
+
+def is_scanner_running() -> bool:
+    with _scanner_running_lock:
+        return _scanner_running
+
+
+def execute_backend_scan(client: Any, trigger_source: str = "automatic") -> dict[str, Any]:
+    global _scanner_running, _last_scan_failed, _last_scan_failure_reason
+
+    with _scanner_running_lock:
+        if _scanner_running:
+            return {
+                "ok": False,
+                "error": "Scanner is already running an active cycle",
+                "code": "ALREADY_RUNNING"
+            }
+        _scanner_running = True
+
+    import uuid
+    import json
+    from app.database import SessionLocal
+    from app.models import ScannerSnapshot
+
+    started_at = datetime.now(UTC)
+    scan_id = str(uuid.uuid4())
+
+    try:
+        result = run_scan(client, now=started_at)
+        completed_at = datetime.now(UTC)
+
+        if result.get("ok"):
+            db = SessionLocal()
+            try:
+                snapshot = ScannerSnapshot(
+                    scan_id=scan_id,
+                    started_at=started_at,
+                    completed_at=completed_at,
+                    status="success",
+                    trigger_source=trigger_source,
+                    symbols_scanned=result.get("symbols_scanned", 0),
+                    signals_found=result.get("signals_found", 0),
+                    rejected_count=len(result.get("rejected_markets", [])),
+                    warning_error_count=len(result.get("skipped", [])),
+                    summary_json=json.dumps(result),
+                    scanner_config_version="v2.0",
+                )
+                db.add(snapshot)
+                db.commit()
+            except Exception as db_exc:
+                import logging
+                logging.getLogger(__name__).exception("Failed to persist successful scanner snapshot: %s", db_exc)
+            finally:
+                db.close()
+
+            _last_scan_failed = False
+            _last_scan_failure_reason = None
+            return result
+        else:
+            error_reason = result.get("error", "Unknown scanner error")
+            db = SessionLocal()
+            try:
+                snapshot = ScannerSnapshot(
+                    scan_id=scan_id,
+                    started_at=started_at,
+                    completed_at=completed_at,
+                    status="failed",
+                    trigger_source=trigger_source,
+                    symbols_scanned=0,
+                    signals_found=0,
+                    rejected_count=0,
+                    warning_error_count=1,
+                    summary_json=json.dumps(result),
+                    scanner_config_version="v2.0",
+                    failure_reason=error_reason,
+                )
+                db.add(snapshot)
+                db.commit()
+            except Exception as db_exc:
+                import logging
+                logging.getLogger(__name__).exception("Failed to persist failed scanner snapshot: %s", db_exc)
+            finally:
+                db.close()
+
+            _last_scan_failed = True
+            _last_scan_failure_reason = error_reason
+            return result
+
+    except Exception as exc:
+        completed_at = datetime.now(UTC)
+        error_reason = str(exc)
+        result = {"ok": False, "error": error_reason}
+
+        db = SessionLocal()
+        try:
+            snapshot = ScannerSnapshot(
+                scan_id=scan_id,
+                started_at=started_at,
+                completed_at=completed_at,
+                status="failed",
+                trigger_source=trigger_source,
+                symbols_scanned=0,
+                signals_found=0,
+                rejected_count=0,
+                warning_error_count=1,
+                summary_json=json.dumps(result),
+                scanner_config_version="v2.0",
+                failure_reason=error_reason,
+            )
+            db.add(snapshot)
+            db.commit()
+        except Exception as db_exc:
+            import logging
+            logging.getLogger(__name__).exception("Failed to persist failed scanner snapshot: %s", db_exc)
+        finally:
+            db.close()
+
+        _last_scan_failed = True
+        _last_scan_failure_reason = error_reason
+        return result
+    finally:
+        with _scanner_running_lock:
+            _scanner_running = False
+
+
+def get_latest_successful_snapshot() -> Any:
+    from app.database import SessionLocal
+    from app.models import ScannerSnapshot
+    db = SessionLocal()
+    try:
+        return db.query(ScannerSnapshot).filter(ScannerSnapshot.status == "success").order_by(ScannerSnapshot.completed_at.desc()).first()
+    except Exception:
+        return None
+    finally:
+        db.close()
+
+
+def get_latest_attempted_snapshot() -> Any:
+    from app.database import SessionLocal
+    from app.models import ScannerSnapshot
+    db = SessionLocal()
+    try:
+        return db.query(ScannerSnapshot).order_by(ScannerSnapshot.completed_at.desc()).first()
+    except Exception:
+        return None
+    finally:
+        db.close()
+
+
+def get_scanner_runtime_state() -> dict[str, Any]:
+    if is_scanner_running():
+        status = "running"
+    else:
+        from app.bot_controls import get_bot_status, _risk_circuit_breaker_active
+        from app.runtime_guard import get_watchdog_execution_block
+
+        try:
+            bot_status_info = get_bot_status()
+            bot_status = bot_status_info.get("status")
+            emergency_stop = bot_status_info.get("emergency_stop")
+        except Exception:
+            bot_status = "idle"
+            emergency_stop = False
+
+        watchdog_blocked, _ = get_watchdog_execution_block()
+        circuit_breaker = _risk_circuit_breaker_active()
+
+        if bot_status == "stopped" or emergency_stop:
+            status = "stopped"
+        elif watchdog_blocked or circuit_breaker:
+            status = "blocked"
+        elif _last_scan_failed:
+            status = "failed"
+        else:
+            status = "idle"
+
+    success_snap = get_latest_successful_snapshot()
+    last_success_time = success_snap.completed_at.isoformat() if success_snap else None
+
+    next_expected = None
+    if status in {"idle", "running", "failed"}:
+        attempted_snap = get_latest_attempted_snapshot()
+        if attempted_snap:
+            next_expected_dt = attempted_snap.completed_at + timedelta(seconds=settings.bot_scan_interval_seconds)
+            next_expected = next_expected_dt.isoformat()
+        else:
+            next_expected = datetime.now(UTC).isoformat()
+
+    return {
+        "status": status,
+        "running": status == "running",
+        "last_successful_completion_time": last_success_time,
+        "next_expected_automatic_scan_time": next_expected,
+    }
 
 
 def _fetch_profile_candles(client: BybitDemoClient, symbol: str, skipped: list[dict[str, str]]) -> dict[str, list[dict[str, Any]]]:
