@@ -40,7 +40,7 @@ from app.execution_core import (
     _to_float,
     _utc_now_iso,
     add_closed_trades,
-    close_trade,
+    close_trade as _close_trade_core,
     get_active_trades,
     get_operator_active_trades,
     get_closed_trades,
@@ -58,6 +58,7 @@ from app.native_profit_orders import (
     cancel_native_profit_orders,
     install_native_profit_orders,
 )
+from app.sl_forensics import enrich_close_with_sl_forensics
 from app.trade_management_profiles import (
     build_profile_management_state,
     extract_observed_entry_fee,
@@ -495,6 +496,47 @@ def _apply_management_profile(client: Any, trade: dict[str, Any], spread_gate: d
     profiled_trade["management"] = management
     profiled_trade["exchange_metadata"]["management"] = management
     return {"ok": True, "trade": profiled_trade}
+
+
+def close_trade(journal_id: str, close_fields: dict[str, Any]) -> dict[str, Any] | None:
+    """Close a trade and persist SL forensic evidence for SL/loss outcomes."""
+
+    close_payload = dict(close_fields)
+    active_trade = next(
+        (
+            trade
+            for trade in get_active_trades()
+            if str(trade.get("journal_id") or "") == str(journal_id)
+        ),
+        None,
+    )
+    if active_trade is not None and _should_add_sl_forensics(active_trade, close_payload):
+        close_payload = enrich_close_with_sl_forensics(active_trade, close_payload)
+    return _close_trade_core(journal_id, close_payload)
+
+
+def _should_add_sl_forensics(trade: dict[str, Any], close_fields: dict[str, Any]) -> bool:
+    metadata = close_fields.get("exchange_metadata")
+    if isinstance(metadata, dict) and isinstance(metadata.get("sl_forensics"), dict):
+        return False
+
+    result = str(close_fields.get("result") or trade.get("result") or "").lower().strip()
+    close_reason = str(close_fields.get("close_reason") or trade.get("close_reason") or "").upper()
+    realized_pnl = _optional_number(close_fields.get("realized_pnl"))
+
+    return (
+        result == "sl"
+        or "STOP" in close_reason
+        or "SL" in close_reason
+        or (realized_pnl is not None and realized_pnl < 0)
+    )
+
+
+def _optional_number(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _sync_active_safety_state(result: dict[str, Any]) -> None:
