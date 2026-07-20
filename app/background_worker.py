@@ -61,15 +61,40 @@ def _parse_time(value: Any) -> datetime | None:
 
 
 def _is_signal_stale(signal: dict[str, Any]) -> bool:
+    symbol = signal.get("symbol", "unknown")
     detected_at_str = signal.get("detected_at")
     if not detected_at_str:
-        return False
+        logger.warning("Signal freshness validation failed for %s: missing timestamp.", symbol)
+        return True
+
     detected_at = _parse_time(detected_at_str)
     if detected_at is None:
+        logger.warning("Signal freshness validation failed for %s: invalid timestamp (%r).", symbol, detected_at_str)
         return True
+
     max_age = max(int(settings.risk_signal_max_age_seconds), 1)
     age_seconds = (datetime.now(UTC) - detected_at).total_seconds()
-    return age_seconds > max_age
+
+    if age_seconds < -5:
+        logger.warning(
+            "Signal freshness validation failed for %s: future timestamp (detected_at: %s, age: %.1fs).",
+            symbol,
+            detected_at.isoformat(),
+            age_seconds
+        )
+        return True
+
+    if age_seconds > max_age:
+        logger.warning(
+            "Signal freshness validation failed for %s: expired timestamp (detected_at: %s, age: %.1fs, max_age: %ds).",
+            symbol,
+            detected_at.isoformat(),
+            age_seconds,
+            max_age
+        )
+        return True
+
+    return False
 
 
 async def native_profit_monitor_loop() -> None:

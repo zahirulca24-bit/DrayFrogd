@@ -468,16 +468,29 @@ class ScannerPersistenceAndRuntimeTests(unittest.TestCase):
         self.assertEqual(item["timestamp"], "new")
 
     def test_stale_queued_signals_rejected(self) -> None:
-        """Verifies that signals with stale detected_at timestamps are rejected during auto_trading_loop."""
-        # 421 seconds ago is greater than settings.risk_signal_max_age_seconds (420s)
+        """Verifies that signals with stale/missing/invalid/future detected_at timestamps are rejected."""
+        # 1. Missing detected_at
+        signal_missing = {"symbol": "BTCUSDT"}
+        self.assertTrue(_is_signal_stale(signal_missing))
+
+        # 2. Unparseable detected_at
+        signal_unparseable = {"detected_at": "invalid-timestamp-string", "symbol": "BTCUSDT"}
+        self.assertTrue(_is_signal_stale(signal_unparseable))
+
+        # 3. Signals older than risk_signal_max_age_seconds (420s)
         stale_time = (datetime.now(UTC) - timedelta(seconds=425)).isoformat()
+        signal_expired = {"detected_at": stale_time, "symbol": "BTCUSDT"}
+        self.assertTrue(_is_signal_stale(signal_expired))
+
+        # 4. Signals with timestamps materially in the future (skew limit is 5s)
+        future_time = (datetime.now(UTC) + timedelta(seconds=10)).isoformat()
+        signal_future = {"detected_at": future_time, "symbol": "BTCUSDT"}
+        self.assertTrue(_is_signal_stale(signal_future))
+
+        # 5. One valid fresh signal
         fresh_time = (datetime.now(UTC) - timedelta(seconds=10)).isoformat()
-
-        stale_signal = {"detected_at": stale_time, "symbol": "BTCUSDT"}
-        fresh_signal = {"detected_at": fresh_time, "symbol": "BTCUSDT"}
-
-        self.assertTrue(_is_signal_stale(stale_signal))
-        self.assertFalse(_is_signal_stale(fresh_signal))
+        signal_fresh = {"detected_at": fresh_time, "symbol": "BTCUSDT"}
+        self.assertFalse(_is_signal_stale(signal_fresh))
 
     def test_scanner_pauses_and_resumes_on_emergency_stop(self) -> None:
         """Verifies that auto_scanner_loop pauses when emergency stop is active and resumes after it's cleared."""
