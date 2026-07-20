@@ -480,8 +480,7 @@ def get_scanner_runtime_state() -> dict[str, Any]:
     if is_scanner_running():
         status = "running"
     else:
-        from app.bot_controls import get_bot_status, _risk_circuit_breaker_active
-        from app.runtime_guard import get_watchdog_execution_block
+        from app.bot_controls import get_bot_status
 
         try:
             bot_status_info = get_bot_status()
@@ -491,13 +490,8 @@ def get_scanner_runtime_state() -> dict[str, Any]:
             bot_status = "idle"
             emergency_stop = False
 
-        watchdog_blocked, _ = get_watchdog_execution_block()
-        circuit_breaker = _risk_circuit_breaker_active()
-
         if bot_status == "stopped" or emergency_stop:
             status = "stopped"
-        elif watchdog_blocked or circuit_breaker:
-            status = "blocked"
         elif _last_scan_failed:
             status = "failed"
         else:
