@@ -44,7 +44,7 @@ class Batch2AuthorityTests(unittest.TestCase):
         self.assertTrue(status["execution_safe"])
         self.assertTrue(status["connection_ok"])
 
-    def test_normalized_config_declares_fixed_usdt_authority(self) -> None:
+    def test_normalized_config_declares_percentage_equity_authority(self) -> None:
         with (
             patch(
                 "app.batch2_authority.config_authority_snapshot",
@@ -71,10 +71,10 @@ class Batch2AuthorityTests(unittest.TestCase):
         ):
             payload = normalize_config_payload({"risk_per_trade": 0.0215, "max_daily_trades": 8})
 
-        self.assertEqual(payload["risk_model"], "profile_fixed_usdt")
+        self.assertEqual(payload["risk_model"], "profile_percentage_equity")
         self.assertEqual(payload["risk_per_trade"], 0.01)
         self.assertTrue(payload["risk_per_trade_read_only"])
-        self.assertEqual(payload["risk_per_trade_authority"], "profile_fixed_usdt")
+        self.assertEqual(payload["risk_per_trade_authority"], "profile_percentage_equity")
         self.assertEqual(payload["max_daily_trades"], 0)
         self.assertFalse(payload["daily_trade_limit_enabled"])
         self.assertEqual(payload["config_authority"]["version"], 7)
