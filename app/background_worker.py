@@ -23,6 +23,7 @@ from app.runtime_integration import install_runtime_integration
 from app.runtime_watchdog import run_watchdog_cycle
 from app.scalping_profit_lock_guard import enforce_scalping_tp2_profit_locks
 from app.scanner import execute_backend_scan
+from app.trade_management import manage_open_trades
 
 
 logger = logging.getLogger(__name__)
@@ -35,7 +36,7 @@ EXPECTED_EXECUTION_BLOCKS = {
     "SYMBOL_REENTRY_COOLDOWN",
 }
 
-_scan_results_queue = asyncio.Queue()
+_scan_results_queue = asyncio.Queue(maxsize=1)
 
 
 def _safe_log_bot_event(event_type: str, message: str, *, level: str = "info", metadata: dict | None = None) -> None:
@@ -47,6 +48,28 @@ def _safe_log_bot_event(event_type: str, message: str, *, level: str = "info", m
 
 def _is_expected_execution_block(value: object) -> bool:
     return str(value or "").strip() in EXPECTED_EXECUTION_BLOCKS
+
+
+def _parse_time(value: Any) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
+
+
+def _is_signal_stale(signal: dict[str, Any]) -> bool:
+    detected_at_str = signal.get("detected_at")
+    if not detected_at_str:
+        return False
+    detected_at = _parse_time(detected_at_str)
+    if detected_at is None:
+        return True
+    max_age = max(int(settings.risk_signal_max_age_seconds), 1)
+    age_seconds = (datetime.now(UTC) - detected_at).total_seconds()
+    return age_seconds > max_age
 
 
 async def native_profit_monitor_loop() -> None:
@@ -107,31 +130,43 @@ async def auto_scanner_loop() -> None:
                 pass
 
             if emergency_stop:
-                logger.info("Emergency stop is active. Stopping automatic scanner loop.")
-                break
+                logger.info("Emergency stop is active. Scanning is paused for this cycle.")
+            else:
+                if not getattr(scanner_mod, "_public_market_authority_available", True):
+                    logger.error("Public-market data authority is unavailable. Stopping automatic scanner loop.")
+                    break
 
-            if not getattr(scanner_mod, "_public_market_authority_available", True):
-                logger.error("Public-market data authority is unavailable. Stopping automatic scanner loop.")
-                break
+                client = get_exchange_client(get_execution_mode())
 
-            client = get_exchange_client(get_execution_mode())
+                now_utc = datetime.now(UTC)
+                scanner_mod._last_scheduled_scan_time = now_utc
+                scanner_mod._actual_scan_start_time = now_utc
 
-            now_utc = datetime.now(UTC)
-            scanner_mod._last_scheduled_scan_time = now_utc
-            scanner_mod._actual_scan_start_time = now_utc
+                drift_sec = pytime.monotonic() - next_target_monotonic
+                scanner_mod._schedule_drift_milliseconds = max(0.0, drift_sec * 1000.0)
 
-            drift_sec = pytime.monotonic() - next_target_monotonic
-            scanner_mod._schedule_drift_milliseconds = max(0.0, drift_sec * 1000.0)
+                result = await asyncio.to_thread(execute_backend_scan, client, "automatic")
 
-            result = await asyncio.to_thread(execute_backend_scan, client, "automatic")
+                complete_utc = datetime.now(UTC)
+                scanner_mod._actual_completion_time = complete_utc
+                duration_sec = (complete_utc - now_utc).total_seconds()
+                scanner_mod._scan_duration_milliseconds = duration_sec * 1000.0
 
-            complete_utc = datetime.now(UTC)
-            scanner_mod._actual_completion_time = complete_utc
-            duration_sec = (complete_utc - now_utc).total_seconds()
-            scanner_mod._scan_duration_milliseconds = duration_sec * 1000.0
-
-            # Put result in queue for execution loop (even failed results to avoid blocking auto_trading_loop)
-            await _scan_results_queue.put(result)
+                # Put result in queue for execution loop (even failed results to avoid blocking auto_trading_loop)
+                while not _scan_results_queue.empty():
+                    try:
+                        _scan_results_queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        break
+                try:
+                    _scan_results_queue.put_nowait(result)
+                except asyncio.QueueFull:
+                    while not _scan_results_queue.empty():
+                        try:
+                            _scan_results_queue.get_nowait()
+                        except asyncio.QueueEmpty:
+                            break
+                    _scan_results_queue.put_nowait(result)
 
         except asyncio.CancelledError:
             logger.info("Scanner loop cancelled. Stopping cleanly.")
@@ -274,6 +309,13 @@ async def auto_trading_loop() -> None:
                 # Only execute signals produced by this scan cycle
                 active_signals = list(result.get("signals") or [])
                 for signal in active_signals:
+                    if _is_signal_stale(signal):
+                        logger.warning(
+                            "Auto execution skipped for %s: signal is stale (detected_at: %s)",
+                            signal.get("symbol"),
+                            signal.get("detected_at")
+                        )
+                        continue
                     try:
                         outcome = await asyncio.to_thread(execute_signal, client, signal, True)
                     except Exception as exc:

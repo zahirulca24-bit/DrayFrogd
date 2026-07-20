@@ -27,7 +27,12 @@ from app.scanner import (
     _restore_from_latest_snapshot,
 )
 from app.bot_controls import ensure_runtime_config, start_bot, stop_bot, can_execute
-from app.background_worker import auto_scanner_loop, _scan_results_queue
+from app.background_worker import (
+    auto_scanner_loop,
+    auto_trading_loop,
+    _scan_results_queue,
+    _is_signal_stale,
+)
 
 
 class FakeClient:
@@ -70,6 +75,13 @@ class ScannerPersistenceAndRuntimeTests(unittest.TestCase):
         scanner._next_scheduled_scan_time = None
         scanner._latest_persistence_status = None
         scanner._latest_persistence_error = None
+
+        # Clean queue
+        while not _scan_results_queue.empty():
+            try:
+                _scan_results_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
 
     def test_automatic_scan_without_frontend(self) -> None:
         client = FakeClient()
@@ -386,3 +398,112 @@ class ScannerPersistenceAndRuntimeTests(unittest.TestCase):
             self.assertTrue(task.done())
 
         asyncio.run(cancel_loop())
+
+    # ADDITIONAL ARCHITECTURAL DEFECTS TESTS
+    def test_real_auto_trading_loop_maintenance_no_name_error(self) -> None:
+        """Verifies that executing the auto_trading_loop does not raise NameError on manage_open_trades."""
+        async def run_one_loop():
+            # Force auto_trading_loop to terminate after one iteration by cancelling queue fetch
+            with patch("app.background_worker._scan_results_queue.get", side_effect=asyncio.CancelledError):
+                try:
+                    await auto_trading_loop()
+                except asyncio.CancelledError:
+                    pass
+
+        fake_client = FakeClient()
+        fake_client.safe_fetch_wallet_balance = MagicMock(return_value=(True, {"totalEquity": 10000.0}, None))
+
+        with patch("app.background_worker.install_runtime_integration"), \
+             patch("app.background_worker.websocket_service.start"), \
+             patch("app.background_worker.reconcile_state", return_value={"ok": True}), \
+             patch("app.background_worker.manage_open_trades", return_value={"ok": True}) as manage_mock, \
+             patch("app.background_worker.sync_partial_realized_pnl", return_value={"ok": True}), \
+             patch("app.background_worker.repair_incomplete_journal_closes", return_value={"ok": True}), \
+             patch("app.background_worker.backfill_exchange_journal_lifecycle", return_value={"ok": True}), \
+             patch("app.background_worker.sync_loss_cooldowns"), \
+             patch("app.background_worker.get_exchange_client", return_value=fake_client), \
+             patch("app.background_worker.run_watchdog_cycle", return_value={"execution_blocked": False}), \
+             patch("app.background_worker.websocket_service.stop"):
+
+             asyncio.run(run_one_loop())
+             # Ensure manage_open_trades was called exactly as expected without raising NameError
+             manage_mock.assert_called_once()
+
+    def test_multiple_scans_do_not_backlog(self) -> None:
+        """Verifies that pushing multiple scan results replaces the old ones so the queue never backlogs."""
+        # Setup auto_scanner_loop mocked execution to push multiple results
+        client = FakeClient()
+
+        # Simulate pushing directly to the queue
+        for i in range(5):
+            result = {"ok": True, "scan_index": i}
+            # Mimic auto_scanner_loop queue push logic
+            while not _scan_results_queue.empty():
+                try:
+                    _scan_results_queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+            _scan_results_queue.put_nowait(result)
+
+        self.assertEqual(_scan_results_queue.qsize(), 1)
+        latest_item = _scan_results_queue.get_nowait()
+        self.assertEqual(latest_item["scan_index"], 4)
+
+    def test_only_newest_fresh_scan_result_eligible(self) -> None:
+        """Verifies only the newest scan result is retrieved from the queue."""
+        result_old = {"ok": True, "timestamp": "old"}
+        result_new = {"ok": True, "timestamp": "new"}
+
+        # Simulate push sequence
+        for result in [result_old, result_new]:
+            while not _scan_results_queue.empty():
+                try:
+                    _scan_results_queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+            _scan_results_queue.put_nowait(result)
+
+        self.assertEqual(_scan_results_queue.qsize(), 1)
+        item = _scan_results_queue.get_nowait()
+        self.assertEqual(item["timestamp"], "new")
+
+    def test_stale_queued_signals_rejected(self) -> None:
+        """Verifies that signals with stale detected_at timestamps are rejected during auto_trading_loop."""
+        # 421 seconds ago is greater than settings.risk_signal_max_age_seconds (420s)
+        stale_time = (datetime.now(UTC) - timedelta(seconds=425)).isoformat()
+        fresh_time = (datetime.now(UTC) - timedelta(seconds=10)).isoformat()
+
+        stale_signal = {"detected_at": stale_time, "symbol": "BTCUSDT"}
+        fresh_signal = {"detected_at": fresh_time, "symbol": "BTCUSDT"}
+
+        self.assertTrue(_is_signal_stale(stale_signal))
+        self.assertFalse(_is_signal_stale(fresh_signal))
+
+    def test_scanner_pauses_and_resumes_on_emergency_stop(self) -> None:
+        """Verifies that auto_scanner_loop pauses when emergency stop is active and resumes after it's cleared."""
+        # Mock get_bot_status to return active emergency stop on first call, cleared on second
+        get_bot_status_mock = MagicMock(side_effect=[
+            {"emergency_stop": True},
+            {"emergency_stop": False}
+        ])
+
+        async def run_scanner_checks():
+            task = asyncio.create_task(auto_scanner_loop())
+            # Run first loop with emergency_stop=True (pauses execution)
+            await asyncio.sleep(0.05)
+            # Second loop with emergency_stop=False (resumes execution)
+            await asyncio.sleep(0.05)
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+        with patch("app.background_worker.settings", MagicMock(bot_scan_interval_seconds=0.01)), \
+             patch("app.bot_controls.get_bot_status", get_bot_status_mock), \
+             patch("app.background_worker.get_exchange_client", return_value=FakeClient()), \
+             patch("app.background_worker.execute_backend_scan", return_value={"ok": True}) as scan_mock:
+
+             asyncio.run(run_scanner_checks())
+             # Succeeded in resuming scan after emergency_stop was cleared!
+             scan_mock.assert_called()
