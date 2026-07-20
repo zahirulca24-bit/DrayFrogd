@@ -103,13 +103,13 @@ async function requestJson<T>(path: string, token: string, init: RequestInit = {
 
 export async function fetchSignalTruth(token: string): Promise<SignalTruthPayload> {
   const [scannerResponse, activeResponse] = await Promise.all([
-    requestJson<{ signals?: RawSignal[] }>("/scanner/results", token),
+    requestJson<RawScanResponse>("/scanner/results", token),
     requestJson<{ signals?: RawSignal[] }>("/signals", token),
   ]);
 
   const results = (scannerResponse.signals || []).map(normalizeSignal);
   const activeFromEndpoint = (activeResponse.signals || []).map(normalizeSignal);
-  return buildPayload(results, activeFromEndpoint, null, "results");
+  return buildPayload(results, activeFromEndpoint, scannerResponse, "results");
 }
 
 export async function runSignalTruthScan(token: string): Promise<SignalTruthPayload> {
@@ -144,7 +144,7 @@ function buildPayload(
   const marketRows = selectMarketRows(results);
   const summary = summarize(results, primarySignals, activeSignals, marketRows, scan);
 
-  return {
+  const payload: SignalTruthPayload = {
     results: [...results].sort(resultSort),
     primarySignals: primarySignals.sort(primarySort),
     activeSignals,
@@ -153,6 +153,16 @@ function buildPayload(
     capturedAt: new Date().toISOString(),
     source,
   };
+
+  if (scan) {
+    (payload as any).scannerStatus = (scan as any).status;
+    (payload as any).lastScanTime = (scan as any).last_successful_completion_time;
+    (payload as any).nextAutoScanTime = (scan as any).next_expected_automatic_scan_time;
+    (payload as any).latestFailedAttempt = (scan as any).latest_failed_attempt;
+    (payload as any).latest_successful_summary = (scan as any).latest_successful_summary;
+  }
+
+  return payload;
 }
 
 function normalizeSignal(raw: RawSignal, index: number): TruthSignal {

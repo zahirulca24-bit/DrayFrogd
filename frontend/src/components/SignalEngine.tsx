@@ -250,10 +250,10 @@ export default function SignalEngine(props: SignalEngineProps) {
             <button
               type="button"
               onClick={() => void handleRunScan()}
-              disabled={loading || !props.authToken}
+              disabled={loading || !props.authToken || (truth as any)?.scannerStatus === "running"}
               className="flex items-center gap-2 rounded-lg border border-emerald-600/20 bg-emerald-600/10 px-4 py-2 text-xs font-bold text-emerald-400 transition-colors hover:bg-emerald-600/20 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              <Play className="h-3.5 w-3.5" /> {scanLoading ? "SCANNING..." : "RUN SCAN"}
+              <Play className="h-3.5 w-3.5" /> {(scanLoading || (truth as any)?.scannerStatus === "running") ? "SCANNING..." : "RUN SCAN"}
             </button>
             <button
               type="button"
@@ -272,6 +272,49 @@ export default function SignalEngine(props: SignalEngineProps) {
         <div className="mt-4 rounded-xl border border-sky-500/15 bg-sky-500/5 px-4 py-3 text-[11px] text-sky-200">
           <strong>Run Scan is diagnostic only.</strong> It refreshes scanner and signal evidence but does not submit a trade. Automatic execution remains controlled by Start Engine.
         </div>
+
+        {/* Scanner State and Timing info */}
+        <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4 rounded-xl border border-slate-800 bg-[#0A0B0E] p-4 text-xs">
+          <div>
+            <span className="text-slate-500 block uppercase tracking-wider text-[9px] font-mono">Scanner Status</span>
+            <span className={`font-semibold text-sm ${
+              (truth as any)?.scannerStatus === "running" ? "text-amber-400 animate-pulse" :
+              (truth as any)?.scannerStatus === "stopped" ? "text-rose-400" :
+              (truth as any)?.scannerStatus === "blocked" ? "text-purple-400" :
+              (truth as any)?.scannerStatus === "failed" ? "text-rose-400" : "text-emerald-400"
+            }`}>{((truth as any)?.scannerStatus || "IDLE").toUpperCase()}</span>
+          </div>
+          <div>
+            <span className="text-slate-500 block uppercase tracking-wider text-[9px] font-mono">Last Scan Time</span>
+            <span className="font-semibold text-slate-200 text-sm">
+              {formatBdtDateTime((truth as any)?.lastScanTime)}
+            </span>
+          </div>
+          <div>
+            <span className="text-slate-500 block uppercase tracking-wider text-[9px] font-mono">Scan Trigger Source</span>
+            <span className="font-semibold text-slate-200 text-sm capitalize">
+              {((truth as any)?.latest_successful_summary?.trigger_source) || "Auto"}
+            </span>
+          </div>
+          <div>
+            <span className="text-slate-500 block uppercase tracking-wider text-[9px] font-mono">Next Auto-Scan Time</span>
+            <span className="font-semibold text-slate-200 text-sm">
+              {formatBdtDateTime((truth as any)?.nextAutoScanTime)}
+            </span>
+          </div>
+        </div>
+
+        {/* Latest Failed Attempt, if any */}
+        {(truth as any)?.latestFailedAttempt && (
+          <div className="mt-4 rounded-xl border border-rose-500/20 bg-rose-500/5 px-4 py-3 text-xs text-rose-300">
+            <span className="font-bold block uppercase tracking-wider text-[9px] font-mono text-rose-400 mb-1">Latest Failed Attempt</span>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-slate-300">
+              <div><strong>Time:</strong> {formatBdtDateTime((truth as any).latestFailedAttempt.completed_at)}</div>
+              <div><strong>Source:</strong> <span className="capitalize">{(truth as any).latestFailedAttempt.trigger_source}</span></div>
+              <div><strong>Reason:</strong> <span className="text-rose-200">{(truth as any).latestFailedAttempt.failure_reason}</span></div>
+            </div>
+          </div>
+        )}
 
         <div className="mt-5 grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-8">
           <SummaryBadge label="Symbols checked" value={summary?.symbolsScanned ?? "N/A"} tone="neutral" />

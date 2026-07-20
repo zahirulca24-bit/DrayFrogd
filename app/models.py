@@ -110,3 +110,22 @@ class BotEvent(Base):
     message: Mapped[str] = mapped_column(Text, nullable=False)
     event_metadata: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class ScannerSnapshot(Base):
+    __tablename__ = "scanner_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    scan_id: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    completed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    trigger_source: Mapped[str] = mapped_column(String(32), nullable=False)
+    symbols_scanned: Mapped[int] = mapped_column(Integer, nullable=False)
+    signals_found: Mapped[int] = mapped_column(Integer, nullable=False)
+    rejected_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    warning_error_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    summary_json: Mapped[str] = mapped_column(Text, nullable=False)
+    scanner_config_version: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
