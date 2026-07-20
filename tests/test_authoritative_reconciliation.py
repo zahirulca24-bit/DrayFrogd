@@ -4,6 +4,8 @@ from unittest.mock import patch
 
 from app.authoritative_state import get_snapshot, reset_snapshot
 from app.authoritative_reconciliation import reconcile_state
+from app.database import Base, engine
+Base.metadata.create_all(bind=engine)
 
 
 class FakeClient:

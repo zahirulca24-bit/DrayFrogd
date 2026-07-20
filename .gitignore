@@ -5,6 +5,7 @@ __pycache__/
 *.pyo
 *.log
 app.db
+*.db
 backend-dev.err.log
 backend-dev.out.log
 frontend-dev.err.log
