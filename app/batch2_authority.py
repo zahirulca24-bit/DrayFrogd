@@ -63,8 +63,8 @@ def install() -> None:
     ) -> dict[str, Any]:
         if risk_per_trade is not None and abs(float(risk_per_trade) - _CANONICAL_LEGACY_RISK) > 1e-12:
             raise ValueError(
-                "Risk percentage is read-only compatibility data; authoritative risk is fixed by profile "
-                "(20 USDT scalping / 50 USDT intraday)."
+                "Risk percentage is read-only compatibility data; authoritative risk is set by profile as a fraction of equity "
+                "(0.01 for scalping / 0.01 for intraday)."
             )
 
         result = original_update_bot_config(
@@ -239,16 +239,16 @@ def normalize_config_payload(payload: dict[str, Any]) -> dict[str, Any]:
         profiles = {name: dict(profile) for name, profile in RISK_PROFILES.items()}
     except Exception:
         profiles = {
-            "scalping": {"risk_amount": 20.0, "leverage_cap": 20.0, "min_risk_reward": 1.5},
-            "intraday": {"risk_amount": 50.0, "leverage_cap": 10.0, "min_risk_reward": 2.0},
+            "scalping": {"risk_amount": 0.01, "leverage_cap": 20.0, "min_risk_reward": 1.5},
+            "intraday": {"risk_amount": 0.01, "leverage_cap": 10.0, "min_risk_reward": 2.0},
         }
 
     result.update(
-        risk_model="profile_fixed_usdt",
+        risk_model="profile_percentage_equity",
         risk_profiles=profiles,
         risk_per_trade=_CANONICAL_LEGACY_RISK,
         risk_per_trade_read_only=True,
-        risk_per_trade_authority="profile_fixed_usdt",
+        risk_per_trade_authority="profile_percentage_equity",
         max_daily_trades=0,
         daily_trade_limit_enabled=False,
         config_authority=authority,
