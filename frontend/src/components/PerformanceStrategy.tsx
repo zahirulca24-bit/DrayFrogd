@@ -3,6 +3,7 @@ import { Activity, BarChart3, LineChart, ShieldAlert, Target } from "lucide-reac
 import { api } from "../api";
 import { JournalTradeEntry, MetricsResponse, StrategyAuditResponse, TradeHistoryEntry } from "../types";
 import { normalizeTrade, normalizeTradeHistoryEntry } from "../tradeTruth";
+import { useJournalData } from "./JournalDataContext";
 
 interface PerformanceStrategyProps {
   authToken: string | null;
@@ -207,49 +208,8 @@ function journalToPerformanceRow(item: JournalTradeEntry, index: number): Perfor
 }
 
 export default function PerformanceStrategy({ authToken, history, metrics }: PerformanceStrategyProps) {
-  const [journalTrades, setJournalTrades] = useState<JournalTradeEntry[]>([]);
-  const [strategyAudit, setStrategyAudit] = useState<StrategyAuditResponse | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const bdtDayRef = useRef(BDT_DATE.format(new Date()));
-
-  useEffect(() => {
-    if (!authToken) {
-      return;
-    }
-    let cancelled = false;
-
-    const loadJournal = async () => {
-      try {
-        const [response, auditResponse] = await Promise.all([
-          api.getJournalTrades(authToken),
-          api.getStrategyAudit(authToken, bdtDayRef.current),
-        ]);
-        if (!cancelled) {
-          setJournalTrades(response.trades || []);
-          setStrategyAudit(auditResponse);
-          setError(null);
-        }
-      } catch (err: any) {
-        if (!cancelled) {
-          setError(err?.message || "Failed to load persisted journal data");
-        }
-      }
-    };
-
-    loadJournal();
-    const interval = setInterval(() => {
-      const current = BDT_DATE.format(new Date());
-      if (current !== bdtDayRef.current) {
-        bdtDayRef.current = current;
-      }
-      void loadJournal();
-    }, 10000);
-
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-  }, [authToken]);
+  const { journalTrades, strategyAudit, metadata } = useJournalData();
+  const error = metadata.error;
 
   const rows = useMemo<PerformanceRow[]>(() => {
     if (journalTrades.length > 0) {
@@ -417,7 +377,11 @@ export default function PerformanceStrategy({ authToken, history, metrics }: Per
       </div>
 
       <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
-        <KpiCard label="Total Trades" value={totalTrades > 0 ? String(totalTrades) : "Insufficient Data"} />
+        <KpiCard
+          label="Total Trades"
+          value={totalTrades > 0 ? String(totalTrades) : "Insufficient Data"}
+          description="Total count from local matching trades (excluding unplaced/failed orders)."
+        />
         <KpiCard label="Open Trades" value={openRows.length > 0 ? String(openRows.length) : "0"} />
         <KpiCard label="Win Rate" value={winRate !== null ? formatPercent(winRate) : "Insufficient Data"} />
         <KpiCard label="Account Net (Bybit)" value={accountNetPnl !== null ? formatMoney(accountNetPnl) : "N/A"} />
@@ -612,11 +576,12 @@ export default function PerformanceStrategy({ authToken, history, metrics }: Per
   );
 }
 
-function KpiCard({ label, value }: { label: string; value: string }) {
+function KpiCard({ label, value, description }: { label: string; value: string; description?: string }) {
   return (
     <div className="bg-bento-card border border-slate-800 rounded-2xl p-5 shadow-md">
       <div className="text-[10px] font-mono uppercase tracking-wider text-slate-500">{label}</div>
       <div className="mt-3 text-lg font-semibold text-white">{value}</div>
+      {description && <div className="mt-2 text-[10px] leading-relaxed text-slate-500">{description}</div>}
     </div>
   );
 }

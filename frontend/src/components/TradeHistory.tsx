@@ -23,6 +23,8 @@ import {
 import { api } from "../api";
 import { JournalTradeEntry, LedgerAuditResponse, TradeHistoryEntry } from "../types";
 import { normalizeTrade, normalizeTradeHistoryEntry } from "../tradeTruth";
+import { useJournalData } from "./JournalDataContext";
+import { JournalSyncStatus } from "./JournalSyncStatus";
 
 interface TradeHistoryProps {
   authToken: string | null;
@@ -473,63 +475,23 @@ function fallbackToRow(trade: TradeHistoryEntry, index: number): JournalRow {
 }
 
 export default function TradeHistory({ authToken, history }: TradeHistoryProps) {
-  const [journalTrades, setJournalTrades] = useState<JournalTradeEntry[]>([]);
-  const [ledgerAudit, setLedgerAudit] = useState<LedgerAuditResponse | null>(null);
+  const { journalTrades, ledgerAudit, refresh, metadata } = useJournalData();
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [filters, setFilters] = useState(defaultFilters);
 
-  const loadJournal = async () => {
-    if (!authToken) return;
-    setLoading(true);
-    try {
-      const [response, ledger] = await Promise.all([
-        api.getJournalTrades(authToken),
-        api.getLedgerAudit(authToken),
-      ]);
-      setJournalTrades(response.trades || []);
-      setLedgerAudit(ledger);
-      setError(null);
-    } catch (err: any) {
-      setError(err?.message || "Failed to load journal trades");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    if (!authToken) return;
-    let cancelled = false;
-
-    const refresh = async () => {
-      try {
-        const [response, ledger] = await Promise.all([
-          api.getJournalTrades(authToken),
-          api.getLedgerAudit(authToken),
-        ]);
-        if (!cancelled) {
-          setJournalTrades(response.trades || []);
-          setLedgerAudit(ledger);
-          setError(null);
-        }
-      } catch (err: any) {
-        if (!cancelled) setError(err?.message || "Failed to load journal trades");
-      }
-    };
-
-    void refresh();
-    const interval = setInterval(refresh, 10000);
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-  }, [authToken]);
+  const loading = metadata.state === "syncing" || metadata.state === "retrying";
+  const error = metadata.error;
 
   const rows = useMemo<JournalRow[]>(() => {
-    if (journalTrades.length > 0) return journalTrades.map(journalToRow);
-    return history.map(fallbackToRow);
+    const list = journalTrades.length > 0 ? journalTrades.map(journalToRow) : history.map(fallbackToRow);
+    // Sort deterministically: closedAt descending, then timestamp descending, then id (as tie-breaker)
+    return [...list].sort((a, b) => {
+      const aTime = new Date(a.closedAt || a.timestamp || 0).getTime();
+      const bTime = new Date(b.closedAt || b.timestamp || 0).getTime();
+      if (bTime !== aTime) return bTime - aTime;
+      return String(b.id || "").localeCompare(String(a.id || ""));
+    });
   }, [history, journalTrades]);
 
   const symbols = useMemo(() => Array.from(new Set(rows.map((row) => row.pair))).sort(), [rows]);
@@ -714,22 +676,25 @@ export default function TradeHistory({ authToken, history }: TradeHistoryProps) 
           </div>
 
           <div className="flex flex-wrap gap-2">
-            <ActionButton label={loading ? "REFRESHING..." : "REFRESH"} icon={<RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />} onClick={() => void loadJournal()} disabled={loading} />
+            <ActionButton label={loading ? "REFRESHING..." : "REFRESH"} icon={<RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />} onClick={() => void refresh(true)} disabled={loading} />
             <ActionButton label="EXPORT CSV" icon={<Download className="h-4 w-4" />} onClick={exportCsv} />
             <ActionButton label="EXPORT PDF" icon={<FileDown className="h-4 w-4" />} onClick={exportPdf} />
           </div>
         </div>
-        {error && (
-          <div className="mt-4 flex items-start gap-2 rounded-xl border border-rose-500/20 bg-rose-500/10 p-3 text-xs text-rose-300">
-            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /> {error}
-          </div>
-        )}
       </section>
+
+      <JournalSyncStatus />
 
       <LedgerAuditPanel audit={ledgerAudit} />
 
       <section className="grid grid-cols-2 gap-3 md:grid-cols-5">
-        <SummaryCard label="Total Trades" value={summary.total} icon={<Database className="h-4 w-4" />} tone="neutral" />
+        <SummaryCard
+          label="Total Trades"
+          value={summary.total}
+          icon={<Database className="h-4 w-4" />}
+          tone="neutral"
+          description="Count of all local/Bybit matching journal entries excluding pre-order execution failures."
+        />
         <SummaryCard label="Open Trades" value={summary.open} icon={<Activity className="h-4 w-4" />} tone="good" />
         <SummaryCard label="Close / Sync Pending" value={summary.pending} icon={<TimerReset className="h-4 w-4" />} tone="warn" />
         <SummaryCard label="Closed Today" value={summary.closedToday} icon={<CheckCircle2 className="h-4 w-4" />} tone="accent" />
@@ -895,9 +860,9 @@ function ActionButton({ label, icon, onClick, disabled = false }: { label: strin
   return <button type="button" onClick={onClick} disabled={disabled} className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-800 bg-[#0A0B0E] px-4 py-3 text-xs font-semibold text-slate-300 transition-colors hover:border-slate-700 hover:text-white disabled:cursor-not-allowed disabled:opacity-50">{icon}{label}</button>;
 }
 
-function SummaryCard({ label, value, icon, tone }: { label: string; value: number; icon: ReactNode; tone: "neutral" | "good" | "warn" | "accent" | "bad" }) {
+function SummaryCard({ label, value, icon, tone, description }: { label: string; value: number; icon: ReactNode; tone: "neutral" | "good" | "warn" | "accent" | "bad"; description?: string }) {
   const toneClass = tone === "good" ? "border-emerald-500/10 bg-emerald-500/10 text-emerald-300" : tone === "warn" ? "border-amber-500/10 bg-amber-500/10 text-amber-300" : tone === "accent" ? "border-violet-500/10 bg-violet-500/10 text-violet-300" : tone === "bad" ? "border-rose-500/10 bg-rose-500/10 text-rose-300" : "border-slate-700 bg-slate-800/80 text-slate-300";
-  return <div className="rounded-2xl border border-slate-800 bg-bento-card p-4 shadow-md"><div className="flex items-center justify-between gap-3"><span className="text-[10px] font-mono font-semibold uppercase tracking-wider text-slate-500">{label}</span><span className={`rounded-xl border p-2 ${toneClass}`}>{icon}</span></div><div className="mt-3 text-2xl font-bold text-white">{value}</div></div>;
+  return <div className="rounded-2xl border border-slate-800 bg-bento-card p-4 shadow-md"><div className="flex items-center justify-between gap-3"><span className="text-[10px] font-mono font-semibold uppercase tracking-wider text-slate-500">{label}</span><span className={`rounded-xl border p-2 ${toneClass}`}>{icon}</span></div><div className="mt-3 text-2xl font-bold text-white">{value}</div>{description && <div className="mt-2 text-[10px] leading-relaxed text-slate-500">{description}</div>}</div>;
 }
 
 function FilterField({ label, icon, children }: { label: string; icon?: ReactNode; children: ReactNode }) {
